@@ -1,0 +1,73 @@
+# ---------------------------------------------------------------------------
+# Agilex 7 Wideband Processing Benchmark — Quartus Prime Pro settings file
+#
+# Governing spec: SPEC.md 15 (Quartus Project), 17 (Reporting), 24 (Constraints
+# integrity). Created by issue #3 (Phase 0).
+#
+# This file is HAND MAINTAINED and deliberately minimal. Do not open the
+# project in the GUI and save it: the GUI appends tool bookkeeping
+# that makes compile-to-compile diffs unreviewable. The Quartus version is
+# detected at compile time by quartus/scripts/compile.tcl and recorded in the
+# exported JSON (SPEC.md 17); it is intentionally NOT hardcoded here.
+#
+# All paths are relative to this directory (quartus/project/), so the project
+# is position independent and works from a clean checkout on any host.
+# ---------------------------------------------------------------------------
+
+# --- device (SPEC.md 2, 15) -------------------------------------------------
+set_global_assignment -name FAMILY "Agilex 7"
+set_global_assignment -name DEVICE AGMF039R47B1E1VC
+set_global_assignment -name TOP_LEVEL_ENTITY benchmark_fabric_top
+
+# Operating conditions used for timing models. Full commercial range.
+set_global_assignment -name MIN_CORE_JUNCTION_TEMP 0
+set_global_assignment -name MAX_CORE_JUNCTION_TEMP 100
+
+# --- project output ---------------------------------------------------------
+set_global_assignment -name PROJECT_OUTPUT_DIRECTORY output_files
+set_global_assignment -name NUM_PARALLEL_PROCESSORS ALL
+
+# --- design source (SPEC.md 10 layout) --------------------------------------
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/top/benchmark_fabric_top.sv
+
+# --- timing constraints (SPEC.md 15) ----------------------------------------
+# Read in this order: clocks first, then IO, then exceptions. exceptions.sdc is
+# intentionally empty (SPEC.md 24) and must stay that way unless every added
+# exception carries the five required documentation fields.
+set_global_assignment -name SDC_FILE ../constraints/clocks.sdc
+set_global_assignment -name SDC_FILE ../constraints/io.sdc
+set_global_assignment -name SDC_FILE ../constraints/exceptions.sdc
+
+# ---------------------------------------------------------------------------
+# Virtual pins
+# ---------------------------------------------------------------------------
+# This is a FABRIC benchmark, not a pinout exercise. The R47B package has 4700
+# balls, but nothing about the benchmark depends on real IO placement, and
+# letting the Fitter place hundreds of real IO buffers would (a) inject IO
+# timing that has nothing to do with the fabric result and (b) constrain
+# placement of the logic under test.
+#
+# Every data/handshake port is therefore a virtual pin: the port becomes a
+# fabric node driven/received by logic, and the register-to-register paths that
+# the benchmark actually measures are preserved. core_clk and rst_n stay real
+# pins so they get genuine global clock/reset networks.
+#
+# Wildcards are used so that widening DATA_W in a later issue does not require
+# editing this list.
+set_instance_assignment -name VIRTUAL_PIN ON -to in_valid
+set_instance_assignment -name VIRTUAL_PIN ON -to in_ready
+set_instance_assignment -name VIRTUAL_PIN ON -to "in_data[*]"
+set_instance_assignment -name VIRTUAL_PIN ON -to in_start_of_frame
+set_instance_assignment -name VIRTUAL_PIN ON -to in_end_of_frame
+set_instance_assignment -name VIRTUAL_PIN ON -to "in_stream_id[*]"
+set_instance_assignment -name VIRTUAL_PIN ON -to "in_sequence[*]"
+set_instance_assignment -name VIRTUAL_PIN ON -to "in_user[*]"
+
+set_instance_assignment -name VIRTUAL_PIN ON -to out_valid
+set_instance_assignment -name VIRTUAL_PIN ON -to out_ready
+set_instance_assignment -name VIRTUAL_PIN ON -to "out_data[*]"
+set_instance_assignment -name VIRTUAL_PIN ON -to out_start_of_frame
+set_instance_assignment -name VIRTUAL_PIN ON -to out_end_of_frame
+set_instance_assignment -name VIRTUAL_PIN ON -to "out_stream_id[*]"
+set_instance_assignment -name VIRTUAL_PIN ON -to "out_sequence[*]"
+set_instance_assignment -name VIRTUAL_PIN ON -to "out_user[*]"
