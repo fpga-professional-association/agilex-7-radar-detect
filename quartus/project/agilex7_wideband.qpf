@@ -1,0 +1,11 @@
+# ---------------------------------------------------------------------------
+# Agilex 7 Wideband Processing Benchmark — Quartus Prime Pro project file
+# Governing spec: SPEC.md 15. Created by issue #3 (Phase 0).
+# Hand-maintained: do not let the GUI rewrite this file with tool metadata.
+# ---------------------------------------------------------------------------
+
+QUARTUS_VERSION = "26.1"
+
+# Revisions
+
+PROJECT_REVISION = "agilex7_wideband"
