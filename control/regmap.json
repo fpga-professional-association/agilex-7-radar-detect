@@ -45,7 +45,7 @@
   ],
   "regmap_version": {
     "major": 1,
-    "minor": 0,
+    "minor": 1,
     "patch": 0,
     "description": "Bump on any change to this file. major: incompatible layout change; minor: registers or fields added; patch: documentation only."
   },
@@ -290,8 +290,7 @@
       "name": "counters",
       "base": "0x7000",
       "size": "0x1000",
-      "implemented": false,
-      "planned_by": "#8",
+      "implemented": true,
       "spec_groups": [
         "Stream counters",
         "Stall counters",
@@ -299,10 +298,204 @@
         "Overflow and saturation counts",
         "Frame counts",
         "Sequence errors",
-        "CDC errors"
+        "CDC errors",
+        "Snapshot and debug control"
       ],
-      "description": "PLANNED. Performance and health telemetry. The counters themselves are issue #8; this window is where they are read from. Counters live in the telemetry clock domain, so this block will be the first consumer of the issue #6 CDC primitives on the register path.",
-      "registers": []
+      "description": "Performance and health telemetry for one observed interface (rtl/common/telemetry_block.sv, issue #8). EVERY COUNT REGISTER IN THIS BLOCK READS A SHADOW, NOT A RUNNING COUNTER: write TELEM_CTRL.SNAPSHOT, then read as many registers as you like, and all of them describe the single edge at which that strobe landed. A running counter read through a 32-bit plane cannot be coherent - the low word of a 64-bit beat count can wrap between the two accesses and report a number that never existed - so the plane is never given the chance. SNAPSHOT_ID is the proof: read it before and after a sweep, and equal values mean the sweep saw one instant. The block is instantiated in the domain of the interface it observes, and the register interface, not the counters, is what crosses into cfg_clk when the two differ (issue #19): crossing one bus once is cheaper and far easier to verify than crossing twenty counters.",
+      "registers": [
+        {
+          "name": "TELEM_CTRL",
+          "offset": "0x000",
+          "description": "Measurement window and the three strobes. ENABLE gates every counter, so a window can be opened and closed without touching the traffic being measured. SNAPSHOT, CLEAR and STICKY_CLEAR are write-1-pulse and always read 0.",
+          "fields": [
+            {"name": "ENABLE", "lsb": 0, "width": 1, "access": "RW", "reset": "0x1", "description": "Counters advance only while this is 1. Reset to 1 so a design that never touches the control plane still measures itself."},
+            {"name": "SEQ_ENABLE", "lsb": 1, "width": 1, "access": "RW", "reset": "0x1", "description": "Enables the sequence checker. Clearing it drops every stream's expectation, so the first beat after it is set again re-initialises instead of reporting a loss."},
+            {"name": "SEQ_SOF_RESYNC", "lsb": 2, "width": 1, "access": "RW", "description": "Treat start_of_frame as a sequence resync point. Correct for a source that restarts numbering each frame; masks real loss at every frame boundary for one that does not, hence off by default."},
+            {"name": "SNAPSHOT", "lsb": 8, "width": 1, "access": "RWP", "description": "Latch every counter in this block, and the sequence checker's five, into their shadows at one edge. The shadow includes any event in the strobe cycle."},
+            {"name": "CLEAR", "lsb": 9, "width": 1, "access": "RWP", "description": "Zero every counter, every shadow, the high-water mark and the shadow-valid flag. Beats a simultaneous event."},
+            {"name": "STICKY_CLEAR", "lsb": 10, "width": 1, "access": "RWP", "description": "Clear the sequence checker's sticky flags. Does not touch the counts, and a fault detected in the same cycle still sets them."}
+          ]
+        },
+        {
+          "name": "TELEM_STATUS",
+          "offset": "0x004",
+          "description": "Build geometry of this telemetry instance plus the two facts a reader needs before trusting a count: whether a snapshot was ever taken, and whether any counter has passed its maximum since the last clear.",
+          "fields": [
+            {"name": "COUNT_W", "lsb": 0, "width": 8, "access": "ROHW", "source": "telemetry_block COUNT_W", "description": "Width in bits of the ordinary counters. Anything above it in a count register reads 0."},
+            {"name": "WIDE_W", "lsb": 8, "width": 8, "access": "ROHW", "source": "telemetry_block WIDE_W", "description": "Width in bits of the beat and stall counters, which are presented as a LO/HI pair."},
+            {"name": "TRACKED_IDS", "lsb": 16, "width": 8, "access": "ROHW", "source": "telemetry_block N_TRACKED_IDS", "description": "Streams the sequence checker tracks independently. Beats on a higher stream_id are counted in SEQ_UNTRACKED_COUNT rather than folded onto a tracked stream."},
+            {"name": "SNAP_VALID", "lsb": 24, "width": 1, "access": "ROHW", "description": "A snapshot has been taken since reset or the last CLEAR. While this is 0 every count register reads 0 because nothing was captured, not because nothing happened."},
+            {"name": "TRAFFIC_SATURATE", "lsb": 25, "width": 1, "access": "ROHW", "source": "telemetry_block TRAFFIC_SATURATE", "description": "0: the traffic counters are exact modulo 2**width and set a WRAP_STATUS bit when they roll. 1: they stop at all ones."},
+            {"name": "ERROR_SATURATE", "lsb": 26, "width": 1, "access": "ROHW", "source": "telemetry_block ERROR_SATURATE", "description": "The same, for the error and fault counters. 1 by default: a dump taken after a long run must not report a small number because the counter went round."},
+            {"name": "WRAP_ANY", "lsb": 27, "width": 1, "access": "ROHW", "description": "Sticky OR of every counter's own range flag. A quick 'are these numbers still absolute' test that does not need WRAP_STATUS decoded."}
+          ]
+        },
+        {
+          "name": "SNAPSHOT_ID",
+          "offset": "0x008",
+          "description": "Snapshots taken since reset or the last CLEAR, saturating. Read it before and after a sweep of this block: if the two agree, every register in between came from one edge. This is the only defence against a second agent snapshotting in the middle of someone else's read sequence, and it costs one register.",
+          "fields": [
+            {"name": "VALUE", "lsb": 0, "width": 32, "access": "ROHW", "description": "Count of SNAPSHOT strobes."}
+          ]
+        },
+        {
+          "name": "BEAT_COUNT_LO",
+          "offset": "0x00C",
+          "description": "SPEC 9 stream counters. Low half of the accepted-transfer count on the observed interface: cycles in which valid && ready. Read together with BEAT_COUNT_HI after one SNAPSHOT; the pair is coherent because both halves come from one shadow.",
+          "fields": [
+            {"name": "VALUE", "lsb": 0, "width": 32, "access": "ROHW", "description": "Bits 31:0 of the beat count."}
+          ]
+        },
+        {
+          "name": "BEAT_COUNT_HI",
+          "offset": "0x010",
+          "description": "High half of the accepted-transfer count. Reads 0 when WIDE_W is 32 or less.",
+          "fields": [
+            {"name": "VALUE", "lsb": 0, "width": 32, "access": "ROHW", "description": "Bits 63:32 of the beat count."}
+          ]
+        },
+        {
+          "name": "STALL_COUNT_LO",
+          "offset": "0x014",
+          "description": "SPEC 9 stall counters. Low half of the count of cycles in which the source offered a beat and the sink refused it: valid && !ready. Divided by the beat count this is the backpressure the interface actually suffered, which is the number that decides whether a stage needs more buffering.",
+          "fields": [
+            {"name": "VALUE", "lsb": 0, "width": 32, "access": "ROHW", "description": "Bits 31:0 of the stall count."}
+          ]
+        },
+        {
+          "name": "STALL_COUNT_HI",
+          "offset": "0x018",
+          "description": "High half of the stall count.",
+          "fields": [
+            {"name": "VALUE", "lsb": 0, "width": 32, "access": "ROHW", "description": "Bits 63:32 of the stall count."}
+          ]
+        },
+        {
+          "name": "IDLE_COUNT",
+          "offset": "0x01C",
+          "description": "Cycles in which the sink was ready and the source had nothing: !valid && ready. The third arm of the three-way split of a ready cycle - beat, stall, idle - so a starved stage is distinguishable from a stalled one rather than both appearing as 'not full throughput'.",
+          "fields": [
+            {"name": "VALUE", "lsb": 0, "width": 32, "access": "ROHW", "description": "Count of starved cycles."}
+          ]
+        },
+        {
+          "name": "FRAME_COUNT",
+          "offset": "0x020",
+          "description": "SPEC 9 frame counts. Accepted beats carrying end_of_frame, i.e. frames completed on the observed interface.",
+          "fields": [
+            {"name": "VALUE", "lsb": 0, "width": 32, "access": "ROHW", "description": "Frames completed."}
+          ]
+        },
+        {
+          "name": "FRAME_START_COUNT",
+          "offset": "0x024",
+          "description": "Accepted beats carrying start_of_frame. Counted separately from FRAME_COUNT because the difference between the two is the frame that was opened and never closed, which is exactly the symptom of a truncated frame and is invisible in either count alone.",
+          "fields": [
+            {"name": "VALUE", "lsb": 0, "width": 32, "access": "ROHW", "description": "Frames started."}
+          ]
+        },
+        {
+          "name": "FIFO_HIGH_WATER",
+          "offset": "0x028",
+          "description": "SPEC 9 FIFO high-water marks. The deepest fill level the observed FIFO reached in the measurement window, beside the depth it was built with, so the margin is readable without knowing the elaboration parameters. This is the number that sizes the next revision of a DEPTH.",
+          "fields": [
+            {"name": "HIGH", "lsb": 0, "width": 16, "access": "ROHW", "description": "Maximum fill level since reset or the last CLEAR."},
+            {"name": "DEPTH", "lsb": 16, "width": 16, "access": "ROHW", "source": "telemetry_block FIFO_DEPTH", "description": "Depth the observed FIFO was elaborated with. HIGH equal to DEPTH means it filled."}
+          ]
+        },
+        {
+          "name": "OVERFLOW_COUNT",
+          "offset": "0x02C",
+          "description": "SPEC 9 overflow counts. Overflow events reported by the observed storage. Unreachable in correct operation, so any non-zero value here is a design defect rather than a traffic condition.",
+          "fields": [
+            {"name": "VALUE", "lsb": 0, "width": 32, "access": "ROHW", "description": "Overflow events."}
+          ]
+        },
+        {
+          "name": "SATURATE_COUNT",
+          "offset": "0x030",
+          "description": "SPEC 9 saturation counts. Arithmetic saturation events reported by the observed datapath (SPEC 6 saturating arithmetic, collected by rtl/common/fxp_sticky_flags.sv). Non-zero is legal and expected on loud input; it is the number that says whether a headroom choice was right.",
+          "fields": [
+            {"name": "VALUE", "lsb": 0, "width": 32, "access": "ROHW", "description": "Saturation events."}
+          ]
+        },
+        {
+          "name": "CDC_ERROR_COUNT",
+          "offset": "0x034",
+          "description": "SPEC 9 CDC errors. Events reported by the crossings the observed path contains - a handshake that did not complete, a Gray pointer that moved by more than one bit. Like OVERFLOW_COUNT, unreachable in correct operation.",
+          "fields": [
+            {"name": "VALUE", "lsb": 0, "width": 32, "access": "ROHW", "description": "CDC error events."}
+          ]
+        },
+        {
+          "name": "SEQ_GAP_COUNT",
+          "offset": "0x038",
+          "description": "SPEC 9 sequence errors. Gap EVENTS seen by the attached seq_checker: occasions on which the sequence number jumped forward. Counted separately from the beats lost, because one gap of forty and forty gaps of one are different failures.",
+          "fields": [
+            {"name": "VALUE", "lsb": 0, "width": 32, "access": "ROHW", "description": "Gap events."}
+          ]
+        },
+        {
+          "name": "SEQ_DUP_COUNT",
+          "offset": "0x03C",
+          "description": "Beats whose sequence number repeated the one immediately before it: duplication.",
+          "fields": [
+            {"name": "VALUE", "lsb": 0, "width": 32, "access": "ROHW", "description": "Duplicate beats."}
+          ]
+        },
+        {
+          "name": "SEQ_REORDER_COUNT",
+          "offset": "0x040",
+          "description": "Beats whose sequence number came from behind the current position and was not the immediately preceding one: reordering.",
+          "fields": [
+            {"name": "VALUE", "lsb": 0, "width": 32, "access": "ROHW", "description": "Out-of-order beats."}
+          ]
+        },
+        {
+          "name": "SEQ_LOST_BEATS",
+          "offset": "0x044",
+          "description": "Beats that never arrived, summed over every gap. SEQ_GAP_COUNT says how often the stream broke; this says how much of it was lost.",
+          "fields": [
+            {"name": "VALUE", "lsb": 0, "width": 32, "access": "ROHW", "description": "Missing beats."}
+          ]
+        },
+        {
+          "name": "SEQ_UNTRACKED_COUNT",
+          "offset": "0x048",
+          "description": "Beats on a stream_id at or above TRACKED_IDS. Counted rather than ignored: an instance sized for four streams that silently dropped everything on stream 7 would report a clean run on traffic it never looked at.",
+          "fields": [
+            {"name": "VALUE", "lsb": 0, "width": 32, "access": "ROHW", "description": "Beats on an untracked stream."}
+          ]
+        },
+        {
+          "name": "SEQ_STATUS",
+          "offset": "0x04C",
+          "description": "Sticky record of which kinds of sequence fault occurred at all, so a fault that happened once in a long run is still visible after the counts have been cleared. The W1C half is this block's own copy, cleared by writing 1; CHECKER_STICKY mirrors the checker's flags, which TELEM_CTRL.STICKY_CLEAR clears.",
+          "fields": [
+            {"name": "GAP", "lsb": 0, "width": 1, "access": "W1C", "description": "A gap was detected."},
+            {"name": "DUP", "lsb": 1, "width": 1, "access": "W1C", "description": "A duplicate was detected."},
+            {"name": "REORDER", "lsb": 2, "width": 1, "access": "W1C", "description": "A reordered beat was detected."},
+            {"name": "UNTRACKED", "lsb": 3, "width": 1, "access": "W1C", "description": "A beat arrived on an untracked stream."},
+            {"name": "CHECKER_STICKY", "lsb": 8, "width": 4, "access": "ROHW", "source": "seq_checker sticky", "description": "The checker's own sticky flags, in the same bit order: untracked, reorder, dup, gap, from bit 11 down to bit 8."}
+          ]
+        },
+        {
+          "name": "WRAP_STATUS",
+          "offset": "0x050",
+          "description": "One sticky bit per counter, set when that counter passed its maximum. For a modulo counter this says the absolute value is no longer meaningful and only differences are; for a saturating one it says the count has stopped moving. Either way it is the difference between a number and a number that can be believed, which is why SPEC 13.4 exercises wrap deliberately.",
+          "fields": [
+            {"name": "BEAT", "lsb": 0, "width": 1, "access": "W1C", "description": "The beat counter passed its maximum."},
+            {"name": "STALL", "lsb": 1, "width": 1, "access": "W1C", "description": "The stall counter passed its maximum."},
+            {"name": "IDLE", "lsb": 2, "width": 1, "access": "W1C", "description": "The idle counter passed its maximum."},
+            {"name": "FRAME", "lsb": 3, "width": 1, "access": "W1C", "description": "The frame counter passed its maximum."},
+            {"name": "FRAME_START", "lsb": 4, "width": 1, "access": "W1C", "description": "The frame-start counter passed its maximum."},
+            {"name": "OVERFLOW", "lsb": 5, "width": 1, "access": "W1C", "description": "The overflow counter passed its maximum."},
+            {"name": "SATURATE", "lsb": 6, "width": 1, "access": "W1C", "description": "The saturation counter passed its maximum."},
+            {"name": "CDC_ERROR", "lsb": 7, "width": 1, "access": "W1C", "description": "The CDC error counter passed its maximum."},
+            {"name": "SNAPSHOT_ID", "lsb": 8, "width": 1, "access": "W1C", "description": "SNAPSHOT_ID rolled over. Harmless in itself - it is an identity, not a magnitude - but a reader comparing it across a sweep should know that equal values are now only overwhelmingly likely to mean the same instant rather than certain to."}
+          ]
+        }
+      ]
     },
     {
       "name": "debug",

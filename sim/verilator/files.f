@@ -39,6 +39,14 @@ rtl/packages/stream_pkg.sv
 // instantiates it.
 sim/assertions/stream_protocol_checker.sv
 
+// The same arrangement for the telemetry primitives below: perf_counter and
+// seq_checker each instantiate their checker under `ifndef SYNTHESIS`, so every
+// counter and every sequence classifier in the design is checked wherever it is
+// used (SPEC 14 "arithmetic overflow where overflow is forbidden", "sequence
+// discontinuity").
+sim/assertions/telemetry_assertions.sv
+sim/assertions/seq_checker_assertions.sv
+
 // ---- stream primitives (SPEC 5) ----------------------------------------
 rtl/stream/stream_skid_buffer.sv
 rtl/stream/stream_elastic_buffer.sv
@@ -52,6 +60,17 @@ rtl/common/stream_loopback.sv
 // instantiated by the datapath — it is exercised by the numerics cross-check
 // build (sim/verilator/files_fxp.f) and adopted by each kernel as it lands.
 rtl/common/fxp_sticky_flags.sv
+
+// The telemetry primitives (SPEC 9, issue #8). perf_counter first: seq_checker
+// is built out of it. Both are listed here — rather than only in
+// files_telemetry.f — because they are design RTL that every kernel from Phase 2
+// onward instantiates, and this list is the single definition of what "the
+// design" is. rtl/common/telemetry_block.sv is deliberately NOT here: it is the
+// counters block of the register plane and needs rtl/control/, which files.f
+// does not carry until the multi-domain integration (issue #19) brings the whole
+// plane into benchmark_sim_top. It is linted through files_telemetry.f.
+rtl/common/perf_counter.sv
+rtl/common/seq_checker.sv
 
 // ---- simulation top (SPEC 4.1) -----------------------------------------
 sim/verilator/tops/benchmark_sim_top.sv

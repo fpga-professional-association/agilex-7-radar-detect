@@ -84,8 +84,11 @@ TODO — populated by issue #18.
 
 ### 3.7 Control plane (`rtl/control/`)
 
-The SPEC §9 register plane, in `cfg_clk`. Populated by issue #7; counters land with #8 and
-snapshot/debug with #19.
+The SPEC §9 register plane, in `cfg_clk`. Populated by issue #7. The counters window landed
+with #8 as `rtl/common/telemetry_block.sv` — it is the counters block of this plane, but it
+lives under `rtl/common/` because it is instantiated beside the datapath it measures rather
+than beside the plane it answers, and when the two are in different domains it is the register
+interface that crosses, not the counters. Snapshot/debug lands with #19.
 
 | Module | Role |
 |---|---|
@@ -210,8 +213,9 @@ watchdog completes the transaction with `error=1` after `REG_WATCHDOG_CYCLES`.
 Address space: 16 bits, one 4 KiB window per block, each aligned to its own size, so the
 decode is an address-bit compare. Windows are assigned in `control/regmap.json` and
 documented in [`docs/regmap.md`](docs/regmap.md); the windows for groups that later issues
-implement (coefficients and bank select #10/#12, CFAR and integration #14, counters #8,
-snapshot/debug #19) are reserved now and answer `error=1` until then.
+implement (coefficients and bank select #10/#12, CFAR and integration #14, snapshot/debug #19)
+are reserved now and answer `error=1` until then. The counters window at `0x7000` was reserved
+by #7 and implemented by #8.
 
 Vendor neutrality is a property of the fabric, not a convention: nothing in `rtl/control/`
 names APB or Avalon-MM. An adapter for either is a separate module that speaks this protocol

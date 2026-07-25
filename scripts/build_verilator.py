@@ -196,6 +196,26 @@ def derive_stream_params(params: dict) -> dict:
         # width at which a binary counter diverges from a Gray one within three
         # increments, which is what mode 1 has to demonstrate.
         "CDC_VIOLATOR_PTR_W": 4,
+        # Geometry of sim/verilator/tops/telemetry_top.sv (issue #8), so the
+        # telemetry tests and that top agree on counter widths, FIFO depth and
+        # tracked-stream count without either hard-coding the other's numbers.
+        #
+        # TELEM_TRACKED_IDS is deliberately SMALLER than 2**STREAM_ID_W: the
+        # sequence checker must count a beat on a stream it does not track
+        # rather than fold it onto one it does, and a configuration in which
+        # every id is tracked would leave that path unreachable. telemetry_top
+        # $fatals at time 0 if this stops being true.
+        #
+        # TELEM_PROBE_W is 8 because SPEC 13.4 requires counter wrap to be
+        # exercised, and a 32-bit counter cannot be wrapped in a unit test. Eight
+        # bits wraps in 256 events, so wrap is a directed case in every seed
+        # rather than a condition reasoned about and never reached.
+        "TELEM_FIFO_DEPTH": 8,
+        "TELEM_COUNT_W": 32,
+        "TELEM_WIDE_W": 64,
+        "TELEM_TRACKED_IDS": 2,
+        "TELEM_PROBE_W": 8,
+        "TELEM_PROBE_INCR_W": 4,
     }
 
 

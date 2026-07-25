@@ -25,11 +25,11 @@ inline constexpr unsigned kStrobeWidth = 4;
 inline constexpr std::uint32_t kWindowBytes = 0x1000u;
 inline constexpr std::uint32_t kAddrMask = 0xFFFFu;
 inline constexpr unsigned kBlockCount = 9;
-inline constexpr unsigned kBlockCountImplemented = 5;
-inline constexpr unsigned kRegisterCount = 28;
-inline constexpr std::uint32_t kBlockMask = 0x0000001Fu;
+inline constexpr unsigned kBlockCountImplemented = 6;
+inline constexpr unsigned kRegisterCount = 49;
+inline constexpr std::uint32_t kBlockMask = 0x0000009Fu;
 inline constexpr unsigned kVersionMajor = 1;
-inline constexpr unsigned kVersionMinor = 0;
+inline constexpr unsigned kVersionMinor = 1;
 inline constexpr unsigned kVersionPatch = 0;
 
 // Per-bit access classification, matching rtl/control/reg_csr_block.sv.
@@ -78,7 +78,7 @@ inline constexpr unsigned ID_MAGIC_MAGIC_LSB = 0;
 inline constexpr unsigned ID_MAGIC_MAGIC_WIDTH = 32;
 inline constexpr std::uint32_t ID_MAGIC_MAGIC_MASK = 0xFFFFFFFFu;
 inline constexpr std::uint32_t ID_VERSION_ADDR = 0x0004u;
-inline constexpr std::uint32_t ID_VERSION_RESET = 0x01000001u;
+inline constexpr std::uint32_t ID_VERSION_RESET = 0x01010001u;
 inline constexpr unsigned ID_VERSION_MAJOR_LSB = 24;
 inline constexpr unsigned ID_VERSION_MAJOR_WIDTH = 8;
 inline constexpr std::uint32_t ID_VERSION_MAJOR_MASK = 0xFF000000u;
@@ -92,7 +92,7 @@ inline constexpr unsigned ID_VERSION_SCHEMA_LSB = 0;
 inline constexpr unsigned ID_VERSION_SCHEMA_WIDTH = 8;
 inline constexpr std::uint32_t ID_VERSION_SCHEMA_MASK = 0x000000FFu;
 inline constexpr std::uint32_t ID_GEOMETRY_ADDR = 0x0008u;
-inline constexpr std::uint32_t ID_GEOMETRY_RESET = 0x10201C09u;
+inline constexpr std::uint32_t ID_GEOMETRY_RESET = 0x10203109u;
 inline constexpr unsigned ID_GEOMETRY_N_BLOCKS_LSB = 0;
 inline constexpr unsigned ID_GEOMETRY_N_BLOCKS_WIDTH = 8;
 inline constexpr std::uint32_t ID_GEOMETRY_N_BLOCKS_MASK = 0x000000FFu;
@@ -106,7 +106,7 @@ inline constexpr unsigned ID_GEOMETRY_ADDR_W_LSB = 24;
 inline constexpr unsigned ID_GEOMETRY_ADDR_W_WIDTH = 8;
 inline constexpr std::uint32_t ID_GEOMETRY_ADDR_W_MASK = 0xFF000000u;
 inline constexpr std::uint32_t ID_CAPABILITY_ADDR = 0x000Cu;
-inline constexpr std::uint32_t ID_CAPABILITY_RESET = 0x0000001Fu;
+inline constexpr std::uint32_t ID_CAPABILITY_RESET = 0x0000009Fu;
 inline constexpr unsigned ID_CAPABILITY_BLOCK_MASK_LSB = 0;
 inline constexpr unsigned ID_CAPABILITY_BLOCK_MASK_WIDTH = 32;
 inline constexpr std::uint32_t ID_CAPABILITY_BLOCK_MASK_MASK = 0xFFFFFFFFu;
@@ -342,13 +342,191 @@ inline constexpr unsigned SCRATCH_SCRATCH3_RO_HIGH_LSB = 16;
 inline constexpr unsigned SCRATCH_SCRATCH3_RO_HIGH_WIDTH = 16;
 inline constexpr std::uint32_t SCRATCH_SCRATCH3_RO_HIGH_MASK = 0xFFFF0000u;
 
+// counters: Performance and health telemetry for one observed interface (rtl/common/telemetry_block.
+inline constexpr std::uint32_t COUNTERS_BASE = 0x7000u;
+inline constexpr std::uint32_t COUNTERS_TELEM_CTRL_ADDR = 0x7000u;
+inline constexpr std::uint32_t COUNTERS_TELEM_CTRL_RESET = 0x00000003u;
+inline constexpr unsigned COUNTERS_TELEM_CTRL_ENABLE_LSB = 0;
+inline constexpr unsigned COUNTERS_TELEM_CTRL_ENABLE_WIDTH = 1;
+inline constexpr std::uint32_t COUNTERS_TELEM_CTRL_ENABLE_MASK = 0x00000001u;
+inline constexpr unsigned COUNTERS_TELEM_CTRL_SEQ_ENABLE_LSB = 1;
+inline constexpr unsigned COUNTERS_TELEM_CTRL_SEQ_ENABLE_WIDTH = 1;
+inline constexpr std::uint32_t COUNTERS_TELEM_CTRL_SEQ_ENABLE_MASK = 0x00000002u;
+inline constexpr unsigned COUNTERS_TELEM_CTRL_SEQ_SOF_RESYNC_LSB = 2;
+inline constexpr unsigned COUNTERS_TELEM_CTRL_SEQ_SOF_RESYNC_WIDTH = 1;
+inline constexpr std::uint32_t COUNTERS_TELEM_CTRL_SEQ_SOF_RESYNC_MASK = 0x00000004u;
+inline constexpr unsigned COUNTERS_TELEM_CTRL_SNAPSHOT_LSB = 8;
+inline constexpr unsigned COUNTERS_TELEM_CTRL_SNAPSHOT_WIDTH = 1;
+inline constexpr std::uint32_t COUNTERS_TELEM_CTRL_SNAPSHOT_MASK = 0x00000100u;
+inline constexpr unsigned COUNTERS_TELEM_CTRL_CLEAR_LSB = 9;
+inline constexpr unsigned COUNTERS_TELEM_CTRL_CLEAR_WIDTH = 1;
+inline constexpr std::uint32_t COUNTERS_TELEM_CTRL_CLEAR_MASK = 0x00000200u;
+inline constexpr unsigned COUNTERS_TELEM_CTRL_STICKY_CLEAR_LSB = 10;
+inline constexpr unsigned COUNTERS_TELEM_CTRL_STICKY_CLEAR_WIDTH = 1;
+inline constexpr std::uint32_t COUNTERS_TELEM_CTRL_STICKY_CLEAR_MASK = 0x00000400u;
+inline constexpr std::uint32_t COUNTERS_TELEM_STATUS_ADDR = 0x7004u;
+inline constexpr std::uint32_t COUNTERS_TELEM_STATUS_RESET = 0x00000000u;
+inline constexpr unsigned COUNTERS_TELEM_STATUS_COUNT_W_LSB = 0;
+inline constexpr unsigned COUNTERS_TELEM_STATUS_COUNT_W_WIDTH = 8;
+inline constexpr std::uint32_t COUNTERS_TELEM_STATUS_COUNT_W_MASK = 0x000000FFu;
+inline constexpr unsigned COUNTERS_TELEM_STATUS_WIDE_W_LSB = 8;
+inline constexpr unsigned COUNTERS_TELEM_STATUS_WIDE_W_WIDTH = 8;
+inline constexpr std::uint32_t COUNTERS_TELEM_STATUS_WIDE_W_MASK = 0x0000FF00u;
+inline constexpr unsigned COUNTERS_TELEM_STATUS_TRACKED_IDS_LSB = 16;
+inline constexpr unsigned COUNTERS_TELEM_STATUS_TRACKED_IDS_WIDTH = 8;
+inline constexpr std::uint32_t COUNTERS_TELEM_STATUS_TRACKED_IDS_MASK = 0x00FF0000u;
+inline constexpr unsigned COUNTERS_TELEM_STATUS_SNAP_VALID_LSB = 24;
+inline constexpr unsigned COUNTERS_TELEM_STATUS_SNAP_VALID_WIDTH = 1;
+inline constexpr std::uint32_t COUNTERS_TELEM_STATUS_SNAP_VALID_MASK = 0x01000000u;
+inline constexpr unsigned COUNTERS_TELEM_STATUS_TRAFFIC_SATURATE_LSB = 25;
+inline constexpr unsigned COUNTERS_TELEM_STATUS_TRAFFIC_SATURATE_WIDTH = 1;
+inline constexpr std::uint32_t COUNTERS_TELEM_STATUS_TRAFFIC_SATURATE_MASK = 0x02000000u;
+inline constexpr unsigned COUNTERS_TELEM_STATUS_ERROR_SATURATE_LSB = 26;
+inline constexpr unsigned COUNTERS_TELEM_STATUS_ERROR_SATURATE_WIDTH = 1;
+inline constexpr std::uint32_t COUNTERS_TELEM_STATUS_ERROR_SATURATE_MASK = 0x04000000u;
+inline constexpr unsigned COUNTERS_TELEM_STATUS_WRAP_ANY_LSB = 27;
+inline constexpr unsigned COUNTERS_TELEM_STATUS_WRAP_ANY_WIDTH = 1;
+inline constexpr std::uint32_t COUNTERS_TELEM_STATUS_WRAP_ANY_MASK = 0x08000000u;
+inline constexpr std::uint32_t COUNTERS_SNAPSHOT_ID_ADDR = 0x7008u;
+inline constexpr std::uint32_t COUNTERS_SNAPSHOT_ID_RESET = 0x00000000u;
+inline constexpr unsigned COUNTERS_SNAPSHOT_ID_VALUE_LSB = 0;
+inline constexpr unsigned COUNTERS_SNAPSHOT_ID_VALUE_WIDTH = 32;
+inline constexpr std::uint32_t COUNTERS_SNAPSHOT_ID_VALUE_MASK = 0xFFFFFFFFu;
+inline constexpr std::uint32_t COUNTERS_BEAT_COUNT_LO_ADDR = 0x700Cu;
+inline constexpr std::uint32_t COUNTERS_BEAT_COUNT_LO_RESET = 0x00000000u;
+inline constexpr unsigned COUNTERS_BEAT_COUNT_LO_VALUE_LSB = 0;
+inline constexpr unsigned COUNTERS_BEAT_COUNT_LO_VALUE_WIDTH = 32;
+inline constexpr std::uint32_t COUNTERS_BEAT_COUNT_LO_VALUE_MASK = 0xFFFFFFFFu;
+inline constexpr std::uint32_t COUNTERS_BEAT_COUNT_HI_ADDR = 0x7010u;
+inline constexpr std::uint32_t COUNTERS_BEAT_COUNT_HI_RESET = 0x00000000u;
+inline constexpr unsigned COUNTERS_BEAT_COUNT_HI_VALUE_LSB = 0;
+inline constexpr unsigned COUNTERS_BEAT_COUNT_HI_VALUE_WIDTH = 32;
+inline constexpr std::uint32_t COUNTERS_BEAT_COUNT_HI_VALUE_MASK = 0xFFFFFFFFu;
+inline constexpr std::uint32_t COUNTERS_STALL_COUNT_LO_ADDR = 0x7014u;
+inline constexpr std::uint32_t COUNTERS_STALL_COUNT_LO_RESET = 0x00000000u;
+inline constexpr unsigned COUNTERS_STALL_COUNT_LO_VALUE_LSB = 0;
+inline constexpr unsigned COUNTERS_STALL_COUNT_LO_VALUE_WIDTH = 32;
+inline constexpr std::uint32_t COUNTERS_STALL_COUNT_LO_VALUE_MASK = 0xFFFFFFFFu;
+inline constexpr std::uint32_t COUNTERS_STALL_COUNT_HI_ADDR = 0x7018u;
+inline constexpr std::uint32_t COUNTERS_STALL_COUNT_HI_RESET = 0x00000000u;
+inline constexpr unsigned COUNTERS_STALL_COUNT_HI_VALUE_LSB = 0;
+inline constexpr unsigned COUNTERS_STALL_COUNT_HI_VALUE_WIDTH = 32;
+inline constexpr std::uint32_t COUNTERS_STALL_COUNT_HI_VALUE_MASK = 0xFFFFFFFFu;
+inline constexpr std::uint32_t COUNTERS_IDLE_COUNT_ADDR = 0x701Cu;
+inline constexpr std::uint32_t COUNTERS_IDLE_COUNT_RESET = 0x00000000u;
+inline constexpr unsigned COUNTERS_IDLE_COUNT_VALUE_LSB = 0;
+inline constexpr unsigned COUNTERS_IDLE_COUNT_VALUE_WIDTH = 32;
+inline constexpr std::uint32_t COUNTERS_IDLE_COUNT_VALUE_MASK = 0xFFFFFFFFu;
+inline constexpr std::uint32_t COUNTERS_FRAME_COUNT_ADDR = 0x7020u;
+inline constexpr std::uint32_t COUNTERS_FRAME_COUNT_RESET = 0x00000000u;
+inline constexpr unsigned COUNTERS_FRAME_COUNT_VALUE_LSB = 0;
+inline constexpr unsigned COUNTERS_FRAME_COUNT_VALUE_WIDTH = 32;
+inline constexpr std::uint32_t COUNTERS_FRAME_COUNT_VALUE_MASK = 0xFFFFFFFFu;
+inline constexpr std::uint32_t COUNTERS_FRAME_START_COUNT_ADDR = 0x7024u;
+inline constexpr std::uint32_t COUNTERS_FRAME_START_COUNT_RESET = 0x00000000u;
+inline constexpr unsigned COUNTERS_FRAME_START_COUNT_VALUE_LSB = 0;
+inline constexpr unsigned COUNTERS_FRAME_START_COUNT_VALUE_WIDTH = 32;
+inline constexpr std::uint32_t COUNTERS_FRAME_START_COUNT_VALUE_MASK = 0xFFFFFFFFu;
+inline constexpr std::uint32_t COUNTERS_FIFO_HIGH_WATER_ADDR = 0x7028u;
+inline constexpr std::uint32_t COUNTERS_FIFO_HIGH_WATER_RESET = 0x00000000u;
+inline constexpr unsigned COUNTERS_FIFO_HIGH_WATER_HIGH_LSB = 0;
+inline constexpr unsigned COUNTERS_FIFO_HIGH_WATER_HIGH_WIDTH = 16;
+inline constexpr std::uint32_t COUNTERS_FIFO_HIGH_WATER_HIGH_MASK = 0x0000FFFFu;
+inline constexpr unsigned COUNTERS_FIFO_HIGH_WATER_DEPTH_LSB = 16;
+inline constexpr unsigned COUNTERS_FIFO_HIGH_WATER_DEPTH_WIDTH = 16;
+inline constexpr std::uint32_t COUNTERS_FIFO_HIGH_WATER_DEPTH_MASK = 0xFFFF0000u;
+inline constexpr std::uint32_t COUNTERS_OVERFLOW_COUNT_ADDR = 0x702Cu;
+inline constexpr std::uint32_t COUNTERS_OVERFLOW_COUNT_RESET = 0x00000000u;
+inline constexpr unsigned COUNTERS_OVERFLOW_COUNT_VALUE_LSB = 0;
+inline constexpr unsigned COUNTERS_OVERFLOW_COUNT_VALUE_WIDTH = 32;
+inline constexpr std::uint32_t COUNTERS_OVERFLOW_COUNT_VALUE_MASK = 0xFFFFFFFFu;
+inline constexpr std::uint32_t COUNTERS_SATURATE_COUNT_ADDR = 0x7030u;
+inline constexpr std::uint32_t COUNTERS_SATURATE_COUNT_RESET = 0x00000000u;
+inline constexpr unsigned COUNTERS_SATURATE_COUNT_VALUE_LSB = 0;
+inline constexpr unsigned COUNTERS_SATURATE_COUNT_VALUE_WIDTH = 32;
+inline constexpr std::uint32_t COUNTERS_SATURATE_COUNT_VALUE_MASK = 0xFFFFFFFFu;
+inline constexpr std::uint32_t COUNTERS_CDC_ERROR_COUNT_ADDR = 0x7034u;
+inline constexpr std::uint32_t COUNTERS_CDC_ERROR_COUNT_RESET = 0x00000000u;
+inline constexpr unsigned COUNTERS_CDC_ERROR_COUNT_VALUE_LSB = 0;
+inline constexpr unsigned COUNTERS_CDC_ERROR_COUNT_VALUE_WIDTH = 32;
+inline constexpr std::uint32_t COUNTERS_CDC_ERROR_COUNT_VALUE_MASK = 0xFFFFFFFFu;
+inline constexpr std::uint32_t COUNTERS_SEQ_GAP_COUNT_ADDR = 0x7038u;
+inline constexpr std::uint32_t COUNTERS_SEQ_GAP_COUNT_RESET = 0x00000000u;
+inline constexpr unsigned COUNTERS_SEQ_GAP_COUNT_VALUE_LSB = 0;
+inline constexpr unsigned COUNTERS_SEQ_GAP_COUNT_VALUE_WIDTH = 32;
+inline constexpr std::uint32_t COUNTERS_SEQ_GAP_COUNT_VALUE_MASK = 0xFFFFFFFFu;
+inline constexpr std::uint32_t COUNTERS_SEQ_DUP_COUNT_ADDR = 0x703Cu;
+inline constexpr std::uint32_t COUNTERS_SEQ_DUP_COUNT_RESET = 0x00000000u;
+inline constexpr unsigned COUNTERS_SEQ_DUP_COUNT_VALUE_LSB = 0;
+inline constexpr unsigned COUNTERS_SEQ_DUP_COUNT_VALUE_WIDTH = 32;
+inline constexpr std::uint32_t COUNTERS_SEQ_DUP_COUNT_VALUE_MASK = 0xFFFFFFFFu;
+inline constexpr std::uint32_t COUNTERS_SEQ_REORDER_COUNT_ADDR = 0x7040u;
+inline constexpr std::uint32_t COUNTERS_SEQ_REORDER_COUNT_RESET = 0x00000000u;
+inline constexpr unsigned COUNTERS_SEQ_REORDER_COUNT_VALUE_LSB = 0;
+inline constexpr unsigned COUNTERS_SEQ_REORDER_COUNT_VALUE_WIDTH = 32;
+inline constexpr std::uint32_t COUNTERS_SEQ_REORDER_COUNT_VALUE_MASK = 0xFFFFFFFFu;
+inline constexpr std::uint32_t COUNTERS_SEQ_LOST_BEATS_ADDR = 0x7044u;
+inline constexpr std::uint32_t COUNTERS_SEQ_LOST_BEATS_RESET = 0x00000000u;
+inline constexpr unsigned COUNTERS_SEQ_LOST_BEATS_VALUE_LSB = 0;
+inline constexpr unsigned COUNTERS_SEQ_LOST_BEATS_VALUE_WIDTH = 32;
+inline constexpr std::uint32_t COUNTERS_SEQ_LOST_BEATS_VALUE_MASK = 0xFFFFFFFFu;
+inline constexpr std::uint32_t COUNTERS_SEQ_UNTRACKED_COUNT_ADDR = 0x7048u;
+inline constexpr std::uint32_t COUNTERS_SEQ_UNTRACKED_COUNT_RESET = 0x00000000u;
+inline constexpr unsigned COUNTERS_SEQ_UNTRACKED_COUNT_VALUE_LSB = 0;
+inline constexpr unsigned COUNTERS_SEQ_UNTRACKED_COUNT_VALUE_WIDTH = 32;
+inline constexpr std::uint32_t COUNTERS_SEQ_UNTRACKED_COUNT_VALUE_MASK = 0xFFFFFFFFu;
+inline constexpr std::uint32_t COUNTERS_SEQ_STATUS_ADDR = 0x704Cu;
+inline constexpr std::uint32_t COUNTERS_SEQ_STATUS_RESET = 0x00000000u;
+inline constexpr unsigned COUNTERS_SEQ_STATUS_GAP_LSB = 0;
+inline constexpr unsigned COUNTERS_SEQ_STATUS_GAP_WIDTH = 1;
+inline constexpr std::uint32_t COUNTERS_SEQ_STATUS_GAP_MASK = 0x00000001u;
+inline constexpr unsigned COUNTERS_SEQ_STATUS_DUP_LSB = 1;
+inline constexpr unsigned COUNTERS_SEQ_STATUS_DUP_WIDTH = 1;
+inline constexpr std::uint32_t COUNTERS_SEQ_STATUS_DUP_MASK = 0x00000002u;
+inline constexpr unsigned COUNTERS_SEQ_STATUS_REORDER_LSB = 2;
+inline constexpr unsigned COUNTERS_SEQ_STATUS_REORDER_WIDTH = 1;
+inline constexpr std::uint32_t COUNTERS_SEQ_STATUS_REORDER_MASK = 0x00000004u;
+inline constexpr unsigned COUNTERS_SEQ_STATUS_UNTRACKED_LSB = 3;
+inline constexpr unsigned COUNTERS_SEQ_STATUS_UNTRACKED_WIDTH = 1;
+inline constexpr std::uint32_t COUNTERS_SEQ_STATUS_UNTRACKED_MASK = 0x00000008u;
+inline constexpr unsigned COUNTERS_SEQ_STATUS_CHECKER_STICKY_LSB = 8;
+inline constexpr unsigned COUNTERS_SEQ_STATUS_CHECKER_STICKY_WIDTH = 4;
+inline constexpr std::uint32_t COUNTERS_SEQ_STATUS_CHECKER_STICKY_MASK = 0x00000F00u;
+inline constexpr std::uint32_t COUNTERS_WRAP_STATUS_ADDR = 0x7050u;
+inline constexpr std::uint32_t COUNTERS_WRAP_STATUS_RESET = 0x00000000u;
+inline constexpr unsigned COUNTERS_WRAP_STATUS_BEAT_LSB = 0;
+inline constexpr unsigned COUNTERS_WRAP_STATUS_BEAT_WIDTH = 1;
+inline constexpr std::uint32_t COUNTERS_WRAP_STATUS_BEAT_MASK = 0x00000001u;
+inline constexpr unsigned COUNTERS_WRAP_STATUS_STALL_LSB = 1;
+inline constexpr unsigned COUNTERS_WRAP_STATUS_STALL_WIDTH = 1;
+inline constexpr std::uint32_t COUNTERS_WRAP_STATUS_STALL_MASK = 0x00000002u;
+inline constexpr unsigned COUNTERS_WRAP_STATUS_IDLE_LSB = 2;
+inline constexpr unsigned COUNTERS_WRAP_STATUS_IDLE_WIDTH = 1;
+inline constexpr std::uint32_t COUNTERS_WRAP_STATUS_IDLE_MASK = 0x00000004u;
+inline constexpr unsigned COUNTERS_WRAP_STATUS_FRAME_LSB = 3;
+inline constexpr unsigned COUNTERS_WRAP_STATUS_FRAME_WIDTH = 1;
+inline constexpr std::uint32_t COUNTERS_WRAP_STATUS_FRAME_MASK = 0x00000008u;
+inline constexpr unsigned COUNTERS_WRAP_STATUS_FRAME_START_LSB = 4;
+inline constexpr unsigned COUNTERS_WRAP_STATUS_FRAME_START_WIDTH = 1;
+inline constexpr std::uint32_t COUNTERS_WRAP_STATUS_FRAME_START_MASK = 0x00000010u;
+inline constexpr unsigned COUNTERS_WRAP_STATUS_OVERFLOW_LSB = 5;
+inline constexpr unsigned COUNTERS_WRAP_STATUS_OVERFLOW_WIDTH = 1;
+inline constexpr std::uint32_t COUNTERS_WRAP_STATUS_OVERFLOW_MASK = 0x00000020u;
+inline constexpr unsigned COUNTERS_WRAP_STATUS_SATURATE_LSB = 6;
+inline constexpr unsigned COUNTERS_WRAP_STATUS_SATURATE_WIDTH = 1;
+inline constexpr std::uint32_t COUNTERS_WRAP_STATUS_SATURATE_MASK = 0x00000040u;
+inline constexpr unsigned COUNTERS_WRAP_STATUS_CDC_ERROR_LSB = 7;
+inline constexpr unsigned COUNTERS_WRAP_STATUS_CDC_ERROR_WIDTH = 1;
+inline constexpr std::uint32_t COUNTERS_WRAP_STATUS_CDC_ERROR_MASK = 0x00000080u;
+inline constexpr unsigned COUNTERS_WRAP_STATUS_SNAPSHOT_ID_LSB = 8;
+inline constexpr unsigned COUNTERS_WRAP_STATUS_SNAPSHOT_ID_WIDTH = 1;
+inline constexpr std::uint32_t COUNTERS_WRAP_STATUS_SNAPSHOT_ID_MASK = 0x00000100u;
+
 // ---- planned windows (declared, not implemented in this build) ----------
 // coeff 0x5000: planned by #10, #11, #12, #16. Accesses return error=1.
 inline constexpr std::uint32_t COEFF_BASE = 0x5000u;
 // cfar 0x6000: planned by #14, #16. Accesses return error=1.
 inline constexpr std::uint32_t CFAR_BASE = 0x6000u;
-// counters 0x7000: planned by #8. Accesses return error=1.
-inline constexpr std::uint32_t COUNTERS_BASE = 0x7000u;
 // debug 0x8000: planned by #19. Accesses return error=1.
 inline constexpr std::uint32_t DEBUG_BASE = 0x8000u;
 
@@ -361,15 +539,15 @@ inline constexpr BlockInfo kBlocks[9] = {
     {"scratch", 0x4000u, 0x1000u, true, 4},
     {"coeff", 0x5000u, 0x1000u, false, 0},
     {"cfar", 0x6000u, 0x1000u, false, 0},
-    {"counters", 0x7000u, 0x1000u, false, 0},
+    {"counters", 0x7000u, 0x1000u, true, 21},
     {"debug", 0x8000u, 0x1000u, false, 0},
 };
 
-inline constexpr RegInfo kRegisters[28] = {
+inline constexpr RegInfo kRegisters[49] = {
     {"id", "MAGIC", 0x0000u, 0, 0, Access::kRo, 0x52414441u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u},
-    {"id", "VERSION", 0x0004u, 0, 1, Access::kRo, 0x01000001u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u},
-    {"id", "GEOMETRY", 0x0008u, 0, 2, Access::kRo, 0x10201C09u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u},
-    {"id", "CAPABILITY", 0x000Cu, 0, 3, Access::kRo, 0x0000001Fu, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u},
+    {"id", "VERSION", 0x0004u, 0, 1, Access::kRo, 0x01010001u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u},
+    {"id", "GEOMETRY", 0x0008u, 0, 2, Access::kRo, 0x10203109u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u},
+    {"id", "CAPABILITY", 0x000Cu, 0, 3, Access::kRo, 0x0000009Fu, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u},
     {"build_params", "N_ANTENNAS", 0x1000u, 1, 0, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
     {"build_params", "SAMPLES_PER_CYCLE", 0x1004u, 1, 1, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
     {"build_params", "FFT_SIZE", 0x1008u, 1, 2, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
@@ -394,19 +572,40 @@ inline constexpr RegInfo kRegisters[28] = {
     {"scratch", "SCRATCH1", 0x4004u, 4, 1, Access::kRw, 0xFFFFFFFFu, 0xFFFFFFFFu, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu},
     {"scratch", "SCRATCH2", 0x4008u, 4, 2, Access::kRw, 0xA5A5A5A5u, 0xFFFFFFFFu, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu},
     {"scratch", "SCRATCH3", 0x400Cu, 4, 3, Access::kMixed, 0xDEAD5A5Au, 0x0000FFFFu, 0x00000000u, 0x00000000u, 0x00000000u, 0x0000FFFFu},
+    {"counters", "TELEM_CTRL", 0x7000u, 5, 0, Access::kMixed, 0x00000003u, 0x00000007u, 0x00000000u, 0x00000700u, 0x00000000u, 0x00000707u},
+    {"counters", "TELEM_STATUS", 0x7004u, 5, 1, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x0FFFFFFFu, 0x00000000u},
+    {"counters", "SNAPSHOT_ID", 0x7008u, 5, 2, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"counters", "BEAT_COUNT_LO", 0x700Cu, 5, 3, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"counters", "BEAT_COUNT_HI", 0x7010u, 5, 4, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"counters", "STALL_COUNT_LO", 0x7014u, 5, 5, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"counters", "STALL_COUNT_HI", 0x7018u, 5, 6, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"counters", "IDLE_COUNT", 0x701Cu, 5, 7, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"counters", "FRAME_COUNT", 0x7020u, 5, 8, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"counters", "FRAME_START_COUNT", 0x7024u, 5, 9, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"counters", "FIFO_HIGH_WATER", 0x7028u, 5, 10, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"counters", "OVERFLOW_COUNT", 0x702Cu, 5, 11, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"counters", "SATURATE_COUNT", 0x7030u, 5, 12, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"counters", "CDC_ERROR_COUNT", 0x7034u, 5, 13, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"counters", "SEQ_GAP_COUNT", 0x7038u, 5, 14, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"counters", "SEQ_DUP_COUNT", 0x703Cu, 5, 15, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"counters", "SEQ_REORDER_COUNT", 0x7040u, 5, 16, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"counters", "SEQ_LOST_BEATS", 0x7044u, 5, 17, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"counters", "SEQ_UNTRACKED_COUNT", 0x7048u, 5, 18, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"counters", "SEQ_STATUS", 0x704Cu, 5, 19, Access::kMixed, 0x00000000u, 0x00000000u, 0x0000000Fu, 0x00000000u, 0x00000F00u, 0x0000000Fu},
+    {"counters", "WRAP_STATUS", 0x7050u, 5, 20, Access::kW1c, 0x00000000u, 0x00000000u, 0x000001FFu, 0x00000000u, 0x00000000u, 0x000001FFu},
 };
 
-inline constexpr FieldInfo kFields[67] = {
+inline constexpr FieldInfo kFields[112] = {
     {"id", "MAGIC", "MAGIC", 0, 32, 0xFFFFFFFFu, Access::kRo, 0x52414441u},
     {"id", "VERSION", "MAJOR", 24, 8, 0xFF000000u, Access::kRo, 0x00000001u},
-    {"id", "VERSION", "MINOR", 16, 8, 0x00FF0000u, Access::kRo, 0x00000000u},
+    {"id", "VERSION", "MINOR", 16, 8, 0x00FF0000u, Access::kRo, 0x00000001u},
     {"id", "VERSION", "PATCH", 8, 8, 0x0000FF00u, Access::kRo, 0x00000000u},
     {"id", "VERSION", "SCHEMA", 0, 8, 0x000000FFu, Access::kRo, 0x00000001u},
     {"id", "GEOMETRY", "N_BLOCKS", 0, 8, 0x000000FFu, Access::kRo, 0x00000009u},
-    {"id", "GEOMETRY", "N_REGS", 8, 8, 0x0000FF00u, Access::kRo, 0x0000001Cu},
+    {"id", "GEOMETRY", "N_REGS", 8, 8, 0x0000FF00u, Access::kRo, 0x00000031u},
     {"id", "GEOMETRY", "DATA_W", 16, 8, 0x00FF0000u, Access::kRo, 0x00000020u},
     {"id", "GEOMETRY", "ADDR_W", 24, 8, 0xFF000000u, Access::kRo, 0x00000010u},
-    {"id", "CAPABILITY", "BLOCK_MASK", 0, 32, 0xFFFFFFFFu, Access::kRo, 0x0000001Fu},
+    {"id", "CAPABILITY", "BLOCK_MASK", 0, 32, 0xFFFFFFFFu, Access::kRo, 0x0000009Fu},
     {"build_params", "N_ANTENNAS", "VALUE", 0, 32, 0xFFFFFFFFu, Access::kRoHw, 0x00000000u},
     {"build_params", "SAMPLES_PER_CYCLE", "VALUE", 0, 32, 0xFFFFFFFFu, Access::kRoHw, 0x00000000u},
     {"build_params", "FFT_SIZE", "VALUE", 0, 32, 0xFFFFFFFFu, Access::kRoHw, 0x00000000u},
@@ -464,6 +663,51 @@ inline constexpr FieldInfo kFields[67] = {
     {"scratch", "SCRATCH2", "VALUE", 0, 32, 0xFFFFFFFFu, Access::kRw, 0xA5A5A5A5u},
     {"scratch", "SCRATCH3", "RW_LOW", 0, 16, 0x0000FFFFu, Access::kRw, 0x00005A5Au},
     {"scratch", "SCRATCH3", "RO_HIGH", 16, 16, 0xFFFF0000u, Access::kRo, 0x0000DEADu},
+    {"counters", "TELEM_CTRL", "ENABLE", 0, 1, 0x00000001u, Access::kRw, 0x00000001u},
+    {"counters", "TELEM_CTRL", "SEQ_ENABLE", 1, 1, 0x00000002u, Access::kRw, 0x00000001u},
+    {"counters", "TELEM_CTRL", "SEQ_SOF_RESYNC", 2, 1, 0x00000004u, Access::kRw, 0x00000000u},
+    {"counters", "TELEM_CTRL", "SNAPSHOT", 8, 1, 0x00000100u, Access::kRwp, 0x00000000u},
+    {"counters", "TELEM_CTRL", "CLEAR", 9, 1, 0x00000200u, Access::kRwp, 0x00000000u},
+    {"counters", "TELEM_CTRL", "STICKY_CLEAR", 10, 1, 0x00000400u, Access::kRwp, 0x00000000u},
+    {"counters", "TELEM_STATUS", "COUNT_W", 0, 8, 0x000000FFu, Access::kRoHw, 0x00000000u},
+    {"counters", "TELEM_STATUS", "WIDE_W", 8, 8, 0x0000FF00u, Access::kRoHw, 0x00000000u},
+    {"counters", "TELEM_STATUS", "TRACKED_IDS", 16, 8, 0x00FF0000u, Access::kRoHw, 0x00000000u},
+    {"counters", "TELEM_STATUS", "SNAP_VALID", 24, 1, 0x01000000u, Access::kRoHw, 0x00000000u},
+    {"counters", "TELEM_STATUS", "TRAFFIC_SATURATE", 25, 1, 0x02000000u, Access::kRoHw, 0x00000000u},
+    {"counters", "TELEM_STATUS", "ERROR_SATURATE", 26, 1, 0x04000000u, Access::kRoHw, 0x00000000u},
+    {"counters", "TELEM_STATUS", "WRAP_ANY", 27, 1, 0x08000000u, Access::kRoHw, 0x00000000u},
+    {"counters", "SNAPSHOT_ID", "VALUE", 0, 32, 0xFFFFFFFFu, Access::kRoHw, 0x00000000u},
+    {"counters", "BEAT_COUNT_LO", "VALUE", 0, 32, 0xFFFFFFFFu, Access::kRoHw, 0x00000000u},
+    {"counters", "BEAT_COUNT_HI", "VALUE", 0, 32, 0xFFFFFFFFu, Access::kRoHw, 0x00000000u},
+    {"counters", "STALL_COUNT_LO", "VALUE", 0, 32, 0xFFFFFFFFu, Access::kRoHw, 0x00000000u},
+    {"counters", "STALL_COUNT_HI", "VALUE", 0, 32, 0xFFFFFFFFu, Access::kRoHw, 0x00000000u},
+    {"counters", "IDLE_COUNT", "VALUE", 0, 32, 0xFFFFFFFFu, Access::kRoHw, 0x00000000u},
+    {"counters", "FRAME_COUNT", "VALUE", 0, 32, 0xFFFFFFFFu, Access::kRoHw, 0x00000000u},
+    {"counters", "FRAME_START_COUNT", "VALUE", 0, 32, 0xFFFFFFFFu, Access::kRoHw, 0x00000000u},
+    {"counters", "FIFO_HIGH_WATER", "HIGH", 0, 16, 0x0000FFFFu, Access::kRoHw, 0x00000000u},
+    {"counters", "FIFO_HIGH_WATER", "DEPTH", 16, 16, 0xFFFF0000u, Access::kRoHw, 0x00000000u},
+    {"counters", "OVERFLOW_COUNT", "VALUE", 0, 32, 0xFFFFFFFFu, Access::kRoHw, 0x00000000u},
+    {"counters", "SATURATE_COUNT", "VALUE", 0, 32, 0xFFFFFFFFu, Access::kRoHw, 0x00000000u},
+    {"counters", "CDC_ERROR_COUNT", "VALUE", 0, 32, 0xFFFFFFFFu, Access::kRoHw, 0x00000000u},
+    {"counters", "SEQ_GAP_COUNT", "VALUE", 0, 32, 0xFFFFFFFFu, Access::kRoHw, 0x00000000u},
+    {"counters", "SEQ_DUP_COUNT", "VALUE", 0, 32, 0xFFFFFFFFu, Access::kRoHw, 0x00000000u},
+    {"counters", "SEQ_REORDER_COUNT", "VALUE", 0, 32, 0xFFFFFFFFu, Access::kRoHw, 0x00000000u},
+    {"counters", "SEQ_LOST_BEATS", "VALUE", 0, 32, 0xFFFFFFFFu, Access::kRoHw, 0x00000000u},
+    {"counters", "SEQ_UNTRACKED_COUNT", "VALUE", 0, 32, 0xFFFFFFFFu, Access::kRoHw, 0x00000000u},
+    {"counters", "SEQ_STATUS", "GAP", 0, 1, 0x00000001u, Access::kW1c, 0x00000000u},
+    {"counters", "SEQ_STATUS", "DUP", 1, 1, 0x00000002u, Access::kW1c, 0x00000000u},
+    {"counters", "SEQ_STATUS", "REORDER", 2, 1, 0x00000004u, Access::kW1c, 0x00000000u},
+    {"counters", "SEQ_STATUS", "UNTRACKED", 3, 1, 0x00000008u, Access::kW1c, 0x00000000u},
+    {"counters", "SEQ_STATUS", "CHECKER_STICKY", 8, 4, 0x00000F00u, Access::kRoHw, 0x00000000u},
+    {"counters", "WRAP_STATUS", "BEAT", 0, 1, 0x00000001u, Access::kW1c, 0x00000000u},
+    {"counters", "WRAP_STATUS", "STALL", 1, 1, 0x00000002u, Access::kW1c, 0x00000000u},
+    {"counters", "WRAP_STATUS", "IDLE", 2, 1, 0x00000004u, Access::kW1c, 0x00000000u},
+    {"counters", "WRAP_STATUS", "FRAME", 3, 1, 0x00000008u, Access::kW1c, 0x00000000u},
+    {"counters", "WRAP_STATUS", "FRAME_START", 4, 1, 0x00000010u, Access::kW1c, 0x00000000u},
+    {"counters", "WRAP_STATUS", "OVERFLOW", 5, 1, 0x00000020u, Access::kW1c, 0x00000000u},
+    {"counters", "WRAP_STATUS", "SATURATE", 6, 1, 0x00000040u, Access::kW1c, 0x00000000u},
+    {"counters", "WRAP_STATUS", "CDC_ERROR", 7, 1, 0x00000080u, Access::kW1c, 0x00000000u},
+    {"counters", "WRAP_STATUS", "SNAPSHOT_ID", 8, 1, 0x00000100u, Access::kW1c, 0x00000000u},
 };
 
 inline constexpr std::size_t kBlockTableSize = sizeof(kBlocks) / sizeof(kBlocks[0]);

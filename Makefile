@@ -182,6 +182,23 @@ CONTROL_FILES := sim/verilator/files_control.f
 CONTROL_TEST  := test_control_regs
 CONTROL_BIN    = sim/verilator/build/fast_tiny_$(CONTROL_TOP)/V$(CONTROL_TOP)_$(CONTROL_TEST)
 
+# --- telemetry primitives (issue #8, SPEC 9 / 13.1 / 13.4 / 14) ------------
+# A fifth self-contained build, for the reason the others have one: a failure in
+# it is unambiguously a telemetry failure. telemetry_top holds the SPEC 9
+# counters block watching a real stream through a real FIFO, the sequence
+# checker on the same interface, and three deliberately narrow perf_counters so
+# that SPEC 13.4 counter-wrap coverage is a directed case in every seed rather
+# than a condition reasoned about and never reached.
+#
+#   test_perf_counters  counters, snapshot coherence, wrap and saturation, and
+#                       every register value against an independent tally.
+#   test_seq_checker    loss, duplication, reordering and untracked streams,
+#                       injected through the checker's stimulus override.
+TELEM_TOP     := telemetry_top
+TELEM_FILES   := sim/verilator/files_telemetry.f
+TELEM_TESTS   := test_perf_counters test_seq_checker
+TELEM_BIN_DIR  = sim/verilator/build/fast_tiny_$(TELEM_TOP)
+
 # The register map is generated from control/regmap.json by scripts/gen_regmap.py.
 # The SystemVerilog package, the C++ header and docs/regmap.md are committed — a
 # clean checkout must lint and simulate without running a generator first — and
@@ -262,23 +279,26 @@ define LINT_RECIPE
 	@printf '[lint] verilator --lint-only --Wall, config=%s, waivers=%s\n' \
 	    '$(CONFIG)' 'sim/verilator/lint_waivers.vlt'
 	$(REGMAP_CHECK_RECIPE)
-	@printf '[lint] 1/6 %s\n' 'benchmark_sim_top'
+	@printf '[lint] 1/7 %s\n' 'benchmark_sim_top'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) --test $(TEST)
-	@printf '[lint] 2/6 %s\n' '$(STREAM_TOP)'
+	@printf '[lint] 2/7 %s\n' '$(STREAM_TOP)'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
 	    --top $(STREAM_TOP) --files $(STREAM_FILES) --test $(STREAM_TEST)
-	@printf '[lint] 3/6 %s\n' '$(VIOL_TOP)'
+	@printf '[lint] 3/7 %s\n' '$(VIOL_TOP)'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
 	    --top $(VIOL_TOP) --files $(VIOL_FILES) --test $(VIOL_TEST)
-	@printf '[lint] 4/6 %s\n' '$(CONTROL_TOP)'
+	@printf '[lint] 4/7 %s\n' '$(CONTROL_TOP)'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
 	    --top $(CONTROL_TOP) --files $(CONTROL_FILES) --test $(CONTROL_TEST)
-	@printf '[lint] 5/6 %s\n' '$(CDC_TOP)'
+	@printf '[lint] 5/7 %s\n' '$(CDC_TOP)'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
 	    --top $(CDC_TOP) --files $(CDC_FILES) --test $(firstword $(CDC_TESTS))
-	@printf '[lint] 6/6 %s\n' '$(CDCV_TOP)'
+	@printf '[lint] 6/7 %s\n' '$(CDCV_TOP)'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
 	    --top $(CDCV_TOP) --files $(CDCV_FILES) --test $(CDCV_TEST)
+	@printf '[lint] 7/7 %s\n' '$(TELEM_TOP)'
+	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
+	    --top $(TELEM_TOP) --files $(TELEM_FILES) --test $(firstword $(TELEM_TESTS))
 endef
 
 # `sim-tiny`: SPEC 12.1 fast build of every simulation top, then every test
@@ -308,6 +328,16 @@ endef
 #   test_cdc_assertions      cdc_violator_top — the CDC negative test. Requires
 #                            a_gray_one_bit and a_hs_data_stable (among others)
 #                            to fire by name, and the clean mode to stay clean.
+#   test_perf_counters       telemetry_top — the SPEC 9 counter groups: exact
+#                            beat/stall/idle/frame counts against an independent
+#                            harness tally, coherent multi-register reads taken
+#                            while traffic runs, and the SPEC 13.4 wrap and
+#                            saturation cases on deliberately narrow counters.
+#   test_seq_checker         telemetry_top — SPEC 5 loss, duplication and
+#                            reordering: each fault injected deliberately and
+#                            required to land in the right category with the
+#                            right count, cross-checked every cycle against the
+#                            C++ model in model/cpp/telemetry/.
 define SIM_TINY_RECIPE
 	$(REGMAP_CHECK_RECIPE)
 	$(BUILD_VERILATOR) --mode fast --config tiny --jobs $(JOBS) --test $(TEST)
@@ -323,9 +353,14 @@ define SIM_TINY_RECIPE
 	  done
 	$(BUILD_VERILATOR) --mode fast --config tiny --jobs $(JOBS) \
 	    --top $(CDCV_TOP) --files $(CDCV_FILES) --test $(CDCV_TEST)
+	@for t in $(TELEM_TESTS); do \
+	    $(BUILD_VERILATOR) --mode fast --config tiny --jobs $(JOBS) \
+	        --top $(TELEM_TOP) --files $(TELEM_FILES) --test $$t || exit 1; \
+	  done
 	@printf '[sim-tiny] seeds: %s\n' '$(SEEDS)'
-	@printf '[sim-tiny] tests: %s %s %s %s %s %s\n' '$(TEST)' '$(STREAM_TEST)' \
-	    '$(VIOL_TEST)' '$(CONTROL_TEST)' '$(CDC_TESTS)' '$(CDCV_TEST)'
+	@printf '[sim-tiny] tests: %s %s %s %s %s %s %s\n' '$(TEST)' '$(STREAM_TEST)' \
+	    '$(VIOL_TEST)' '$(CONTROL_TEST)' '$(CDC_TESTS)' '$(CDCV_TEST)' \
+	    '$(TELEM_TESTS)'
 	@rc=0; for s in $(SEEDS); do \
 	    printf '\n[sim-tiny] ===== seed %s : %s =====\n' "$$s" '$(TEST)'; \
 	    ./$(SIM_TINY_BIN) +seed=$$s +results=$(RESULTS_DIR) || rc=1; \
@@ -343,6 +378,10 @@ define SIM_TINY_RECIPE
 	    printf '\n[sim-tiny] ===== seed %s : %s (expects assertions to fire) =====\n' \
 	        "$$s" '$(CDCV_TEST)'; \
 	    ./$(CDCV_BIN) +seed=$$s +results=$(RESULTS_DIR) || rc=1; \
+	    for t in $(TELEM_TESTS); do \
+	      printf '\n[sim-tiny] ===== seed %s : %s =====\n' "$$s" "$$t"; \
+	      ./$(TELEM_BIN_DIR)/V$(TELEM_TOP)_$$t +seed=$$s +results=$(RESULTS_DIR) || rc=1; \
+	    done; \
 	  done; \
 	  if [ $$rc -ne 0 ]; then \
 	    printf '\n[sim-tiny] FAILED (seeds: %s)\n' '$(SEEDS)' 1>&2; exit 1; \

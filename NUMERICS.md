@@ -361,6 +361,33 @@ typedef struct packed {
 * `event_count` counts saturating **cycles**, not saturating bits: a step that clamps in
   one direction counts once.
 
+### Counter widths and wrap policy (issue #8)
+
+`rtl/common/perf_counter.sv` is the one counter implementation the design has, and it makes
+the rule above general. The arithmetic is stated once and reused, so no kernel decides for
+itself what happens at the top of a counter's range:
+
+| Counter class | Width | Mode | Why |
+|---|---|---|---|
+| Stream beats, stall cycles | 64 (`WIDE_W`) | **modulo** | rate measures. 64 bits at 450 MHz is 1.3 million years, so the absolute value is safe in any real run; after a wrap the *difference* between two reads is still exactly right, which is the quantity anyone uses |
+| Idle cycles, frames, frame starts | 32 (`COUNT_W`) | **modulo** | as above |
+| FIFO overflows, arithmetic saturations, CDC errors | 32 | **saturating** | magnitudes. A dump taken long after a run must not report a small number because the counter went round — the rule this section already states for `event_count`, now enforced by the shared primitive |
+| Sequence gaps, lost beats, duplicates, reorders, untracked beats | 32 | **saturating** | as above |
+| `SNAPSHOT_ID` | 32 | **modulo** | an identity, not a magnitude: a saturated identity compares equal to every later one and stops detecting the read race it exists to detect |
+
+Neither mode has an undefined overflow. The adder is one bit wider than the counter and its
+carry out **is** the wrap decision, so the behaviour at the boundary is structural rather than
+a property of the synthesiser, and it is identical for an increment of one and for a weighted
+increment that steps over the maximum without landing on it.
+
+Every counter carries a sticky range flag, surfaced per counter in `COUNTERS.WRAP_STATUS` and
+as one bit in `COUNTERS.TELEM_STATUS.WRAP_ANY`, so a reader always knows whether an absolute
+value still means anything. `TELEM_STATUS.TRAFFIC_SATURATE` and `.ERROR_SATURATE` report which
+arithmetic was elaborated, so software never has to assume. SPEC §13.4 requires wrap to be
+exercised: `telemetry_top` carries three deliberately 8-bit counters for exactly that, and
+`test_perf_counters` wraps them in 300 events on every seed. Full rationale: DECISIONS.md
+(issue #8) decision 2; the register-level view is in [docs/regmap.md](docs/regmap.md).
+
 ## 9. Per-block numerical contracts
 
 Each kernel issue fills in its own subsection. Every one of them is bound by §§2–8: the
