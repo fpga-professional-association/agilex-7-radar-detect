@@ -323,3 +323,155 @@ configuration* bring-up; this benchmark never configures a device, it measures f
 mapping and timing. Adding the IP would put vendor logic into a project whose whole point
 is custom RTL. The warning is recorded in every JSON record's warning count rather than
 suppressed, and is revisited by issue #24 if a real device top is ever built.
+
+---
+
+## 2026-07-25 — Fixed-point numerics: rounding rule, saturation, accumulator growth, vector format  (issue #4)
+
+**Context.** SPEC §6 requires one shared package defining signed rounding, saturation,
+truncation points, accumulator widths and overflow flags, and forbids modules inventing
+their own rounding. SPEC §12.4 requires a bit-accurate C++ reference library with
+identical semantics, validated against independently generated Python/NumPy vectors
+*before* it is trusted as the RTL oracle. Every DSP kernel from issue #9 onward is built
+on whatever is decided here, so these are expensive to revisit. The normative statement
+of all of it is now NUMERICS.md; this entry records the choices and why the alternatives
+lost.
+
+**Decision 1 — round to nearest, ties to even (convergent), project-wide.** SPEC §6
+allows "convergent or round-to-nearest"; the project rule is convergent.
+`fxp_round()` / `fxp::round()` is the only rounding entry point datapath code may call,
+and it resolves through the `FXP_ROUND_MODE` localparam, which folds at elaboration.
+
+*Why not round-half-up*, which is one carry-in and free inside a DSP block: it is biased.
+Every exact tie moves toward +infinity, for a mean error of +2^-(s+1). Measured over a
+complete residue sweep by the C++ unit test — 131 072 consecutive inputs at s=3 —
+round-to-nearest-even's total error is exactly **0** and round-half-up's is **+65 536
+LSB-scaled units, one half LSB for each of the 16 384 ties**. That number is printed on
+every run of `make numerics-check`, so the justification is a measurement rather than an
+assertion. The bias matters here specifically because it is *coherent*: it adds through
+every FIR tap, survives the FFT as energy at bin 0, and lands in the power estimate as a
+DC pedestal that CFAR then thresholds against. Round-half-up is also asymmetric about
+zero (+0.5 -> +1 but -0.5 -> 0), which on a signed I/Q datapath is a signed DC offset.
+Round-half-away-from-zero fixes the symmetry but keeps a magnitude bias and costs
+sign-dependent logic.
+
+*Cost, accepted:* convergent rounding needs the tie detection (a wide NOR of the
+discarded bits) plus one LSB of the quotient — a handful of ALMs per rounding site, off
+the DSP cascade's critical path. Accepted because rounding sites number in the hundreds,
+not the hundreds of thousands. This is the one place the project knowingly trades a
+little area for a numerical property.
+
+*Consequence:* `fxp_round_half_up()` is implemented and exported anyway, and the vector
+set proves it, so the comparison stays measurable — but it is documented as not available
+to the datapath. Flipping `FXP_ROUND_MODE` is a one-line change that invalidates every
+golden vector, which is the friction it should have.
+
+**Decision 2 — saturation clamps to the full two's-complement range, and is
+direction-flagged.** `[-2^(w-1), 2^(w-1)-1]`, never wrapped. Wrapping turns a large
+positive detection into a large negative one, which CFAR cannot distinguish from a real
+target. *Alternative rejected:* symmetric saturation (low end clamped to -max), which is
+common in DSP libraries because it makes negation total — but it discards a representable
+value on every path that never negates, and it makes the format's own minimum an illegal
+datapath value. Instead the asymmetry is kept and negation is explicitly saturating, so
+-(-1.0) -> 0x7FFF with `sat_pos` rather than silently.
+
+Flags are a `{sat_pos, sat_neg}` pair, not one bit: persistent positive saturation is a
+gain-staging error, alternating saturation is oscillation, and negative-only saturation
+on a power path is a sign bug. One flip-flop buys that distinction.
+
+**Decision 3 — round first, saturate second, in one composite.** `fxp_round_sat` exists
+so the order cannot be got wrong. A value one tie below the top of the range rounds *up*
+past it (0x7FFF.8 -> 0x8000), and only a saturation applied afterwards catches it;
+saturating first would clamp, round the clamped value, and report no overflow. Inverting
+the order in the RTL was one of the three injected faults, and it produced 292 mismatches
+against both the vectors and the C++ model.
+
+**Decision 4 — accumulator width is `P + ceil(log2 N)`, and accumulators do not saturate
+internally.** `fxp_acc_w(P, N)`; for an N-term Q1.15 MAC that is `32 + ceil(log2 N)`. The
+formula is exact for power-of-two N and conservative by at most one bit otherwise (N=3
+gets 34 bits where 33 would do). The bit is paid deliberately: at this width an N-term
+sum of worst-case products provably cannot overflow, so the only saturation in a MAC is
+the final round-and-saturate on the way out.
+
+*Why that matters more than the flip-flop:* a saturating add is not associative. An
+accumulation tree that saturates internally gives a result that depends on the reduction
+order, so RTL (balanced tree, for timing) and a reference model (linear loop, because
+that is how a loop is written) would legitimately disagree, and no amount of vector
+comparison would resolve it. Sizing the accumulator so no intermediate can overflow
+deletes the question.
+
+*Consequence, made testable:* `fxp_probe_top` and `fxp::Acc` implement the opposite —
+saturate at every step — and `model/vectors/fxp_accum.vec` pins that order-dependent
+behaviour down exactly, including the `no_growth_32` counter-example that saturates on
+its second term because the growth bits were omitted. The difference between the two
+policies is therefore measured, not argued.
+
+**Decision 5 — vector files are line-oriented ASCII, and they are committed.**
+`# key: value` headers plus whitespace-separated signed-decimal records; two files,
+`fxp_ops.vec` (one line per operation) and `fxp_accum.vec` (one line per accumulate
+step). Headers carry `schema`, `kind`, `rounding_mode`, `seed` and `count`, and all five
+are checked: a truncated file fails on the count, and a vector set generated under the
+other rounding mode is rejected instead of "passing" against whichever implementation
+happens to match it.
+
+*Why not JSON:* the same reader has to work inside a Verilator test binary, a standalone
+C++ unit test and a Python script. JSON would mean vendoring a C++ JSON library so that a
+clean checkout still builds (SPEC §16), for a schema that is eight fixed columns. Three
+lines of `strtoll` and whitespace splitting is the whole parser. *Why not a binary
+format:* a golden vector whose diff is unreadable is not evidence.
+
+*Why committed, against the surface reading of PLAN.md standing rule #3 ("no generated
+files committed"):* these are source-of-truth test data, not build output. The point of a
+golden vector is that changing it appears as a reviewable diff; a set regenerated on
+demand proves only that the generator agrees with itself. The tension is resolved by
+making the files self-verifying — `gen_fxp_vectors.py --check` regenerates in memory and
+compares, and `make numerics-check` runs it — so the committed bytes are provably what
+the recorded seed produces. Total size 78 KB.
+
+**Decision 6 — the equivalence proof is a triangle, and it is validated by fault
+injection.** Three implementations written from NUMERICS.md rather than from each other:
+the NumPy reference (`divmod` / `floor_divide`), the RTL package and the C++ library
+(masks and arithmetic shifts). `sim/tests/test_fxp_rtl.cpp` checks all three pairwise
+relations and reports them separately, because RTL == C++ alone would be satisfied by two
+implementations sharing a mistake, and RTL == NumPy alone would leave the C++ oracle —
+which every later kernel test compares against — unproven.
+
+Three faults were injected before this was accepted and each was caught: RTL ties
+rounding toward -infinity (caught by `rtl_vs_vector` and `rtl_vs_cpp`, first at
+`rne_s1_kn3_half`), C++ saturation made symmetric (114 failures in the standalone unit
+test, first at `sat_w16_minm2`), and the round/saturate order inverted in the RTL (292
+failures with `cpp_vs_vector` clean, correctly localising the fault). The table is in
+NUMERICS.md §10 and must be re-run whenever a check is added or relaxed.
+
+**Decision 7 — the C++ mirror is exact by construction, not by observation.**
+SystemVerilog arithmetic on a 64-bit signed vector wraps; C++ signed overflow is
+undefined behaviour and C++17 leaves `>>` on a negative value implementation-defined.
+Rather than rely on what g++ 13 happens to do, every primitive in `fxp.hpp` goes through
+unsigned 64-bit operations with one reinterpretation at the end (`add_wrap`, `sub_wrap`,
+`neg_wrap`, `shl_wrap`, `asr`), and nothing outside that block uses a raw arithmetic
+operator on the working type. The mirror is then correct on any conforming compiler.
+
+**Decision 8 — `numerics-check` is a sub-target of `sim-tiny`, not a new SPEC §16 entry
+point.** SPEC §16 fixes the command list; adding a top-level numerics target would extend
+it. `make sim-tiny` gains `numerics-check` as a prerequisite, so the equivalence proof
+runs on every regression, and the sub-target is also runnable on its own while working on
+the package. On Windows the prerequisite is deliberately omitted, because `sim-tiny`
+re-dispatches the whole target into WSL and the WSL-side make applies it there; declaring
+it on both sides would run the gate twice.
+
+*Related, and small:* `scripts/build_verilator.py` gained `--top` / `--files` so the
+numerics cross-check can verilate `fxp_probe_top` from its own two-file list. Keeping it
+independent of `benchmark_sim_top` means a failure in the numerics gate is always a
+numerics failure. A non-default top builds into its own directory.
+
+**Decision 9 — CMakeLists.txt stays a placeholder; the standalone C++ build is one g++
+command.** Issue #4's task list mentions building the reference model "as part of
+CMakeLists.txt", and DECISIONS.md 2026-07-25 (issue #2, decision 8) had pointed that file
+at this issue. Measured on this host: **cmake is not installed in WSL Ubuntu-24.04**, the
+canonical build environment, so a CMake path could not be executed here — and shipping an
+unrun build description is worse than not shipping one. The reference model is
+header-only plus one test translation unit, so the entire standalone build is
+`g++ -std=c++17 -O3 -Wall -Wextra -Werror -Imodel/cpp -o ... test_fxp_vectors.cpp`, which
+is what `make numerics-check` runs and what the issue gate specifies. `CMakeLists.txt`
+keeps its loud placeholder, now pointing at `make numerics-check` rather than at this
+issue. Revisit if a component ever needs a build graph rather than a command.

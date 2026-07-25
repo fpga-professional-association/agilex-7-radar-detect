@@ -74,8 +74,12 @@ added by the issues that introduce those datapath dimensions (#10, #11, #12). Lo
 duplication, ordering violations, content mismatch, unexpected transactions and
 bounded-latency violations are counted separately, so a failure names its own category.
 
-The bit-accurate C++ reference model under `model/cpp/` remains TODO — issue #4 for the
-numeric types, extended per kernel by issues #9–#14.
+The bit-accurate C++ reference model under `model/cpp/` exists as of issue #4 for the
+shared numeric primitives (`model/cpp/fxp/`), extended per kernel by issues #9–#14. It is
+only usable as an RTL oracle because its equivalence to `rtl/packages/fxp_pkg.sv` and to
+an independent NumPy model is measured on every regression by `make numerics-check`, a
+prerequisite of `make sim-tiny`. Method and triage procedure: [NUMERICS.md](NUMERICS.md)
+§10.
 
 Standing rule (PLAN.md #5): latency changes update scoreboard metadata only, never
 expected numerical values.
@@ -87,9 +91,15 @@ expected numerical values.
 | Module | Test | Directed | Boundary | Randomized | Reset | Stall | Assertions |
 |---|---|---|---|---|---|---|---|
 | `stream_loopback` (provisional, issue #2) | `sim/tests/test_stream_loopback.cpp` | yes | length-1 frame (SOF==EOF), 1-8 length sweep | 4 randomized passes | reset re-run before every pass | 4 stall profiles, both sides | `a_master_stable`, `a_slave_stable` |
+| `fxp_pkg` + `fxp_sticky_flags` (issue #4) | `model/cpp/test/test_fxp_vectors.cpp` (C++ vs NumPy) and `sim/tests/test_fxp_rtl.cpp` (RTL vs NumPy vs C++) | 927 directed vectors | max pos/neg and one/two past, at 8 widths; all four rounding tie classes; ±1.0 wrap; round-then-saturate across the endpoints; every Q1.15 boundary multiply pair | 530 seeded vectors + 6 seeded accumulator walks | accumulator cleared at every sequence start; DUT reset before the first | n/a (no handshake) | property sweeps: shift-0 identity, saturation idempotence, measured rounding bias, accumulator non-overflow |
 
 One row per module, added by the issue that implements it. The `stream_loopback` row is
 retired when issue #5 replaces the module.
+
+The numerics row is run by `make numerics-check`, which `make sim-tiny` depends on, so
+every regression re-proves that the RTL package, the C++ reference model and the
+independent NumPy model agree bit-for-bit. Its own fault-injection table and triage
+procedure are in [NUMERICS.md](NUMERICS.md) §10.
 
 **Fault-injection validation.** A test that passes against a correct DUT proves nothing on
 its own. Six faults were injected into `stream_loopback.sv` and each was caught, which is

@@ -25,6 +25,15 @@ obj_dir/
 *.vcd
 sim/verilator/build*/
 
+# Standalone C++ reference-model build (make numerics-check).
+#
+# NOTE: model/vectors/*.vec is deliberately NOT ignored. Those files are
+# committed source-of-truth golden vectors — the point of a golden vector is
+# that a change to it appears as a reviewable diff — not build output. They are
+# regenerated and compared, not rebuilt, by `make numerics-check`. See
+# DECISIONS.md (issue #4).
+model/cpp/build/
+
 # Results are generated, never committed (dirs kept via .gitkeep).
 # Note: pattern must not exclude the subdirectories themselves, or git cannot
 # re-include the .gitkeep files beneath them.

@@ -10,8 +10,9 @@ Governing spec: [SPEC.md](../../SPEC.md) §12 (Verilator strategy), §13 (tests)
 ## Quick start
 
 ```bash
-make lint        # verilator --lint-only --Wall, zero unwaived warnings
-make sim-tiny    # fast build + randomized loopback test across SEEDS
+make lint            # verilator --lint-only --Wall, zero unwaived warnings
+make numerics-check  # SPEC §6/§12.4 fixed-point equivalence proof
+make sim-tiny        # numerics-check, then fast build + loopback test across SEEDS
 ```
 
 `make sim-tiny` defaults to `SEEDS='1 2 3'`. Override anything on the command
@@ -22,6 +23,38 @@ make sim-tiny SEEDS='1 3 7 11 17'   # wider seed sweep, one build
 make sim-tiny JOBS=8                # fewer parallel compile jobs
 make lint CONFIG=full_agmf039       # lint the largest elaboration
 ```
+
+## The second top: `fxp_probe_top` (numerics cross-check)
+
+Most of this directory is about `benchmark_sim_top`. There is one other top, and
+it exists for a single purpose: proving that `rtl/packages/fxp_pkg.sv` and
+`model/cpp/fxp/` compute identical results (SPEC §6, §12.4).
+
+```text
+sim/verilator/files_fxp.f          three files: fxp_pkg, fxp_sticky_flags, probe
+sim/verilator/tops/fxp_probe_top.sv  thin probe; nothing but calls into fxp_pkg
+sim/tests/test_fxp_rtl.cpp         drives model/vectors/ through it
+```
+
+It is built with the same script and the same modes, pointed at a different top
+and file list:
+
+```bash
+python3 scripts/build_verilator.py --mode fast --config tiny \
+    --top fxp_probe_top --files sim/verilator/files_fxp.f --test test_fxp_rtl
+./sim/verilator/build/fast_tiny_fxp_probe_top/Vfxp_probe_top_test_fxp_rtl \
+    +vectors=model/vectors
+```
+
+`--top` / `--files` are changed together, and a non-default top builds into
+`build/<mode>_<config>_<top>/` so the two never share objects. Keeping the
+numerics build independent of `benchmark_sim_top` means a failure in the
+numerics gate is always a numerics failure, never a knock-on from unrelated RTL.
+
+`make numerics-check` wraps that build plus two more steps — regenerating the
+committed vectors and comparing, and the standalone (Verilator-free) C++ unit
+test. It is a prerequisite of `make sim-tiny`, not a SPEC §16 entry point. See
+[NUMERICS.md](../../NUMERICS.md) §10 and `model/vectors/README.md`.
 
 ## The four build modes (SPEC §12.1)
 
@@ -57,6 +90,7 @@ Verilator-style plusargs, accepted by every simulation binary:
 | `+trace_file=<path>` | override the trace path |
 | `+coverage=<path>` | override the coverage output path — coverage build only |
 | `+quiet` | suppress per-pass progress lines |
+| `+vectors=<dir>` | golden-vector directory — `test_fxp_rtl` only (default `model/vectors`) |
 
 The resolved seed is printed on **every** run, pass or fail, together with the
 exact command line that replays it.
@@ -102,17 +136,22 @@ The file currently holds one waiver. Keep the count low enough to read.
 sim/verilator/
 ├── README.md            this file
 ├── files.f              RTL file list for every build mode
+├── files_fxp.f          three-file list for the numerics cross-check build
 ├── lint_waivers.vlt     checked-in warning waivers, each justified
 ├── sim_main.cpp         main(): argument parsing, seed banner, coverage dump
 ├── harness/             the C++ simulation harness (see harness.h)
 ├── tops/
-│   └── benchmark_sim_top.sv   SPEC 4.1 simulation top
+│   ├── benchmark_sim_top.sv   SPEC 4.1 simulation top
+│   └── fxp_probe_top.sv       SPEC 12.4 numerics probe (simulation only)
 ├── generated/           config_pkg.sv + config_sim.h (generated, gitignored)
-└── build/<mode>_<config>/     verilated objects and binaries (gitignored)
+└── build/<mode>_<config>[_<top>]/  verilated objects and binaries (gitignored)
 
 sim/tests/               one .cpp per test; each defines harness::sim_test_main
 sim/failures/            FST traces and failure artefacts (gitignored)
 results/simulation/      JSON run summaries, coverage data (gitignored)
+
+model/cpp/fxp/           bit-accurate C++ reference model, on every build's -I path
+model/vectors/           committed golden vectors (see model/vectors/README.md)
 ```
 
 ## Harness
