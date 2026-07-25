@@ -57,14 +57,14 @@ void StreamMonitor::on_sample() {
   // --- sequence continuity (SPEC 5: sequence permits loss/order checks) ---
   if (!st.have_seq) {
     st.have_seq = true;
-  } else if (b.sequence != st.next_seq) {
+  } else if (b.seq != st.next_seq) {
     errors_.error("sequence",
                   name_ + ": stream " + std::to_string(b.stream_id) +
                       " sequence discontinuity: expected " +
                       std::to_string(st.next_seq) + ", observed " +
-                      std::to_string(b.sequence));
+                      std::to_string(b.seq));
   }
-  st.next_seq = (b.sequence + 1u) & seq_mask_;
+  st.next_seq = (b.seq + 1u) & seq_mask_;
 
   if (observe_hook_) observe_hook_(b, cyc);
 }

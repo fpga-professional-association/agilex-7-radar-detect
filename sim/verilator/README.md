@@ -24,7 +24,33 @@ make sim-tiny JOBS=8                # fewer parallel compile jobs
 make lint CONFIG=full_agmf039       # lint the largest elaboration
 ```
 
-## The second top: `fxp_probe_top` (numerics cross-check)
+## The other tops
+
+`benchmark_sim_top` is the design (SPEC §4.1). Three further tops exist, each
+self-contained with its own file list, for one reason: a failure in a
+self-contained build is unambiguously a failure of the thing that build tests,
+never a knock-on from unrelated RTL. All four are built by the same script with
+`--top` / `--files` changed together, and a non-default top builds into
+`build/<mode>_<config>_<top>/` so they never share objects.
+
+| Top | File list | Test | Proves |
+|---|---|---|---|
+| `benchmark_sim_top` | `files.f` | `test_stream_loopback` | the SPEC §5 loopback, the harness, and the SPEC §5 packing against the RTL's `m_payload` |
+| `fxp_probe_top` | `files_fxp.f` | `test_fxp_rtl` | `fxp_pkg` == `model/cpp/fxp` == NumPy, bit for bit (SPEC §6, §12.4) |
+| `stream_prims_top` | `files_stream.f` | `test_stream_primitives` | the three stream primitives, per primitive: stalls, framing, occupancy, capacity, latency, throughput (SPEC §5, §13.1) |
+| `stream_violator_top` | `files_violator.f` | `test_stream_assertions` | that the SPEC §14 protocol assertions actually fire, by name, on injected violations — and stay silent on a correct stage |
+
+`make lint` lints all three of `benchmark_sim_top`, `stream_prims_top` and
+`stream_violator_top`; `make sim-tiny` builds and runs the three tests once per
+seed, after `make numerics-check` has run the fourth.
+
+`stream_violator_top` contains deliberately incorrect RTL. It is in
+`files_violator.f` and nowhere else, so it cannot reach the design build. Its
+test clears `Verilated::fatalOnError`, which is the only place in the repository
+where a failing assertion is not fatal: there, an assertion failure is the
+expected result and the binary exits 0 when every expected failure was observed.
+
+## `fxp_probe_top` in detail (numerics cross-check)
 
 Most of this directory is about `benchmark_sim_top`. There is one other top, and
 it exists for a single purpose: proving that `rtl/packages/fxp_pkg.sv` and
@@ -135,17 +161,23 @@ The file currently holds one waiver. Keep the count low enough to read.
 ```text
 sim/verilator/
 ├── README.md            this file
-├── files.f              RTL file list for every build mode
+├── files.f              RTL file list for the design build
 ├── files_fxp.f          three-file list for the numerics cross-check build
+├── files_stream.f       stream primitives + their unit-test top
+├── files_violator.f     the deliberately broken stage + its top (negative test)
 ├── lint_waivers.vlt     checked-in warning waivers, each justified
 ├── sim_main.cpp         main(): argument parsing, seed banner, coverage dump
 ├── harness/             the C++ simulation harness (see harness.h)
 ├── tops/
 │   ├── benchmark_sim_top.sv   SPEC 4.1 simulation top
-│   └── fxp_probe_top.sv       SPEC 12.4 numerics probe (simulation only)
+│   ├── fxp_probe_top.sv       SPEC 12.4 numerics probe (simulation only)
+│   ├── stream_prims_top.sv    SPEC 13.1 per-primitive unit-test top
+│   ├── stream_violator.sv     deliberately broken stage (negative test only)
+│   └── stream_violator_top.sv wrapper that binds the SPEC 14 checker onto it
 ├── generated/           config_pkg.sv + config_sim.h (generated, gitignored)
 └── build/<mode>_<config>[_<top>]/  verilated objects and binaries (gitignored)
 
+sim/assertions/          shared SPEC 14 property text and the checker module
 sim/tests/               one .cpp per test; each defines harness::sim_test_main
 sim/failures/            FST traces and failure artefacts (gitignored)
 results/simulation/      JSON run summaries, coverage data (gitignored)

@@ -54,7 +54,8 @@
 # ---------------------------------------------------------------------------
 # Status
 # ---------------------------------------------------------------------------
-# Implemented: `lint` and `sim-tiny` (issue #2, Verilator flow) and the
+# Implemented: `lint` and `sim-tiny` (issue #2, Verilator flow; extended by
+# issue #5 with the stream-primitive and negative-assertion tests) and the
 # quartus-* targets (issue #3).
 #
 # Everything else is still a scaffold stub from issue #1. Stubs fail loudly:
@@ -108,6 +109,31 @@ RESULTS_DIR  ?= results/simulation
 # has chosen the candidate order.
 BUILD_VERILATOR = $(PYTHON) scripts/build_verilator.py
 SIM_TINY_BIN    = sim/verilator/build/fast_tiny/Vbenchmark_sim_top_$(TEST)
+
+# --- stream primitives (issue #5, SPEC 5 / 13.1 / 14) ----------------------
+# Two further self-contained builds, each with its own top and file list, for
+# the same reason the numerics cross-check has one: a failure in either is then
+# unambiguously a failure of the thing it tests.
+#
+#   stream_prims_top     the three canonical stream primitives in four
+#                        configurations, exercised per primitive by
+#                        test_stream_primitives.
+#   stream_violator_top  a deliberately protocol-violating stage with the SPEC 14
+#                        checker bound onto it. test_stream_assertions requires
+#                        each expected assertion to fire, and the clean mode to
+#                        stay clean; the binary exits 0 when every expected
+#                        failure was observed, which is what makes the assertion
+#                        set provably load-bearing rather than decorative. Its
+#                        RTL is knowingly wrong and appears in no other file list.
+STREAM_TOP   := stream_prims_top
+STREAM_FILES := sim/verilator/files_stream.f
+STREAM_TEST  := test_stream_primitives
+STREAM_BIN    = sim/verilator/build/fast_tiny_$(STREAM_TOP)/V$(STREAM_TOP)_$(STREAM_TEST)
+
+VIOL_TOP     := stream_violator_top
+VIOL_FILES   := sim/verilator/files_violator.f
+VIOL_TEST    := test_stream_assertions
+VIOL_BIN      = sim/verilator/build/fast_tiny_$(VIOL_TOP)/V$(VIOL_TOP)_$(VIOL_TEST)
 
 # --- numerics cross-check (issue #4, SPEC 6 / 12.4) ------------------------
 # `numerics-check` is NOT a SPEC 16 entry point; it is a sub-target that
@@ -169,19 +195,46 @@ else
 define LINT_RECIPE
 	@printf '[lint] verilator --lint-only --Wall, config=%s, waivers=%s\n' \
 	    '$(CONFIG)' 'sim/verilator/lint_waivers.vlt'
+	@printf '[lint] 1/3 %s\n' 'benchmark_sim_top'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) --test $(TEST)
+	@printf '[lint] 2/3 %s\n' '$(STREAM_TOP)'
+	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
+	    --top $(STREAM_TOP) --files $(STREAM_FILES) --test $(STREAM_TEST)
+	@printf '[lint] 3/3 %s\n' '$(VIOL_TOP)'
+	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
+	    --top $(VIOL_TOP) --files $(VIOL_FILES) --test $(VIOL_TEST)
 endef
 
-# `sim-tiny`: SPEC 12.1 fast build, then the loopback test once per seed in
-# SEEDS. Each run prints its own seed and RESULT: line; a single failing seed
-# fails the target, and the remaining seeds still run so one invocation shows
-# whether a failure is seed-specific.
+# `sim-tiny`: SPEC 12.1 fast build of all three simulation tops, then every test
+# once per seed in SEEDS. Each run prints its own seed and RESULT: line; a single
+# failing seed fails the target, and the remaining seeds still run so one
+# invocation shows whether a failure is seed-specific.
+#
+# Test list (grows with the design; numerics-check runs first, as a prerequisite)
+#   test_stream_loopback     benchmark_sim_top — the SPEC 5 loopback, now built
+#                            from the canonical primitives, plus the beat-by-beat
+#                            packing cross-check against the RTL's m_payload.
+#   test_stream_primitives   stream_prims_top — per-primitive stall, framing,
+#                            occupancy, capacity, latency and throughput checks.
+#   test_stream_assertions   stream_violator_top — the negative test. Exits 0
+#                            when every expected assertion fired, so an
+#                            expected failure is a passing result for the suite.
 define SIM_TINY_RECIPE
 	$(BUILD_VERILATOR) --mode fast --config tiny --jobs $(JOBS) --test $(TEST)
+	$(BUILD_VERILATOR) --mode fast --config tiny --jobs $(JOBS) \
+	    --top $(STREAM_TOP) --files $(STREAM_FILES) --test $(STREAM_TEST)
+	$(BUILD_VERILATOR) --mode fast --config tiny --jobs $(JOBS) \
+	    --top $(VIOL_TOP) --files $(VIOL_FILES) --test $(VIOL_TEST)
 	@printf '[sim-tiny] seeds: %s\n' '$(SEEDS)'
+	@printf '[sim-tiny] tests: %s %s %s\n' '$(TEST)' '$(STREAM_TEST)' '$(VIOL_TEST)'
 	@rc=0; for s in $(SEEDS); do \
-	    printf '\n[sim-tiny] ===== seed %s =====\n' "$$s"; \
+	    printf '\n[sim-tiny] ===== seed %s : %s =====\n' "$$s" '$(TEST)'; \
 	    ./$(SIM_TINY_BIN) +seed=$$s +results=$(RESULTS_DIR) || rc=1; \
+	    printf '\n[sim-tiny] ===== seed %s : %s =====\n' "$$s" '$(STREAM_TEST)'; \
+	    ./$(STREAM_BIN) +seed=$$s +results=$(RESULTS_DIR) || rc=1; \
+	    printf '\n[sim-tiny] ===== seed %s : %s (expects assertions to fire) =====\n' \
+	        "$$s" '$(VIOL_TEST)'; \
+	    ./$(VIOL_BIN) +seed=$$s +results=$(RESULTS_DIR) || rc=1; \
 	  done; \
 	  if [ $$rc -ne 0 ]; then \
 	    printf '\n[sim-tiny] FAILED (seeds: %s)\n' '$(SEEDS)' 1>&2; exit 1; \

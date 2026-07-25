@@ -19,7 +19,7 @@ Each gate must pass from a clean checkout before the next phase begins.
 | Phase | Gate | Status | Owning issue |
 |---|---|---|---|
 | 0 Infrastructure | `make lint`, `make sim-tiny`, `make quartus-map` pass | `lint` and `sim-tiny` pass (#2); `quartus-map` TODO | #1, #2, #3 |
-| 1 Common infrastructure | unit tests, random stalls, CDC tests, assertions pass | TODO | #4–#8 |
+| 1 Common infrastructure | unit tests, random stalls, CDC tests, assertions pass | numerics (#4) and stream primitives + protocol assertions (#5) pass; CDC TODO | #4–#8 |
 | 2 DSP kernels | bit-accurate vs C++ model; directed, random, boundary coverage | TODO | #9–#14 |
 | 3 Medium pipeline | continuous frames, random backpressure, config changes, stress, coverage | TODO | #15–#17 |
 | 4 Packet/control fabric | no loss or duplication; random destination/stall; priority and fairness; counters | TODO | #18, #19 |
@@ -90,11 +90,18 @@ expected numerical values.
 
 | Module | Test | Directed | Boundary | Randomized | Reset | Stall | Assertions |
 |---|---|---|---|---|---|---|---|
-| `stream_loopback` (provisional, issue #2) | `sim/tests/test_stream_loopback.cpp` | yes | length-1 frame (SOF==EOF), 1-8 length sweep | 4 randomized passes | reset re-run before every pass | 4 stall profiles, both sides | `a_master_stable`, `a_slave_stable` |
+| `stream_loopback` (rebuilt on the primitives, issue #5) | `sim/tests/test_stream_loopback.cpp` | yes | length-1 frame (SOF==EOF), 1-8 length sweep | 4 randomized passes | reset re-run before every pass | 4 stall profiles, both sides | full checker set inside each primitive, plus `a_pack_roundtrip` and `a_elastic_occupancy` |
+| `stream_skid_buffer` (issue #5) | `sim/tests/test_stream_primitives.cpp`, dut0 | exact latency 1 and one beat per cycle | frame length 1..8; both storage slots full | 4 randomized stall passes | reset re-run before every pass | fast/slow producer x fast/slow consumer, plus bursty both | shared checker on the master interface |
+| `stream_elastic_buffer` DEPTH=2 (issue #5, the two-deep register slice) | `sim/tests/test_stream_primitives.cpp`, dut1 | exact latency 1 and one beat per cycle | both slots full; drain while filling | 4 randomized stall passes | reset re-run before every pass | as above | shared checker plus overflow, underflow, occupancy-shadow, occupancy-bound and pointer-consistency |
+| `stream_elastic_buffer` DEPTH=8 (issue #5) | `sim/tests/test_stream_primitives.cpp`, dut2 | exact latency 1 and one beat per cycle | occupancy swept 0..8 and held at 8 | 4 randomized stall passes | reset re-run before every pass | as above | as above |
+| `stream_pipe` STAGES=4 OUT_DEPTH=6 (issue #5) | `sim/tests/test_stream_primitives.cpp`, dut3 | exact latency 5 and one beat per cycle | credits exhausted and refilled | 4 randomized stall passes | reset re-run before every pass | as above | shared checker plus buffer-has-room, credits-bounded and credit-conservation |
+| stream protocol assertion set (issue #5) | `sim/tests/test_stream_assertions.cpp` | one clean mode, four violating modes | first stall, first frame boundary | n/a (deterministic injection) | reset before every mode | stalls forced to provoke modes 1 and 2 | the set under test; each mode names the assertion it must provoke |
 | `fxp_pkg` + `fxp_sticky_flags` (issue #4) | `model/cpp/test/test_fxp_vectors.cpp` (C++ vs NumPy) and `sim/tests/test_fxp_rtl.cpp` (RTL vs NumPy vs C++) | 927 directed vectors | max pos/neg and one/two past, at 8 widths; all four rounding tie classes; ±1.0 wrap; round-then-saturate across the endpoints; every Q1.15 boundary multiply pair | 530 seeded vectors + 6 seeded accumulator walks | accumulator cleared at every sequence start; DUT reset before the first | n/a (no handshake) | property sweeps: shift-0 identity, saturation idempotence, measured rounding bias, accumulator non-overflow |
 
-One row per module, added by the issue that implements it. The `stream_loopback` row is
-retired when issue #5 replaces the module.
+One row per module, added by the issue that implements it. `stream_loopback` was rebuilt
+on the canonical primitives by issue #5 and keeps its row: it is now the integration test
+for a skid -> elastic -> skid chain, and the place where the SPEC §5 packing is checked
+against the harness beat by beat.
 
 The numerics row is run by `make numerics-check`, which `make sim-tiny` depends on, so
 every regression re-proves that the RTL package, the C++ reference model and the
@@ -113,6 +120,19 @@ what establishes that the Phase 0 checks are load-bearing:
 | `ready` ignores skid occupancy (overflow) | `sequence` + `order` |
 | output register changes while stalled | `a_master_stable` assertion, SIGABRT |
 | unused parameter added to the RTL | `make lint` fails (waiver proven narrow) |
+
+Four more were injected into the issue #5 primitives, against the checks that issue adds,
+and each was caught (`make sim-tiny`, seed 1):
+
+| Injected fault | Detected as |
+|---|---|
+| `stream_elastic_buffer` registered ready ignores occupancy | `a_no_overflow` assertion, at `DEPTH=2` |
+| `stream_elastic_buffer` occupancy output under-reports by one | `occupancy` error: reported fill disagrees with the harness count of beats in flight |
+| `stream_pipe` credit gate always open | `capacity` error (7 beats in flight against a capacity of 6) and the `a_credits_bounded` assertion |
+| `stream_skid_buffer` drops the skidded beat instead of draining it | `sequence` and `order` errors from the scoreboard, and the `a_seq_continuous` assertion |
+
+The clean tree was rebuilt and re-run after each injection and passed, so the detections
+are attributable to the fault and not to the edit.
 
 Repeat this whenever a check is added or relaxed.
 
@@ -148,10 +168,93 @@ TODO — populated by issue #20.
 
 ## 5. Assertions (SPEC §14)
 
-Protocol, CDC, and structural assertions, and where each is enabled.
+Protocol, CDC, and structural assertions, and where each is enabled. Assertion sources
+live in `sim/assertions/`. CDC assertions are issue #6; packet-fabric assertions are
+issue #18.
 
-TODO — populated by issue #5 (stream protocol), issue #6 (CDC), issue #18 (packet
-fabric); assertion sources live in `sim/assertions/`.
+### 5.1 Stream protocol assertion set (issue #5)
+
+One definition of the property text, in `sim/assertions/stream_sva.svh`, wrapped as a
+module in `sim/assertions/stream_protocol_checker.sv`. Both ways of attaching it are in
+use:
+
+* **by instantiation** — every primitive in `rtl/stream/` instantiates a checker on its
+  master interface inside `` `ifndef SYNTHESIS ``. Any design built from the primitives is
+  therefore checked at every stage boundary with no test-side wiring, in the SPEC §12.1
+  fast build (SPEC §14: "Assertions must remain active in fast simulation").
+* **by `bind`** — `sim/verilator/tops/stream_violator_top.sv` binds a checker onto a
+  module that carries no assertions of its own. This is the mechanism for observing a
+  stage whose source should not be edited.
+
+| Property | Kind | Checks |
+|---|---|---|
+| `a_valid_held` | concurrent | `valid` is never withdrawn without a transfer |
+| `a_payload_stable` | concurrent | the whole payload is bit-stable while `valid && !ready` |
+| `a_reset_clears_valid` | concurrent | validity is low in the cycle after reset asserts |
+| `a_no_x_when_valid` | concurrent | no X on the payload while `valid` (see the note below) |
+| `a_sof_opens_frame` | immediate | a beat outside a frame carries `start_of_frame` |
+| `a_sof_not_in_frame` | immediate | a beat inside a frame does not carry `start_of_frame` |
+| `a_seq_continuous` | immediate | `seq` increments by one per beat within a `stream_id` |
+| `c_stall_then_transfer` | cover | a stall that ends in a transfer was reached |
+| `c_back_to_back` | cover | two transfers in consecutive cycles were reached |
+
+Framing and sequence state is per `stream_id` and is cleared by reset — control state, not
+payload (SPEC §23). The geometry-aware half runs only where the checker is given the four
+field widths; a primitive parameterised on payload width alone gets the payload-agnostic
+half, which is the correct contract for it.
+
+Primitive-local assertions, in addition to the shared set:
+
+| Assertion | Module | Checks |
+|---|---|---|
+| `a_no_overflow` | `stream_elastic_buffer` | no write while full (SPEC §14 FIFO overflow) |
+| `a_no_underflow` | `stream_elastic_buffer` | reads never exceed writes (SPEC §14 FIFO underflow) |
+| `a_occupancy_shadow` | `stream_elastic_buffer` | the occupancy counter equals an independent writes-minus-reads model |
+| `a_occupancy_bound` | `stream_elastic_buffer` | occupancy never exceeds `DEPTH` |
+| `a_ptr_consistent` | `stream_elastic_buffer` | the pointers agree with the occupancy (SPEC §14 illegal simultaneous read/write states) |
+| `a_buffer_has_room` | `stream_pipe` | the free-running delay line never presents a beat to a full buffer |
+| `a_credits_bounded` | `stream_pipe` | the credit counter never exceeds `OUT_DEPTH` |
+| `a_credit_conservation` | `stream_pipe` | credits plus occupancy never exceed `OUT_DEPTH` |
+| `a_pack_roundtrip` | `stream_loopback` | `stream_pack`/`stream_unpack` is the identity on every accepted beat |
+| `a_elastic_occupancy` | `stream_loopback` | the internal buffer never exceeds its depth |
+
+`stream_elastic_buffer`'s occupancy assertions are written against a second, deliberately
+naive model (two free-running counters) rather than against the counter that drives
+`m_valid` and `s_ready`. An assertion written against the signal it is checking is a
+tautology; this one disagrees when the counter is wrong.
+
+**What Verilator 5.020 actually enforces.** Measured, not assumed; the table and the
+method are in DECISIONS.md 2026-07-26, decision 3. In short: concurrent `assert property`
+with `|=>`, `|->`, `$stable`, `$past` and `disable iff` works; immediate assertions in
+`always_ff` with an `else $error(...)` action work; `bind` works, concurrent properties
+included; `cover property` compiles and is counted only in a `--coverage` build; `##`
+cycle-delay sequences are **not supported**, so every property here is written with
+implication and `$past`; and `$isunknown` compiles but the tool is two-state, so
+`a_no_x_when_valid` is structurally dead under Verilator and exists for four-state
+simulators.
+
+### 5.2 Proof that the assertions fire (issue #5)
+
+`sim/tests/test_stream_assertions.cpp` drives `stream_violator_top` — a deliberately
+broken stage with the checker bound onto it — once per violation mode, and requires the
+*named* property to fire; a checker that fired some other assertion would otherwise look
+like a pass. The stimulus source is the ordinary harness `StreamDriver`, which is
+protocol-correct by construction, so any assertion that fires is the DUT's fault.
+
+| Mode | Injected violation | Required assertion |
+|---|---|---|
+| 0 | none — a correct one-deep stage | *none may fire*, over a 400-cycle run with stalls |
+| 1 | payload mutated while stalled | `a_payload_stable` |
+| 2 | offered beat retracted without a transfer | `a_valid_held` |
+| 3 | one sequence field corrupted in flight | `a_seq_continuous` |
+| 4 | `start_of_frame` stripped from a frame-opening beat | `a_sof_opens_frame` |
+
+Expected-failure handling: a failing Verilator assertion calls `vl_stop`, which aborts the
+process by default. That behaviour is kept everywhere else; this test alone calls
+`Verilated::fatalOnError(false)`, so the failure becomes an observable event that the test
+reports as an expected failure and the binary exits 0. The run is failed by a violating
+mode in which nothing fired, by the wrong property firing, or by the clean mode asserting.
+This test runs in `make sim-tiny` on every seed.
 
 ## 6. Coverage strategy
 
@@ -191,8 +294,8 @@ error messages — the failure-minimisation metadata SPEC §12.2 asks for.
 
 | Target | Status |
 |---|---|
-| `make lint` | implemented (issue #2) — `--lint-only --Wall`, zero unwaived warnings |
-| `make sim-tiny` | implemented (issue #2) — fast build, loopback test once per seed in `SEEDS` (default `1 2 3`) |
+| `make lint` | implemented (issue #2, extended by issue #5) — `--lint-only --Wall` on `benchmark_sim_top`, `stream_prims_top` and `stream_violator_top`; zero unwaived warnings |
+| `make sim-tiny` | implemented (issue #2, extended by issue #5) — `numerics-check`, then the fast build of three tops, then `test_stream_loopback`, `test_stream_primitives` and `test_stream_assertions` once per seed in `SEEDS` (default `1 2 3`) |
 | `make sim-medium` | TODO(issue #17) |
 | `make sim-random` | TODO(issue #17) |
 | `make sim-stress` | TODO(issue #17) |

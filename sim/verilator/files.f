@@ -13,6 +13,9 @@
 // simulated, and not covered.
 // -----------------------------------------------------------------------------
 
+// ---- include path for the shared assertion macros ----------------------
++incdir+sim/assertions
+
 // ---- generated configuration package -----------------------------------
 // Written by scripts/build_verilator.py from config/<name>.json before every
 // build. Not committed (see .gitignore).
@@ -24,9 +27,25 @@ sim/verilator/generated/config_pkg.sv
 // covers it on every run and so every module below can import it.
 rtl/packages/fxp_pkg.sv
 
+// SPEC 5: one shared stream package, the single source of the bundle's field
+// set, field order and packed layout. Everything under rtl/stream/ resolves
+// field positions through it, as does the generated configuration mirror.
+rtl/packages/stream_pkg.sv
+
+// ---- protocol assertions (SPEC 14) -------------------------------------
+// Simulation-only. Instantiated inside every stream primitive under
+// `ifndef SYNTHESIS`, so the protocol is checked everywhere the primitives are
+// used, in the fast build, with no test-side wiring. Must precede the RTL that
+// instantiates it.
+sim/assertions/stream_protocol_checker.sv
+
+// ---- stream primitives (SPEC 5) ----------------------------------------
+rtl/stream/stream_skid_buffer.sv
+rtl/stream/stream_elastic_buffer.sv
+rtl/stream/stream_pipe.sv
+
 // ---- common RTL --------------------------------------------------------
-// PROVISIONAL loopback DUT for the Phase 0 harness; replaced by the real
-// stream interface and elastic buffers in issue #5.
+// SPEC 19 Phase 0 loopback DUT, rebuilt on the canonical primitives by issue #5.
 rtl/common/stream_loopback.sv
 
 // The sanctioned saturation-flag collector (SPEC 6 "overflow flags"). Not yet
