@@ -1,0 +1,318 @@
+// -----------------------------------------------------------------------------
+// control_top — register/control-plane unit-test top (SPEC 13.1, issue #7).
+//
+// Everything under rtl/control/ in one place, on one clock (cfg_clk, 100 MHz per
+// SPEC 8), with the SPEC 9 master port brought straight to the boundary so the
+// C++ register driver in sim/verilator/harness/reg_driver.h can talk to it.
+//
+//   u_fabric        the real fabric: five implemented blocks at the windows
+//                   control/regmap.json declares.
+//   u_fabric_stuck  a second, one-block fabric whose block never answers, so the
+//                   watchdog escape is exercised as a path rather than asserted
+//                   as a property of unreached code. Wholly independent of the
+//                   first: separate ports, separate state, no shared signal but
+//                   the clock and the reset.
+//
+// Observation outputs. The block storage (`obs_*_csr`) and the pulse vectors are
+// exported so a test can see the register file WITHOUT going through the read
+// mux. That is not a convenience: when a readback is wrong, it separates "the
+// write did not land" from "the read path is broken", which is otherwise a
+// guess. obs_build_storage_zero and obs_static_pulse_any are the two properties
+// that hold for every register in a block with no writable or pulse bits, and
+// the test checks them every cycle.
+//
+// Single clock domain, on purpose. The register plane is cfg_clk end to end; the
+// crossings into core_clk, packet_clk and telemetry_clk belong to the issue #6
+// primitives and to the blocks that consume enables and counters. This top is
+// the clean seam: everything in it is synchronous to one clock, so a failure
+// here is never a CDC question.
+//
+// Simulation only. Never synthesized, never in a Quartus source list.
+// -----------------------------------------------------------------------------
+
+`default_nettype none
+
+module control_top
+  import reg_if_pkg::*;
+  import regmap_pkg::*;
+(
+    input  wire                                 clk,
+    input  wire                                 rst_n,
+
+    // ---- SPEC 9 master port ----
+    input  wire [REG_ADDR_W-1:0]                address,
+    input  wire [REG_DATA_W-1:0]                write_data,
+    input  wire [REG_STRB_W-1:0]                byte_enable,
+    input  wire                                 write_enable,
+    input  wire                                 read_enable,
+    output wire [REG_DATA_W-1:0]                read_data,
+    output wire                                 ready,
+    output wire                                 error,
+
+    // ---- register-file observation ----
+    output wire [REGMAP_ID_N_REGS*32-1:0]       obs_id_csr,
+    output wire [REGMAP_CTRL_N_REGS*32-1:0]     obs_ctrl_csr,
+    output wire [REGMAP_CTRL_N_REGS*32-1:0]     obs_ctrl_pulse,
+    output wire [REGMAP_FAULT_N_REGS*32-1:0]    obs_fault_csr,
+    output wire [REGMAP_FAULT_N_REGS*32-1:0]    obs_fault_pulse,
+    output wire [REGMAP_SCRATCH_N_REGS*32-1:0]  obs_scratch_csr,
+
+    // ---- control outputs the blocks drive ----
+    output wire [31:0]                          obs_block_enable,
+    output wire [31:0]                          obs_block_reset_pulse,
+    output wire [31:0]                          obs_fault_inject,
+    output wire [31:0]                          obs_param_checksum,
+    output wire                                 obs_global_enable,
+    output wire                                 obs_flush_pulse,
+    output wire                                 obs_soft_reset_pulse,
+
+    // Invariants of the blocks that have no writable or pulse bits. Both must
+    // hold in every cycle of every test.
+    output wire                                 obs_build_storage_zero,
+    output wire                                 obs_static_pulse_any,
+
+    // ---- second fabric: the never-answering block ----
+    input  wire [REG_ADDR_W-1:0]                stuck_address,
+    input  wire [REG_DATA_W-1:0]                stuck_write_data,
+    input  wire [REG_STRB_W-1:0]                stuck_byte_enable,
+    input  wire                                 stuck_write_enable,
+    input  wire                                 stuck_read_enable,
+    output wire [REG_DATA_W-1:0]                stuck_read_data,
+    output wire                                 stuck_ready,
+    output wire                                 stuck_error,
+    output wire [31:0]                          stuck_swallowed
+);
+
+  localparam int unsigned NB    = REGMAP_N_BLOCKS_IMPL;
+  localparam int unsigned IDX_W = REGMAP_WINDOW_W - 2;
+
+  // ---------------------------------------------------------------------------
+  // Fabric <-> block wiring
+  // ---------------------------------------------------------------------------
+  wire [NB-1:0]              blk_sel;
+  wire                       blk_write_enable;
+  wire                       blk_read_enable;
+  wire [IDX_W-1:0]           blk_index;
+  wire [REG_DATA_W-1:0]      blk_write_data;
+  wire [REG_STRB_W-1:0]      blk_byte_enable;
+  wire [NB*REG_DATA_W-1:0]   blk_read_data;
+  wire [NB-1:0]              blk_ready;
+  wire [NB-1:0]              blk_error;
+
+  reg_fabric #(
+      .N_BLOCKS   (NB),
+      .WINDOW_W   (REGMAP_WINDOW_W),
+      .BLOCK_BASE (REGMAP_IMPL_BASE)
+  ) u_fabric (
+      .clk              (clk),
+      .rst_n            (rst_n),
+      .address          (address),
+      .write_data       (write_data),
+      .byte_enable      (byte_enable),
+      .write_enable     (write_enable),
+      .read_enable      (read_enable),
+      .read_data        (read_data),
+      .ready            (ready),
+      .error            (error),
+      .blk_sel          (blk_sel),
+      .blk_write_enable (blk_write_enable),
+      .blk_read_enable  (blk_read_enable),
+      .blk_index        (blk_index),
+      .blk_write_data   (blk_write_data),
+      .blk_byte_enable  (blk_byte_enable),
+      .blk_read_data    (blk_read_data),
+      .blk_ready        (blk_ready),
+      .blk_error        (blk_error)
+  );
+
+  // ---------------------------------------------------------------------------
+  // Blocks. Every port index comes from the generated map, never from a literal.
+  // ---------------------------------------------------------------------------
+  wire [REGMAP_ID_N_REGS*32-1:0]           id_pulse;
+  wire [REGMAP_BUILD_PARAMS_N_REGS*32-1:0] build_csr;
+  wire [REGMAP_BUILD_PARAMS_N_REGS*32-1:0] build_pulse;
+  wire [REGMAP_SCRATCH_N_REGS*32-1:0]      scratch_pulse;
+
+  reg_block_id #(
+      .IDX_W (IDX_W)
+  ) u_id (
+      .clk          (clk),
+      .rst_n        (rst_n),
+      .sel          (blk_sel[REGMAP_ID_INDEX]),
+      .write_enable (blk_write_enable),
+      .read_enable  (blk_read_enable),
+      .index        (blk_index),
+      .write_data   (blk_write_data),
+      .byte_enable  (blk_byte_enable),
+      .read_data    (blk_read_data[REGMAP_ID_INDEX*REG_DATA_W +: REG_DATA_W]),
+      .ready        (blk_ready[REGMAP_ID_INDEX]),
+      .error        (blk_error[REGMAP_ID_INDEX]),
+      .csr          (obs_id_csr),
+      .pulse        (id_pulse)
+  );
+
+  reg_block_build_params #(
+      .IDX_W (IDX_W)
+  ) u_build (
+      .clk            (clk),
+      .rst_n          (rst_n),
+      .sel            (blk_sel[REGMAP_BUILD_PARAMS_INDEX]),
+      .write_enable   (blk_write_enable),
+      .read_enable    (blk_read_enable),
+      .index          (blk_index),
+      .write_data     (blk_write_data),
+      .byte_enable    (blk_byte_enable),
+      .read_data      (blk_read_data[REGMAP_BUILD_PARAMS_INDEX*REG_DATA_W +: REG_DATA_W]),
+      .ready          (blk_ready[REGMAP_BUILD_PARAMS_INDEX]),
+      .error          (blk_error[REGMAP_BUILD_PARAMS_INDEX]),
+      .csr            (build_csr),
+      .pulse          (build_pulse),
+      .param_checksum (obs_param_checksum)
+  );
+
+  reg_block_ctrl #(
+      .IDX_W (IDX_W)
+  ) u_ctrl (
+      .clk               (clk),
+      .rst_n             (rst_n),
+      .sel               (blk_sel[REGMAP_CTRL_INDEX]),
+      .write_enable      (blk_write_enable),
+      .read_enable       (blk_read_enable),
+      .index             (blk_index),
+      .write_data        (blk_write_data),
+      .byte_enable       (blk_byte_enable),
+      .read_data         (blk_read_data[REGMAP_CTRL_INDEX*REG_DATA_W +: REG_DATA_W]),
+      .ready             (blk_ready[REGMAP_CTRL_INDEX]),
+      .error             (blk_error[REGMAP_CTRL_INDEX]),
+      .csr               (obs_ctrl_csr),
+      .pulse             (obs_ctrl_pulse),
+      .block_enable      (obs_block_enable),
+      .block_reset_pulse (obs_block_reset_pulse),
+      .global_enable     (obs_global_enable),
+      .flush_pulse       (obs_flush_pulse),
+      .soft_reset_pulse  (obs_soft_reset_pulse)
+  );
+
+  reg_block_fault #(
+      .IDX_W (IDX_W)
+  ) u_fault (
+      .clk          (clk),
+      .rst_n        (rst_n),
+      .sel          (blk_sel[REGMAP_FAULT_INDEX]),
+      .write_enable (blk_write_enable),
+      .read_enable  (blk_read_enable),
+      .index        (blk_index),
+      .write_data   (blk_write_data),
+      .byte_enable  (blk_byte_enable),
+      .read_data    (blk_read_data[REGMAP_FAULT_INDEX*REG_DATA_W +: REG_DATA_W]),
+      .ready        (blk_ready[REGMAP_FAULT_INDEX]),
+      .error        (blk_error[REGMAP_FAULT_INDEX]),
+      .csr          (obs_fault_csr),
+      .pulse        (obs_fault_pulse),
+      .fault_inject (obs_fault_inject)
+  );
+
+  reg_block_scratch #(
+      .IDX_W (IDX_W)
+  ) u_scratch (
+      .clk          (clk),
+      .rst_n        (rst_n),
+      .sel          (blk_sel[REGMAP_SCRATCH_INDEX]),
+      .write_enable (blk_write_enable),
+      .read_enable  (blk_read_enable),
+      .index        (blk_index),
+      .write_data   (blk_write_data),
+      .byte_enable  (blk_byte_enable),
+      .read_data    (blk_read_data[REGMAP_SCRATCH_INDEX*REG_DATA_W +: REG_DATA_W]),
+      .ready        (blk_ready[REGMAP_SCRATCH_INDEX]),
+      .error        (blk_error[REGMAP_SCRATCH_INDEX]),
+      .csr          (obs_scratch_csr),
+      .pulse        (scratch_pulse)
+  );
+
+  // Invariants of the blocks with no writable and no pulse bits.
+  assign obs_build_storage_zero = ~(|build_csr);
+  assign obs_static_pulse_any   = |{id_pulse, build_pulse, scratch_pulse};
+
+  // ---------------------------------------------------------------------------
+  // Second fabric: one block, which never answers.
+  // ---------------------------------------------------------------------------
+  wire [0:0]            stuck_sel;
+  wire                  stuck_blk_we;
+  wire                  stuck_blk_re;
+  wire [IDX_W-1:0]      stuck_blk_index;
+  wire [REG_DATA_W-1:0] stuck_blk_wdata;
+  wire [REG_STRB_W-1:0] stuck_blk_be;
+  wire [REG_DATA_W-1:0] stuck_blk_rdata;
+  wire                  stuck_blk_ready;
+  wire                  stuck_blk_error;
+
+  reg_fabric #(
+      .N_BLOCKS   (1),
+      .WINDOW_W   (REGMAP_WINDOW_W),
+      .BLOCK_BASE (REG_ADDR_W'(0))
+  ) u_fabric_stuck (
+      .clk              (clk),
+      .rst_n            (rst_n),
+      .address          (stuck_address),
+      .write_data       (stuck_write_data),
+      .byte_enable      (stuck_byte_enable),
+      .write_enable     (stuck_write_enable),
+      .read_enable      (stuck_read_enable),
+      .read_data        (stuck_read_data),
+      .ready            (stuck_ready),
+      .error            (stuck_error),
+      .blk_sel          (stuck_sel),
+      .blk_write_enable (stuck_blk_we),
+      .blk_read_enable  (stuck_blk_re),
+      .blk_index        (stuck_blk_index),
+      .blk_write_data   (stuck_blk_wdata),
+      .blk_byte_enable  (stuck_blk_be),
+      .blk_read_data    (stuck_blk_rdata),
+      .blk_ready        (stuck_blk_ready),
+      .blk_error        (stuck_blk_error)
+  );
+
+  reg_block_dead #(
+      .IDX_W (IDX_W)
+  ) u_dead (
+      .clk          (clk),
+      .rst_n        (rst_n),
+      .sel          (stuck_sel[0]),
+      .write_enable (stuck_blk_we),
+      .read_enable  (stuck_blk_re),
+      .index        (stuck_blk_index),
+      .write_data   (stuck_blk_wdata),
+      .byte_enable  (stuck_blk_be),
+      .read_data    (stuck_blk_rdata),
+      .ready        (stuck_blk_ready),
+      .error        (stuck_blk_error),
+      .swallowed    (stuck_swallowed)
+  );
+
+  // ---------------------------------------------------------------------------
+  // Elaboration-time agreement between the protocol definition and the map.
+  // The same device benchmark_sim_top uses for the stream layout: a mismatch
+  // between two independently maintained definitions must fail loudly at time 0
+  // rather than as a mysterious decode failure at cycle 40000.
+  // ---------------------------------------------------------------------------
+`ifndef SYNTHESIS
+  initial begin
+    if (REGMAP_ADDR_W != REG_ADDR_W) begin
+      $fatal(1, "control_top: regmap address width %0d != reg_if_pkg REG_ADDR_W %0d",
+             REGMAP_ADDR_W, REG_ADDR_W);
+    end
+    if (REGMAP_DATA_W != REG_DATA_W) begin
+      $fatal(1, "control_top: regmap data width %0d != reg_if_pkg REG_DATA_W %0d",
+             REGMAP_DATA_W, REG_DATA_W);
+    end
+    if (REGMAP_STRB_W != REG_STRB_W) begin
+      $fatal(1, "control_top: regmap strobe width %0d != reg_if_pkg REG_STRB_W %0d",
+             REGMAP_STRB_W, REG_STRB_W);
+    end
+  end
+`endif
+
+endmodule : control_top
+
+`default_nettype wire

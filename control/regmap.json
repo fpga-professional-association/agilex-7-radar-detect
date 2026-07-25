@@ -1,0 +1,318 @@
+{
+  "schema_version": 1,
+  "name": "agilex7_wideband_control_plane",
+  "spec_reference": "SPEC.md 9 (Register and Control Plane)",
+  "owning_issue": "#7",
+  "description": [
+    "SINGLE SOURCE OF TRUTH for the register/control plane. Hand edited; nothing",
+    "generates this file. scripts/gen_regmap.py reads it and emits the SystemVerilog",
+    "package, the C++ harness header, the human table and the machine-readable map.",
+    "Editing any generated artefact by hand is a defect: `make regmap-check` (also run",
+    "by `make lint` and `make sim-tiny`) regenerates and fails on any difference.",
+    "",
+    "JSON, not YAML: the repository ships no YAML parser and requirements.txt carries",
+    "only numpy, so a YAML source of truth would add a dependency to a clean checkout",
+    "for no expressive gain. JSON has no comments, so every rationale that would have",
+    "been a comment is a `description` field instead - which is strictly better, because",
+    "descriptions flow into docs/regmap.md and into the generated SystemVerilog header",
+    "comments rather than dying in the source file."
+  ],
+  "notes": [
+    "Address space: byte addressed, 16 bits, one 4 KiB window per block.",
+    "Registers are 32 bits and word aligned; address[1:0] != 0 is an error response.",
+    "Within a block, register offsets must be dense from 0 (offset == index * 4). The",
+    "generator enforces this: the RTL decode is an index compare, not a CAM.",
+    "A read or write to an address inside a block window but beyond that block's last",
+    "register returns error=1, as does any address outside every implemented window.",
+    "",
+    "Field access types:",
+    "  RO   constant read-only. The field's `reset` IS its value; writes are refused.",
+    "  ROHW read-only, driven by hardware (status, build parameters, counters).",
+    "  RW   read-write storage.",
+    "  W1C  sticky bit, set by hardware, cleared by writing 1. Writing 0 does nothing.",
+    "  RWP  RW-pulse: a written 1 emits a one-cycle pulse and the bit reads back 0.",
+    "A register whose fields are all RO or ROHW is not writable at all: a write to it",
+    "completes with error=1 and no side effect. A register with a mix of writable and",
+    "non-writable fields accepts the write and silently ignores the non-writable bits.",
+    "",
+    "Computed reset tokens (resolved by scripts/gen_regmap.py, never by hand):",
+    "  $N_BLOCKS      number of declared blocks, implemented and planned",
+    "  $N_REGS_TOTAL  number of implemented registers across all blocks",
+    "  $BLOCK_MASK    bit i set when declared block i is implemented",
+    "  $DATA_W        register data width in bits",
+    "  $ADDR_W        register address width in bits",
+    "  $VERSION_MAJOR, $VERSION_MINOR, $VERSION_PATCH  from regmap_version below"
+  ],
+  "regmap_version": {
+    "major": 1,
+    "minor": 0,
+    "patch": 0,
+    "description": "Bump on any change to this file. major: incompatible layout change; minor: registers or fields added; patch: documentation only."
+  },
+  "data_width": 32,
+  "address_width": 16,
+  "block_window_bytes": 4096,
+  "blocks": [
+    {
+      "name": "id",
+      "base": "0x0000",
+      "size": "0x1000",
+      "implemented": true,
+      "spec_groups": ["Global identification"],
+      "description": "Fixed identification of the control plane itself. Every field is a constant folded in at elaboration, so a live design can be identified without any prior knowledge of what was built.",
+      "registers": [
+        {
+          "name": "MAGIC",
+          "offset": "0x000",
+          "description": "Constant marker. Reading 0x52414441 ('RADA') at block base proves a control plane is present and the address decode is alive.",
+          "fields": [
+            {"name": "MAGIC", "lsb": 0, "width": 32, "access": "RO", "reset": "0x52414441", "description": "ASCII 'RADA'."}
+          ]
+        },
+        {
+          "name": "VERSION",
+          "offset": "0x004",
+          "description": "Register-map version, from regmap_version in the source of truth. Static build data, deliberately not a git describe: the same source tree must produce the same register contents on any machine, and a VCS-derived value would make the generated artefacts depend on checkout state.",
+          "fields": [
+            {"name": "MAJOR", "lsb": 24, "width": 8, "access": "RO", "reset": "$VERSION_MAJOR", "description": "Incompatible layout change."},
+            {"name": "MINOR", "lsb": 16, "width": 8, "access": "RO", "reset": "$VERSION_MINOR", "description": "Registers or fields added."},
+            {"name": "PATCH", "lsb": 8, "width": 8, "access": "RO", "reset": "$VERSION_PATCH", "description": "Documentation-only change."},
+            {"name": "SCHEMA", "lsb": 0, "width": 8, "access": "RO", "reset": "0x01", "description": "Source-of-truth schema version."}
+          ]
+        },
+        {
+          "name": "GEOMETRY",
+          "offset": "0x008",
+          "description": "Shape of the register plane, so a discovery walk needs no compiled-in constants.",
+          "fields": [
+            {"name": "N_BLOCKS", "lsb": 0, "width": 8, "access": "RO", "reset": "$N_BLOCKS", "description": "Declared blocks, implemented and planned."},
+            {"name": "N_REGS", "lsb": 8, "width": 8, "access": "RO", "reset": "$N_REGS_TOTAL", "description": "Implemented registers across all blocks."},
+            {"name": "DATA_W", "lsb": 16, "width": 8, "access": "RO", "reset": "$DATA_W", "description": "Register data width in bits."},
+            {"name": "ADDR_W", "lsb": 24, "width": 8, "access": "RO", "reset": "$ADDR_W", "description": "Register address width in bits."}
+          ]
+        },
+        {
+          "name": "CAPABILITY",
+          "offset": "0x00C",
+          "description": "One bit per declared block, set when that block is implemented in this build. Bit i is block i in declaration order; a planned block reads 0 and its window returns error.",
+          "fields": [
+            {"name": "BLOCK_MASK", "lsb": 0, "width": 32, "access": "RO", "reset": "$BLOCK_MASK", "description": "Implemented-block bitmap."}
+          ]
+        }
+      ]
+    },
+    {
+      "name": "build_params",
+      "base": "0x1000",
+      "size": "0x1000",
+      "implemented": true,
+      "spec_groups": ["Build parameters"],
+      "description": "Read-only mirror of the elaboration parameters. Every value is driven from config_pkg, which scripts/build_verilator.py generates from config/<name>.json (SPEC 11), so this block reports what was actually elaborated rather than what a header claims.",
+      "registers": [
+        {"name": "N_ANTENNAS",        "offset": "0x000", "description": "SPEC 11 sized parameter.",     "fields": [{"name": "VALUE", "lsb": 0, "width": 32, "access": "ROHW", "source": "config_pkg::N_ANTENNAS",        "description": "Antenna count."}]},
+        {"name": "SAMPLES_PER_CYCLE", "offset": "0x004", "description": "SPEC 11 sized parameter.",     "fields": [{"name": "VALUE", "lsb": 0, "width": 32, "access": "ROHW", "source": "config_pkg::SAMPLES_PER_CYCLE", "description": "Samples presented per core clock."}]},
+        {"name": "FFT_SIZE",          "offset": "0x008", "description": "SPEC 11 sized parameter.",     "fields": [{"name": "VALUE", "lsb": 0, "width": 32, "access": "ROHW", "source": "config_pkg::FFT_SIZE",          "description": "FFT points."}]},
+        {"name": "PFB_TAPS",          "offset": "0x00C", "description": "SPEC 11 sized parameter.",     "fields": [{"name": "VALUE", "lsb": 0, "width": 32, "access": "ROHW", "source": "config_pkg::PFB_TAPS",          "description": "Polyphase taps per branch."}]},
+        {"name": "N_BEAMS",           "offset": "0x010", "description": "SPEC 11 sized parameter.",     "fields": [{"name": "VALUE", "lsb": 0, "width": 32, "access": "ROHW", "source": "config_pkg::N_BEAMS",           "description": "Formed beams."}]},
+        {"name": "HISTORY_FRAMES",    "offset": "0x014", "description": "SPEC 11 sized parameter.",     "fields": [{"name": "VALUE", "lsb": 0, "width": 32, "access": "ROHW", "source": "config_pkg::HISTORY_FRAMES",    "description": "Frames of history retained."}]},
+        {"name": "PACKET_W",          "offset": "0x018", "description": "SPEC 11 sized parameter.",     "fields": [{"name": "VALUE", "lsb": 0, "width": 32, "access": "ROHW", "source": "config_pkg::PACKET_W",          "description": "Packet datapath width."}]},
+        {"name": "SAMPLE_W",          "offset": "0x01C", "description": "SPEC 3 invariant parameter.",  "fields": [{"name": "VALUE", "lsb": 0, "width": 32, "access": "ROHW", "source": "config_pkg::SAMPLE_W",          "description": "Sample component width."}]},
+        {"name": "COEFF_W",           "offset": "0x020", "description": "SPEC 3 invariant parameter.",  "fields": [{"name": "VALUE", "lsb": 0, "width": 32, "access": "ROHW", "source": "config_pkg::COEFF_W",           "description": "Coefficient width."}]},
+        {"name": "POWER_W",           "offset": "0x024", "description": "SPEC 3 invariant parameter.",  "fields": [{"name": "VALUE", "lsb": 0, "width": 32, "access": "ROHW", "source": "config_pkg::POWER_W",           "description": "Power/magnitude accumulator width."}]},
+        {"name": "N_VIRTUAL_CHANS",   "offset": "0x028", "description": "SPEC 3 invariant parameter.",  "fields": [{"name": "VALUE", "lsb": 0, "width": 32, "access": "ROHW", "source": "config_pkg::N_VIRTUAL_CHANS",   "description": "Packet virtual channels."}]},
+        {
+          "name": "PARAM_CHECKSUM",
+          "offset": "0x02C",
+          "description": "FNV-1a 32 over the eleven parameter words above, in offset order, little-endian bytes. Computed in RTL from config_pkg and independently in the C++ harness from config_sim.h: a mismatch means the RTL and the harness were elaborated from different configurations, which is otherwise a silent and very expensive failure.",
+          "fields": [{"name": "VALUE", "lsb": 0, "width": 32, "access": "ROHW", "source": "computed", "description": "FNV-1a 32 of the build parameters."}]
+        }
+      ]
+    },
+    {
+      "name": "ctrl",
+      "base": "0x2000",
+      "size": "0x1000",
+      "implemented": true,
+      "spec_groups": ["Per-block enable and reset"],
+      "description": "Per-block enable and soft-reset stubs. The bit assignment is fixed now so that each kernel issue wires its own enable and reset without renumbering anything; a bit whose consumer has not landed drives an output of control_top and nothing else.",
+      "registers": [
+        {
+          "name": "BLOCK_ENABLE",
+          "offset": "0x000",
+          "description": "Per-block enable. Reset value enables every block, so a build with no software present still runs.",
+          "fields": [
+            {"name": "PFB",        "lsb": 0, "width": 1, "access": "RW", "reset": "0x1", "description": "Polyphase filter bank (issue #11)."},
+            {"name": "FFT",        "lsb": 1, "width": 1, "access": "RW", "reset": "0x1", "description": "FFT (issue #10)."},
+            {"name": "BEAMFORMER", "lsb": 2, "width": 1, "access": "RW", "reset": "0x1", "description": "Beamformer (issue #12)."},
+            {"name": "COVARIANCE", "lsb": 3, "width": 1, "access": "RW", "reset": "0x1", "description": "Covariance (issue #13)."},
+            {"name": "CFAR",       "lsb": 4, "width": 1, "access": "RW", "reset": "0x1", "description": "CFAR detector (issue #14)."},
+            {"name": "PACKET",     "lsb": 5, "width": 1, "access": "RW", "reset": "0x1", "description": "Packet fabric (issue #18)."},
+            {"name": "MEMORY",     "lsb": 6, "width": 1, "access": "RW", "reset": "0x1", "description": "History memory / corner turn (issue #15)."},
+            {"name": "TELEMETRY",  "lsb": 7, "width": 1, "access": "RW", "reset": "0x1", "description": "Telemetry and counters (issue #8)."}
+          ]
+        },
+        {
+          "name": "BLOCK_RESET",
+          "offset": "0x004",
+          "description": "Per-block soft reset request. Writing 1 emits a one-cycle pulse in the cfg_clk domain; the bit always reads 0. Crossing the pulse into each block's own domain is issue #6 work and is deliberately not done here.",
+          "fields": [
+            {"name": "PFB",        "lsb": 0, "width": 1, "access": "RWP", "description": "Pulse a soft reset at the PFB."},
+            {"name": "FFT",        "lsb": 1, "width": 1, "access": "RWP", "description": "Pulse a soft reset at the FFT."},
+            {"name": "BEAMFORMER", "lsb": 2, "width": 1, "access": "RWP", "description": "Pulse a soft reset at the beamformer."},
+            {"name": "COVARIANCE", "lsb": 3, "width": 1, "access": "RWP", "description": "Pulse a soft reset at the covariance engine."},
+            {"name": "CFAR",       "lsb": 4, "width": 1, "access": "RWP", "description": "Pulse a soft reset at the CFAR detector."},
+            {"name": "PACKET",     "lsb": 5, "width": 1, "access": "RWP", "description": "Pulse a soft reset at the packet fabric."},
+            {"name": "MEMORY",     "lsb": 6, "width": 1, "access": "RWP", "description": "Pulse a soft reset at the history memory."},
+            {"name": "TELEMETRY",  "lsb": 7, "width": 1, "access": "RWP", "description": "Pulse a soft reset at the telemetry block."}
+          ]
+        },
+        {
+          "name": "GLOBAL_CTRL",
+          "offset": "0x008",
+          "description": "Datapath-wide control. GLOBAL_ENABLE gates every block regardless of BLOCK_ENABLE.",
+          "fields": [
+            {"name": "GLOBAL_ENABLE", "lsb": 0, "width": 1, "access": "RW",  "reset": "0x1", "description": "Master enable for the datapath."},
+            {"name": "FLUSH",         "lsb": 1, "width": 1, "access": "RWP", "description": "Pulse a pipeline flush."},
+            {"name": "SOFT_RESET",    "lsb": 2, "width": 1, "access": "RWP", "description": "Pulse a datapath-wide soft reset."}
+          ]
+        },
+        {
+          "name": "CTRL_STATUS",
+          "offset": "0x00C",
+          "description": "Hardware-driven status. ENABLED_COUNT is computed in the block from the live BLOCK_ENABLE value, so it exercises a real hardware read path rather than mirroring storage.",
+          "fields": [
+            {"name": "ENABLED_COUNT", "lsb": 0, "width": 4, "access": "ROHW", "description": "Population count of BLOCK_ENABLE."},
+            {"name": "ALIVE",         "lsb": 8, "width": 1, "access": "ROHW", "description": "Tied high by the block; reads 1 whenever the control plane is out of reset."}
+          ]
+        }
+      ]
+    },
+    {
+      "name": "fault",
+      "base": "0x3000",
+      "size": "0x1000",
+      "implemented": true,
+      "spec_groups": ["Fault injection"],
+      "description": "Fault injection (SPEC 24). Injection is two-step on purpose: a persistent arming mask plus a one-shot trigger. A single stray write can therefore never inject a fault, and the arming state is visible in a register dump taken after the fact.",
+      "registers": [
+        {
+          "name": "FAULT_ENABLE",
+          "offset": "0x000",
+          "description": "Arming mask. A trigger bit has no effect unless the matching enable bit is set.",
+          "fields": [
+            {"name": "STREAM_CORRUPT", "lsb": 0, "width": 1, "access": "RW", "description": "Corrupt a stream payload."},
+            {"name": "SEQ_ERROR",      "lsb": 1, "width": 1, "access": "RW", "description": "Force a sequence discontinuity."},
+            {"name": "FIFO_OVERFLOW",  "lsb": 2, "width": 1, "access": "RW", "description": "Force a FIFO overflow (issue #6 primitives)."},
+            {"name": "CDC_ERROR",      "lsb": 3, "width": 1, "access": "RW", "description": "Force a CDC error report."},
+            {"name": "SATURATION",     "lsb": 4, "width": 1, "access": "RW", "description": "Force a fixed-point saturation event."},
+            {"name": "PACKET_DROP",    "lsb": 5, "width": 1, "access": "RW", "description": "Drop a packet in the packet fabric."}
+          ]
+        },
+        {
+          "name": "FAULT_INJECT",
+          "offset": "0x004",
+          "description": "One-shot triggers, same bit assignment as FAULT_ENABLE. Writing 1 to an armed bit emits a one-cycle pulse and sets the matching FAULT_STATUS bit. Always reads 0.",
+          "fields": [
+            {"name": "STREAM_CORRUPT", "lsb": 0, "width": 1, "access": "RWP", "description": "Trigger a stream corruption."},
+            {"name": "SEQ_ERROR",      "lsb": 1, "width": 1, "access": "RWP", "description": "Trigger a sequence discontinuity."},
+            {"name": "FIFO_OVERFLOW",  "lsb": 2, "width": 1, "access": "RWP", "description": "Trigger a FIFO overflow."},
+            {"name": "CDC_ERROR",      "lsb": 3, "width": 1, "access": "RWP", "description": "Trigger a CDC error."},
+            {"name": "SATURATION",     "lsb": 4, "width": 1, "access": "RWP", "description": "Trigger a saturation event."},
+            {"name": "PACKET_DROP",    "lsb": 5, "width": 1, "access": "RWP", "description": "Trigger a packet drop."}
+          ]
+        },
+        {
+          "name": "FAULT_STATUS",
+          "offset": "0x008",
+          "description": "Sticky record of faults actually injected, set by hardware and cleared by writing 1. A hardware set in the same cycle as a software clear wins, so an event is never lost to a racing clear.",
+          "fields": [
+            {"name": "STREAM_CORRUPT", "lsb": 0, "width": 1, "access": "W1C", "description": "A stream corruption was injected."},
+            {"name": "SEQ_ERROR",      "lsb": 1, "width": 1, "access": "W1C", "description": "A sequence discontinuity was injected."},
+            {"name": "FIFO_OVERFLOW",  "lsb": 2, "width": 1, "access": "W1C", "description": "A FIFO overflow was injected."},
+            {"name": "CDC_ERROR",      "lsb": 3, "width": 1, "access": "W1C", "description": "A CDC error was injected."},
+            {"name": "SATURATION",     "lsb": 4, "width": 1, "access": "W1C", "description": "A saturation event was injected."},
+            {"name": "PACKET_DROP",    "lsb": 5, "width": 1, "access": "W1C", "description": "A packet drop was injected."}
+          ]
+        },
+        {
+          "name": "FAULT_COUNT",
+          "offset": "0x00C",
+          "description": "Free-running count of injected fault pulses (one per armed bit per trigger). Saturating, not wrapping, so a dump taken long after the event still reports 'many' rather than an ambiguous small number.",
+          "fields": [
+            {"name": "VALUE", "lsb": 0, "width": 32, "access": "ROHW", "description": "Injected fault pulses, saturating at 0xFFFFFFFF."}
+          ]
+        }
+      ]
+    },
+    {
+      "name": "scratch",
+      "base": "0x4000",
+      "size": "0x1000",
+      "implemented": true,
+      "spec_groups": ["Snapshot and debug control"],
+      "description": "Software scratch registers with no hardware effect. They exist to test the fabric itself: four distinct reset values prove per-register reset defaults, and SCRATCH3 mixes a writable half with a read-only half so that partial writability is covered by construction rather than by a future block happening to need it. The snapshot and debug-control group proper lands with issue #19 in the debug window.",
+      "registers": [
+        {"name": "SCRATCH0", "offset": "0x000", "description": "Scratch, reset all zeros.",  "fields": [{"name": "VALUE", "lsb": 0, "width": 32, "access": "RW", "reset": "0x00000000", "description": "Free software use."}]},
+        {"name": "SCRATCH1", "offset": "0x004", "description": "Scratch, reset all ones.",   "fields": [{"name": "VALUE", "lsb": 0, "width": 32, "access": "RW", "reset": "0xFFFFFFFF", "description": "Free software use."}]},
+        {"name": "SCRATCH2", "offset": "0x008", "description": "Scratch, alternating reset.", "fields": [{"name": "VALUE", "lsb": 0, "width": 32, "access": "RW", "reset": "0xA5A5A5A5", "description": "Free software use."}]},
+        {
+          "name": "SCRATCH3",
+          "offset": "0x00C",
+          "description": "Half writable, half constant. A write updates RW_LOW and leaves RO_HIGH untouched, and the transaction succeeds (error=0) because the register is partially writable.",
+          "fields": [
+            {"name": "RW_LOW",  "lsb": 0,  "width": 16, "access": "RW", "reset": "0x5A5A", "description": "Writable half."},
+            {"name": "RO_HIGH", "lsb": 16, "width": 16, "access": "RO", "reset": "0xDEAD", "description": "Constant half; writes are ignored, not refused."}
+          ]
+        }
+      ]
+    },
+    {
+      "name": "coeff",
+      "base": "0x5000",
+      "size": "0x1000",
+      "implemented": false,
+      "planned_by": "#10, #11, #12, #16",
+      "spec_groups": ["Coefficient and weight programming", "Active bank selection"],
+      "description": "PLANNED. Coefficient and beam-weight programming with double buffering and an active-bank select. Declared here so the window is reserved and the address space cannot be reassigned by a later issue; unimplemented until its owning issues land, and every access to this window returns error=1 today.",
+      "registers": []
+    },
+    {
+      "name": "cfar",
+      "base": "0x6000",
+      "size": "0x1000",
+      "implemented": false,
+      "planned_by": "#14, #16",
+      "spec_groups": ["CFAR settings", "Integration settings"],
+      "description": "PLANNED. CFAR guard/training geometry and threshold scaling, plus coherent and non-coherent integration settings.",
+      "registers": []
+    },
+    {
+      "name": "counters",
+      "base": "0x7000",
+      "size": "0x1000",
+      "implemented": false,
+      "planned_by": "#8",
+      "spec_groups": [
+        "Stream counters",
+        "Stall counters",
+        "FIFO high-water marks",
+        "Overflow and saturation counts",
+        "Frame counts",
+        "Sequence errors",
+        "CDC errors"
+      ],
+      "description": "PLANNED. Performance and health telemetry. The counters themselves are issue #8; this window is where they are read from. Counters live in the telemetry clock domain, so this block will be the first consumer of the issue #6 CDC primitives on the register path.",
+      "registers": []
+    },
+    {
+      "name": "debug",
+      "base": "0x8000",
+      "size": "0x1000",
+      "implemented": false,
+      "planned_by": "#19",
+      "spec_groups": ["Snapshot and debug control"],
+      "description": "PLANNED. Snapshot capture, trigger configuration and debug readback.",
+      "registers": []
+    }
+  ]
+}

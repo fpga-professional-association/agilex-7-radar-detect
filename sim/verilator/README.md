@@ -26,10 +26,10 @@ make lint CONFIG=full_agmf039       # lint the largest elaboration
 
 ## The other tops
 
-`benchmark_sim_top` is the design (SPEC §4.1). Three further tops exist, each
+`benchmark_sim_top` is the design (SPEC §4.1). Four further tops exist, each
 self-contained with its own file list, for one reason: a failure in a
 self-contained build is unambiguously a failure of the thing that build tests,
-never a knock-on from unrelated RTL. All four are built by the same script with
+never a knock-on from unrelated RTL. All five are built by the same script with
 `--top` / `--files` changed together, and a non-default top builds into
 `build/<mode>_<config>_<top>/` so they never share objects.
 
@@ -39,10 +39,16 @@ never a knock-on from unrelated RTL. All four are built by the same script with
 | `fxp_probe_top` | `files_fxp.f` | `test_fxp_rtl` | `fxp_pkg` == `model/cpp/fxp` == NumPy, bit for bit (SPEC §6, §12.4) |
 | `stream_prims_top` | `files_stream.f` | `test_stream_primitives` | the three stream primitives, per primitive: stalls, framing, occupancy, capacity, latency, throughput (SPEC §5, §13.1) |
 | `stream_violator_top` | `files_violator.f` | `test_stream_assertions` | that the SPEC §14 protocol assertions actually fire, by name, on injected violations — and stay silent on a correct stage |
+| `control_top` | `files_control.f` | `test_control_regs` | the SPEC §9 register plane: the map against the generated tables, every access type, every illegal address form, and the watchdog that keeps the fabric from hanging |
 
-`make lint` lints all three of `benchmark_sim_top`, `stream_prims_top` and
-`stream_violator_top`; `make sim-tiny` builds and runs the three tests once per
-seed, after `make numerics-check` has run the fourth.
+`make lint` lints all four of `benchmark_sim_top`, `stream_prims_top`,
+`stream_violator_top` and `control_top`; `make sim-tiny` builds and runs those
+four tests once per seed, after `make numerics-check` has run the fifth.
+
+`control_top` also holds a second fabric attached to `reg_block_dead.sv`, a block
+that never answers. Like the violator it is knowingly wrong, appears only in
+`files_control.f`, and exists so the fabric's watchdog escape is an exercised
+path rather than an untested comment.
 
 `stream_violator_top` contains deliberately incorrect RTL. It is in
 `files_violator.f` and nowhere else, so it cannot reach the design build. Its
@@ -165,6 +171,7 @@ sim/verilator/
 ├── files_fxp.f          three-file list for the numerics cross-check build
 ├── files_stream.f       stream primitives + their unit-test top
 ├── files_violator.f     the deliberately broken stage + its top (negative test)
+├── files_control.f      the SPEC 9 register plane + its unit-test top
 ├── lint_waivers.vlt     checked-in warning waivers, each justified
 ├── sim_main.cpp         main(): argument parsing, seed banner, coverage dump
 ├── harness/             the C++ simulation harness (see harness.h)
@@ -173,7 +180,9 @@ sim/verilator/
 │   ├── fxp_probe_top.sv       SPEC 12.4 numerics probe (simulation only)
 │   ├── stream_prims_top.sv    SPEC 13.1 per-primitive unit-test top
 │   ├── stream_violator.sv     deliberately broken stage (negative test only)
-│   └── stream_violator_top.sv wrapper that binds the SPEC 14 checker onto it
+│   ├── stream_violator_top.sv wrapper that binds the SPEC 14 checker onto it
+│   ├── control_top.sv         SPEC 9 register-plane unit-test top
+│   └── reg_block_dead.sv      a block that never answers (watchdog test only)
 ├── generated/           config_pkg.sv + config_sim.h (generated, gitignored)
 └── build/<mode>_<config>[_<top>]/  verilated objects and binaries (gitignored)
 
