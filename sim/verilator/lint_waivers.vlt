@@ -1,0 +1,55 @@
+// -----------------------------------------------------------------------------
+// lint_waivers.vlt — Verilator warning waivers (SPEC 12.1).
+//
+// SPEC 12.1: "Warnings may be waived only through a checked-in waiver file
+// containing a written justification."
+//
+// Rules for this file
+// -------------------
+//  1. Every waiver is as narrow as the warning allows: prefer
+//     `-file` + `-lines` + `-match` over a bare rule name, and never waive a
+//     rule design-wide.
+//  2. Every waiver carries a justification comment stating *why* the warning is
+//     wrong or accepted here, and what would make it removable.
+//  3. A waiver that outlives its cause is a defect. When the owning issue lands,
+//     delete the waiver and re-run `make lint`.
+//  4. Fixing the RTL always beats adding a waiver. WIDTH, LATCH, CASEINCOMPLETE
+//     and BLKSEQ waivers are not acceptable: they hide real bugs.
+//
+// `make lint` runs `verilator --lint-only --Wall` *without* `--Wno-fatal`, so
+// any warning not waived here fails the build with a non-zero exit status.
+//
+// Current count: 1 waiver. Keep it that way.
+// -----------------------------------------------------------------------------
+
+`verilator_config
+
+// -----------------------------------------------------------------------------
+// UNUSEDPARAM in the generated configuration package.
+//
+// Why it fires: config_pkg.sv is generated from config/<name>.json and exports
+// the complete elaboration parameter set (SPEC 11 sized parameters plus SPEC 3
+// invariants) as one source of truth shared by the RTL, the C++ harness and,
+// later, the Quartus flow. At Phase 0 the only RTL in the design is the
+// provisional stream loopback, so most of those parameters have no consumer yet.
+//
+// Why it is not a defect: the alternative is to emit only the parameters the
+// current phase happens to use, which would make the package's content depend on
+// build order and would silently drop a parameter whenever RTL is removed. The
+// unused parameters are consumed as the pipeline is built out: FFT_SIZE and
+// PFB_TAPS by issues #10-#11, N_BEAMS by #12, HISTORY_FRAMES by #15, PACKET_W
+// and N_VIRTUAL_CHANS by #18.
+//
+// Scope: the generated package file only, and only this message text. Verified
+// narrow — with this waiver in place, adding an unused parameter to
+// rtl/common/stream_loopback.sv still fails `make lint`. Any other file
+// reporting UNUSEDPARAM is a real dead parameter and must be fixed, not waived.
+//
+// Note on syntax: Verilator 5.020 ignores `-file` on its own for this rule (the
+// warning is attributed to the elaborated instance rather than the source file),
+// so the waiver needs `-file` *and* `-match`. `lint_off -module` is not accepted.
+//
+// Removable when: the full-scale elaboration (issue #20) consumes every
+// parameter. Delete this waiver then and re-run `make lint`.
+// -----------------------------------------------------------------------------
+lint_off -rule UNUSEDPARAM -file "*config_pkg.sv" -match "Parameter is not used*"
