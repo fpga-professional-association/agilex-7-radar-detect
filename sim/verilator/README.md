@@ -26,10 +26,10 @@ make lint CONFIG=full_agmf039       # lint the largest elaboration
 
 ## The other tops
 
-`benchmark_sim_top` is the design (SPEC §4.1). Six further tops exist, each
+`benchmark_sim_top` is the design (SPEC §4.1). Eight further tops exist, each
 self-contained with its own file list, for one reason: a failure in a
 self-contained build is unambiguously a failure of the thing that build tests,
-never a knock-on from unrelated RTL. All seven are built by the same script with
+never a knock-on from unrelated RTL. All nine are built by the same script with
 `--top` / `--files` changed together, and a non-default top builds into
 `build/<mode>_<config>_<top>/` so they never share objects.
 
@@ -42,12 +42,15 @@ never a knock-on from unrelated RTL. All seven are built by the same script with
 | `control_top` | `files_control.f` | `test_control_regs` | the SPEC §9 register plane: the map against the generated tables, every access type, every illegal address form, and the watchdog that keeps the fabric from hanging |
 | `cdc_prims_top` | `files_cdc.f` | `test_sync_fifo`, `test_async_fifo`, `test_cdc_synchronizers` | the SPEC §8 FIFO and CDC primitives: `sync_fifo` against a cycle-accurate C++ model, and every crossing across a seven-entry clock-ratio sweep |
 | `cdc_violator_top` | `files_cdc_violator.f` | `test_cdc_assertions` | that the SPEC §14 CDC assertions actually fire, by name, on injected violations — and stay silent on a correct crossing |
+| `telemetry_top` | `files_telemetry.f` | `test_perf_counters`, `test_seq_checker` | the SPEC §9 counter groups against an independent tally, SPEC §13.4 counter wrap on deliberately narrow probes, and SPEC §5 loss / duplication / reordering against the C++ model |
+| `cmult_top` | `files_cmult.f` | `test_cmult` | the SPEC §6 complex multiplier: both VARIANTs at every legal `PIPE_STAGES` plus the `ROUND_OUT = 0` pair, twelve instances in one elaboration, bit-identical to each other, to `model/cpp/fxp/cmult.hpp` and to `model/vectors/cmult.vec` |
 
-`make lint` lints all six of `benchmark_sim_top`, `stream_prims_top`,
-`stream_violator_top`, `control_top`, `cdc_prims_top` and `cdc_violator_top`;
-`make sim-tiny` builds and runs their seven tests once per seed, after
-`make numerics-check` has run the eighth against `fxp_probe_top` and
-`make cdc-inventory` has produced the SPEC §8 crossing report.
+`make lint` lints all eight of `benchmark_sim_top`, `stream_prims_top`,
+`stream_violator_top`, `control_top`, `cdc_prims_top`, `cdc_violator_top`,
+`telemetry_top` and `cmult_top`; `make sim-tiny` builds and runs their eleven
+tests once per seed, after `make numerics-check` has run the ninth against
+`fxp_probe_top` and `make cdc-inventory` has produced the SPEC §8 crossing
+report.
 
 `cdc_prims_top` is the only top with more than one test: the three tests share one
 verilated model (they differ only in which DUTs inside it they drive), so keeping

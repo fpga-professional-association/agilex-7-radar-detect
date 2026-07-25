@@ -51,6 +51,10 @@ struct Header {
   std::string rounding_mode;
   std::uint64_t seed = 0;
   std::size_t declared_count = 0;
+  // `cmult` files only: the declared width of the exact full-precision product.
+  // Checked against fxp::cmult::kCmulProdW by the loader's caller, so a vector
+  // set generated for a different product width cannot be silently accepted.
+  unsigned prod_w = 0;
 };
 
 // One record of model/vectors/fxp_ops.vec.
@@ -78,6 +82,21 @@ struct AccumStep {
   unsigned step_flags = 0;    // expected packed Flags for this step
   unsigned sticky_flags = 0;  // expected packed sticky Flags after this step
   std::uint32_t count = 0;    // expected saturating-event count after this step
+};
+
+// One record of model/vectors/cmult.vec (issue #9). Carries BOTH observable
+// output formats of rtl/common/complex_multiplier.sv, so one file proves the
+// ROUND_OUT=1 and the ROUND_OUT=0 build.
+struct CmultVector {
+  std::string id;
+  Complex a;
+  Complex b;
+  wide_t p_re = 0;        // exact full-precision product, prod_w bits
+  wide_t p_im = 0;
+  i16 y_re = 0;           // rounded Q1.15 product
+  i16 y_im = 0;
+  unsigned flags_re = 0;  // packed Flags
+  unsigned flags_im = 0;
 };
 
 namespace detail {
@@ -125,6 +144,8 @@ inline void absorb_header(const std::string& line, Header* h) {
   else if (key == "count")
     h->declared_count = static_cast<std::size_t>(
         std::strtoull(value.c_str(), nullptr, 10));
+  else if (key == "prod_w")
+    h->prod_w = static_cast<unsigned>(std::atoi(value.c_str()));
 }
 
 inline std::vector<std::string> split(const std::string& line) {
@@ -232,6 +253,65 @@ inline bool load_accum(const std::string& path, std::vector<AccumStep>* out,
       return false;
     }
     out->push_back(s);
+  }
+  if (h.schema != kSchemaVersion) {
+    *err = path + ": schema " + std::to_string(h.schema) + ", expected " +
+           std::to_string(kSchemaVersion);
+    return false;
+  }
+  if (h.declared_count != out->size()) {
+    *err = path + ": header declares " + std::to_string(h.declared_count) +
+           " records, read " + std::to_string(out->size());
+    return false;
+  }
+  if (header != nullptr) *header = h;
+  return true;
+}
+
+// Loads cmult.vec. Same contract as the two loaders above: a malformed line, an
+// unexpected schema or a record count that disagrees with the header is a
+// failure, never a quiet skip.
+inline bool load_cmult(const std::string& path, std::vector<CmultVector>* out,
+                       Header* header, std::string* err) {
+  std::ifstream in(path);
+  if (!in) {
+    *err = "cannot open " + path;
+    return false;
+  }
+  Header h;
+  std::string line;
+  std::size_t lineno = 0;
+  while (std::getline(in, line)) {
+    ++lineno;
+    if (!line.empty() && line[0] == '#') {
+      detail::absorb_header(line, &h);
+      continue;
+    }
+    const std::vector<std::string> f = detail::split(line);
+    if (f.empty()) continue;
+    if (f.size() != 11) {
+      *err = path + ":" + std::to_string(lineno) +
+             ": expected 11 fields, got " + std::to_string(f.size());
+      return false;
+    }
+    wide_t a_re = 0, a_im = 0, b_re = 0, b_im = 0, y_re = 0, y_im = 0;
+    CmultVector v;
+    v.id = f[0];
+    if (!detail::parse_i64(f[1], &a_re) || !detail::parse_i64(f[2], &a_im) ||
+        !detail::parse_i64(f[3], &b_re) || !detail::parse_i64(f[4], &b_im) ||
+        !detail::parse_i64(f[5], &v.p_re) ||
+        !detail::parse_i64(f[6], &v.p_im) || !detail::parse_i64(f[7], &y_re) ||
+        !detail::parse_i64(f[8], &y_im) ||
+        !detail::parse_unsigned(f[9], &v.flags_re) ||
+        !detail::parse_unsigned(f[10], &v.flags_im)) {
+      *err = path + ":" + std::to_string(lineno) + ": malformed field";
+      return false;
+    }
+    v.a = Complex{static_cast<i16>(a_re), static_cast<i16>(a_im)};
+    v.b = Complex{static_cast<i16>(b_re), static_cast<i16>(b_im)};
+    v.y_re = static_cast<i16>(y_re);
+    v.y_im = static_cast<i16>(y_im);
+    out->push_back(v);
   }
   if (h.schema != kSchemaVersion) {
     *err = path + ": schema " + std::to_string(h.schema) + ", expected " +

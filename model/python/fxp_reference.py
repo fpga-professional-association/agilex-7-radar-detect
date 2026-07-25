@@ -271,6 +271,63 @@ def cmul_im_flags(a_re, a_im, b_re, b_im):
 
 
 # ---------------------------------------------------------------------------
+# Complex multiply, three-real-multiply (Karatsuba/Gauss) form — SPEC 6, issue #9
+#
+# Written out as its own arithmetic rather than delegating to the four-multiply
+# form above. A reference in which the two share an implementation cannot detect
+# a factorization error: it would agree with itself while the RTL disagreed with
+# both. ``cmul3_agrees`` is the property the generator asserts over every vector
+# it writes.
+#
+#   k1 = a_re * (b_re + b_im)
+#   k2 = b_im * (a_re + a_im)
+#   k3 = b_re * (a_im - a_re)
+#   re = k1 - k2      im = k1 + k3
+# ---------------------------------------------------------------------------
+
+
+def cmul3_k1(a_re, a_im, b_re, b_im):
+    del a_im
+    return (_i64(a_re) * (_i64(b_re) + _i64(b_im))).astype(np.int64)
+
+
+def cmul3_k2(a_re, a_im, b_re, b_im):
+    del b_re
+    return (_i64(b_im) * (_i64(a_re) + _i64(a_im))).astype(np.int64)
+
+
+def cmul3_k3(a_re, a_im, b_re, b_im):
+    del b_im
+    return (_i64(b_re) * (_i64(a_im) - _i64(a_re))).astype(np.int64)
+
+
+def cmul3_re_raw(a_re, a_im, b_re, b_im):
+    return (
+        cmul3_k1(a_re, a_im, b_re, b_im) - cmul3_k2(a_re, a_im, b_re, b_im)
+    ).astype(np.int64)
+
+
+def cmul3_im_raw(a_re, a_im, b_re, b_im):
+    return (
+        cmul3_k1(a_re, a_im, b_re, b_im) + cmul3_k3(a_re, a_im, b_re, b_im)
+    ).astype(np.int64)
+
+
+def cmul3_agrees(a_re, a_im, b_re, b_im):
+    """True where the three- and four-multiply forms give the same integers."""
+    return bool(
+        np.all(
+            cmul3_re_raw(a_re, a_im, b_re, b_im)
+            == cmul_re_raw(a_re, a_im, b_re, b_im)
+        )
+        and np.all(
+            cmul3_im_raw(a_re, a_im, b_re, b_im)
+            == cmul_im_raw(a_re, a_im, b_re, b_im)
+        )
+    )
+
+
+# ---------------------------------------------------------------------------
 # Accumulator width policy (NUMERICS.md 7)
 #
 #   growth(N)   = ceil(log2 N)   [ growth(1) = 0, matching $clog2 ]
@@ -297,6 +354,20 @@ def acc_w(prod_w, n_terms):
 def mac_q15_acc_w(n_terms):
     """Accumulator width for an N-term Q1.15 MAC: 32 + ceil(log2 N)."""
     return acc_w(PROD_W, n_terms)
+
+
+# Width of the exact full-precision complex product (issue #9). It is the
+# two-term MAC accumulator width, and the bound is TIGHT rather than
+# conservative: (-1-1j)*(-1-1j) has imaginary part +2**31, one past the top of a
+# signed 32-bit field. Derived here, never written as 33.
+CMUL_PROD_W = int(mac_q15_acc_w(2))  # 33
+
+
+def cmul_prod_fits(v):
+    """True where v is representable in a signed CMUL_PROD_W-bit field."""
+    lo = min_of(CMUL_PROD_W)
+    hi = max_of(CMUL_PROD_W)
+    return bool(np.all(_i64(v) >= lo) and np.all(_i64(v) <= hi))
 
 
 # ---------------------------------------------------------------------------

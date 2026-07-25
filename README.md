@@ -42,6 +42,7 @@ make sim-tiny         # tiny-config regression (WSL)
 make sim-medium       # medium-config regression (WSL)
 make quartus-map      # Analysis & Synthesis (Windows)
 make quartus-compile  # full compile + STA + JSON reports (Windows)
+make calibrate-cmult  # SPEC 18 complex-multiplier resource sweep (Windows)
 ```
 
 Full list in SPEC.md §16.

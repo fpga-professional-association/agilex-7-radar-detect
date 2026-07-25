@@ -56,9 +56,11 @@
 # ---------------------------------------------------------------------------
 # Implemented: `lint` and `sim-tiny` (issue #2, Verilator flow; extended by
 # issue #5 with the stream-primitive and negative-assertion tests, by issue #7
-# with the register/control plane, and by issue #6 with the FIFO and CDC
-# primitives plus the SPEC 8 CDC inventory report) and the quartus-* targets
-# (issue #3).
+# with the register/control plane, by issue #6 with the FIFO and CDC
+# primitives plus the SPEC 8 CDC inventory report, by issue #8 with the
+# telemetry primitives, and by issue #9 with the complex multiplier), the
+# quartus-* targets (issue #3) and the SPEC 18 calibration sweep
+# `calibrate-cmult` (issue #9).
 #
 # Everything else is still a scaffold stub from issue #1. Stubs fail loudly:
 # they print `TODO(issue #N)` and the stub command exits 1. GNU make then
@@ -235,6 +237,25 @@ FXP_TEST      := test_fxp_rtl
 FXP_FILES     := sim/verilator/files_fxp.f
 FXP_BIN        = sim/verilator/build/fast_tiny_$(FXP_TOP)/V$(FXP_TOP)_$(FXP_TEST)
 
+# --- complex multiplier (issue #9, SPEC 6 / 13.1 / 14 / 18) ----------------
+# A sixth self-contained build, for the reason the others have one: a failure in
+# it is unambiguously a failure of the first DSP kernel. cmult_top holds the
+# WHOLE parameter space of rtl/common/complex_multiplier.sv in one elaboration —
+# both VARIANTs at every legal PIPE_STAGES, plus the ROUND_OUT=0 pair — driven
+# from one stimulus port, so "the two variants are bit-identical" and "latency is
+# the parameter" are same-cycle facts rather than a comparison of two runs.
+#
+#   test_cmult  directed vectors from model/vectors/cmult.vec, then >= 24 000
+#               random operand pairs per seed (dense and bursty-gapped), every
+#               beat checked against twelve RTL instances and both arithmetic
+#               paths of the C++ model; then the latency sweep and the flag
+#               audit. sim/assertions/cmult_assertions.sv watches every matched
+#               MULT4/MULT3 pair on every cycle of all of it.
+CMULT_TOP     := cmult_top
+CMULT_FILES   := sim/verilator/files_cmult.f
+CMULT_TEST    := test_cmult
+CMULT_BIN      = sim/verilator/build/fast_tiny_$(CMULT_TOP)/V$(CMULT_TOP)_$(CMULT_TEST)
+
 ifeq ($(HOST_KIND),windows)
   QUARTUS_SH ?= C:/altera_pro/26.1/quartus/bin64/quartus_sh.exe
 else
@@ -279,26 +300,29 @@ define LINT_RECIPE
 	@printf '[lint] verilator --lint-only --Wall, config=%s, waivers=%s\n' \
 	    '$(CONFIG)' 'sim/verilator/lint_waivers.vlt'
 	$(REGMAP_CHECK_RECIPE)
-	@printf '[lint] 1/7 %s\n' 'benchmark_sim_top'
+	@printf '[lint] 1/8 %s\n' 'benchmark_sim_top'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) --test $(TEST)
-	@printf '[lint] 2/7 %s\n' '$(STREAM_TOP)'
+	@printf '[lint] 2/8 %s\n' '$(STREAM_TOP)'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
 	    --top $(STREAM_TOP) --files $(STREAM_FILES) --test $(STREAM_TEST)
-	@printf '[lint] 3/7 %s\n' '$(VIOL_TOP)'
+	@printf '[lint] 3/8 %s\n' '$(VIOL_TOP)'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
 	    --top $(VIOL_TOP) --files $(VIOL_FILES) --test $(VIOL_TEST)
-	@printf '[lint] 4/7 %s\n' '$(CONTROL_TOP)'
+	@printf '[lint] 4/8 %s\n' '$(CONTROL_TOP)'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
 	    --top $(CONTROL_TOP) --files $(CONTROL_FILES) --test $(CONTROL_TEST)
-	@printf '[lint] 5/7 %s\n' '$(CDC_TOP)'
+	@printf '[lint] 5/8 %s\n' '$(CDC_TOP)'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
 	    --top $(CDC_TOP) --files $(CDC_FILES) --test $(firstword $(CDC_TESTS))
-	@printf '[lint] 6/7 %s\n' '$(CDCV_TOP)'
+	@printf '[lint] 6/8 %s\n' '$(CDCV_TOP)'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
 	    --top $(CDCV_TOP) --files $(CDCV_FILES) --test $(CDCV_TEST)
-	@printf '[lint] 7/7 %s\n' '$(TELEM_TOP)'
+	@printf '[lint] 7/8 %s\n' '$(TELEM_TOP)'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
 	    --top $(TELEM_TOP) --files $(TELEM_FILES) --test $(firstword $(TELEM_TESTS))
+	@printf '[lint] 8/8 %s\n' '$(CMULT_TOP)'
+	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
+	    --top $(CMULT_TOP) --files $(CMULT_FILES) --test $(CMULT_TEST)
 endef
 
 # `sim-tiny`: SPEC 12.1 fast build of every simulation top, then every test
@@ -333,6 +357,14 @@ endef
 #                            harness tally, coherent multi-register reads taken
 #                            while traffic runs, and the SPEC 13.4 wrap and
 #                            saturation cases on deliberately narrow counters.
+#   test_cmult               cmult_top — the SPEC 6 complex multiplier. Both
+#                            VARIANTs at every legal PIPE_STAGES plus the
+#                            ROUND_OUT=0 pair, all twelve in one elaboration,
+#                            checked bit-for-bit against model/vectors/cmult.vec,
+#                            against model/cpp/fxp/cmult.hpp (both of its
+#                            arithmetic paths) and against each other, on the
+#                            directed set and on >= 24 000 random operand pairs
+#                            per seed; plus the latency sweep and the flag audit.
 #   test_seq_checker         telemetry_top — SPEC 5 loss, duplication and
 #                            reordering: each fault injected deliberately and
 #                            required to land in the right category with the
@@ -357,10 +389,12 @@ define SIM_TINY_RECIPE
 	    $(BUILD_VERILATOR) --mode fast --config tiny --jobs $(JOBS) \
 	        --top $(TELEM_TOP) --files $(TELEM_FILES) --test $$t || exit 1; \
 	  done
+	$(BUILD_VERILATOR) --mode fast --config tiny --jobs $(JOBS) \
+	    --top $(CMULT_TOP) --files $(CMULT_FILES) --test $(CMULT_TEST)
 	@printf '[sim-tiny] seeds: %s\n' '$(SEEDS)'
-	@printf '[sim-tiny] tests: %s %s %s %s %s %s %s\n' '$(TEST)' '$(STREAM_TEST)' \
+	@printf '[sim-tiny] tests: %s %s %s %s %s %s %s %s\n' '$(TEST)' '$(STREAM_TEST)' \
 	    '$(VIOL_TEST)' '$(CONTROL_TEST)' '$(CDC_TESTS)' '$(CDCV_TEST)' \
-	    '$(TELEM_TESTS)'
+	    '$(TELEM_TESTS)' '$(CMULT_TEST)'
 	@rc=0; for s in $(SEEDS); do \
 	    printf '\n[sim-tiny] ===== seed %s : %s =====\n' "$$s" '$(TEST)'; \
 	    ./$(SIM_TINY_BIN) +seed=$$s +results=$(RESULTS_DIR) || rc=1; \
@@ -382,6 +416,8 @@ define SIM_TINY_RECIPE
 	      printf '\n[sim-tiny] ===== seed %s : %s =====\n' "$$s" "$$t"; \
 	      ./$(TELEM_BIN_DIR)/V$(TELEM_TOP)_$$t +seed=$$s +results=$(RESULTS_DIR) || rc=1; \
 	    done; \
+	    printf '\n[sim-tiny] ===== seed %s : %s =====\n' "$$s" '$(CMULT_TEST)'; \
+	    ./$(CMULT_BIN) +seed=$$s +results=$(RESULTS_DIR) +vectors=$(VECTORS_DIR) || rc=1; \
 	  done; \
 	  if [ $$rc -ne 0 ]; then \
 	    printf '\n[sim-tiny] FAILED (seeds: %s)\n' '$(SEEDS)' 1>&2; exit 1; \
@@ -404,6 +440,10 @@ endef
 # model/python/gen_fxp_vectors.py produces for its recorded seed, when a Python
 # interpreter is available; without one the vector files are still checked
 # against their own declared record counts by the loader.
+# (The vector set covers three files as of issue #9: fxp_ops.vec, fxp_accum.vec
+# and cmult.vec. The C++ unit test checks all three, and the complex-multiplier
+# RTL cross-check is a separate build driven by sim-tiny, not by this target —
+# the numerics gate proves the PACKAGE, the kernel test proves the KERNEL.)
 define NUMERICS_RECIPE
 	@printf '[numerics] 1/4 vectors: regenerate-and-compare (%s)\n' '$(VECTORS_DIR)'
 	@if [ -n '$(PYTHON)' ]; then \
@@ -568,6 +608,9 @@ help:
 	@printf '%-18s %-9s %s\n' 'quartus-report'   'windows' 'export JSON record + validate/summarise'
 	@printf '%-18s %-9s %s\n' 'quartus-compile'  'windows' 'full compile + STA + reports + export'
 	@printf '\n'
+	@printf '%-18s %-9s %s\n' 'calibrate-cmult'  'windows' 'SPEC 18 complex-multiplier sweep (~1.5 h of Fitter)'
+	@printf '%-18s %-9s %s\n' 'calibrate-summary' 'local'  'rebuild the calibration JSON/table from evidence on disk'
+	@printf '\n'
 	@printf '%-18s %-9s %s\n' 'seed-sweep'       'windows' 'TODO(issue #23) ten-seed robustness sweep'
 	@printf '%-18s %-9s %s\n' 'compare-baseline' 'local'   'TODO(issue #21) compare current run to baseline'
 	@printf '%-18s %-9s %s\n' 'reproduce-final'  'both'    'TODO(issue #25) reproduce the final result'
@@ -577,8 +620,9 @@ help:
 	@printf 'automatically as prerequisites of sim-tiny and listed here so each can\n'
 	@printf 'also be run on its own while working on the code it covers.\n'
 	@printf '\n'
-	@printf 'lint and sim-tiny (issue #2), numerics-check (issue #4) and the quartus-*\n'
-	@printf 'targets (issue #3) are implemented. Targets marked TODO are still stubs:\n'
+	@printf 'lint and sim-tiny (issue #2), numerics-check (issue #4), the quartus-*\n'
+	@printf 'targets (issue #3) and calibrate-cmult (issue #9) are implemented.\n'
+	@printf 'Targets marked TODO are still stubs:\n'
 	@printf 'they print TODO(issue #N)\n'
 	@printf 'and exit 1; GNU make then reports its own exit status 2 for the failed\n'
 	@printf 'recipe.\n'
@@ -705,6 +749,54 @@ quartus-compile:
 	@$(PYTHON) scripts/parse_quartus.py results/timing/latest.json
 
 # ===========================================================================
+# Resource-calibration sweeps (SPEC.md 18) — Windows Quartus Prime Pro 26.1
+# ===========================================================================
+
+# SPEC 18 requires representative kernels to be synthesized and swept BEFORE the
+# full design is built, with DSP mapping, ALMs, Fmax and retiming measured rather
+# than argued. `calibrate-cmult` is the first such sweep (issue #9): the complex
+# multiplier over {MULT4, MULT3} x PIPE_STAGES x {rounded, full-precision}.
+#
+# WINDOWS SIDE, like every other Quartus target and for the same reason (this
+# host's WSL has Windows interop disabled). It is deliberately NOT dispatched
+# into WSL and is deliberately NOT a prerequisite of any simulation target: one
+# sweep is on the order of an hour and a half of Fitter time, which is not
+# something a regression may trigger by accident.
+#
+# From Git Bash on the Windows side:
+#   C:/altera_pro/26.1/riscfree/build_tools/bin/make.exe calibrate-cmult
+#
+# Useful variables:
+#   SEED=<n>         Fitter seed, recorded in every record (SPEC 25). default 1
+#   CALIB_JOBS=<n>   points compiled at once, each in its own project copy.
+#                    One Fitter run of this project peaks near 20 GB of virtual
+#                    memory; raise this only with the RAM to match. default 1
+#   CALIB_ARGS=...   passed through to scripts/run_calibration.py, e.g.
+#                    CALIB_ARGS='--resume' or CALIB_ARGS='--points mult4_p3_round'
+#
+# Output: results/synthesis/calibration_cmult.json plus the per-point evidence
+# under results/synthesis/calibration/cmult/. All of it is generated and none of
+# it is committed (PLAN.md standing rule 3); the summary table goes in the pull
+# request and, compactly, in DECISIONS.md.
+CALIB_JOBS ?= 1
+CALIB_ARGS ?=
+RUN_CALIBRATION = $(PYTHON) scripts/run_calibration.py
+
+calibrate-cmult:
+	$(QUARTUS_CHECK)
+	$(PYTHON_CHECK)
+	@printf '[calibrate] SPEC 18 sweep: kernel=cmult seed=%s jobs=%s\n' \
+	    '$(SEED)' '$(CALIB_JOBS)'
+	$(RUN_CALIBRATION) --kernel cmult --seed $(SEED) --jobs $(CALIB_JOBS) \
+	    --quartus-bin '$(QUARTUS_BIN)' $(CALIB_ARGS)
+
+# Rebuild the JSON record and the summary table from evidence already on disk.
+# Runs no Quartus and is safe on any host that has a Python interpreter.
+calibrate-summary:
+	$(PYTHON_CHECK)
+	$(RUN_CALIBRATION) --kernel cmult --summary-only
+
+# ===========================================================================
 # Cross-toolchain analysis targets (SPEC.md 16)
 # ===========================================================================
 
@@ -721,4 +813,5 @@ reproduce-final:
         lint numerics-check regmap-check cdc-inventory \
         sim-tiny sim-medium sim-random sim-stress sim-coverage sim-full-smoke \
         quartus-map quartus-fit quartus-sta quartus-report quartus-compile \
+        calibrate-cmult calibrate-summary \
         seed-sweep compare-baseline reproduce-final

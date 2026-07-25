@@ -72,5 +72,14 @@ rtl/common/fxp_sticky_flags.sv
 rtl/common/perf_counter.sv
 rtl/common/seq_checker.sv
 
+// The first Phase 2 DSP kernel (SPEC 6, issue #9). Listed here — rather than
+// only in files_cmult.f — for the same reason perf_counter and seq_checker are:
+// it is design RTL that every later kernel (FIR lane, PFB, FFT butterfly,
+// beamformer dot product) instantiates, and this list is the single definition
+// of what "the design" is. It is not yet instantiated by benchmark_sim_top; the
+// pipeline that consumes it arrives with issues #10-#12, and until then `make
+// lint` covers it here and sim/verilator/tops/cmult_top.sv verifies it.
+rtl/common/complex_multiplier.sv
+
 // ---- simulation top (SPEC 4.1) -----------------------------------------
 sim/verilator/tops/benchmark_sim_top.sv
