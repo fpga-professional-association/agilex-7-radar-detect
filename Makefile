@@ -32,7 +32,11 @@
 #   WSL_REPO_DIR   Repo path as seen from WSL.                default: /mnt/d/agielx-7-radar-test
 #   CONFIG         Size config name from config/*.json.       default: tiny
 #   SEED           Deterministic seed for randomized runs.    default: 1
+#   SEEDS          Seed list looped by sim-tiny.              default: 1 2 3
 #   JOBS           Parallel job count for builds/compiles.    default: 16
+#   TEST           Test stem under sim/tests/.                default: test_stream_loopback
+#   PYTHON         Python interpreter for scripts/.           default: python3
+#   RESULTS_DIR    Run-summary output directory.              default: results/simulation
 #
 # A clean checkout plus these variables is sufficient to run every target
 # (SPEC.md 16).
@@ -40,12 +44,19 @@
 # ---------------------------------------------------------------------------
 # Status
 # ---------------------------------------------------------------------------
-# Every target below is a scaffold stub as of issue #1. Stubs fail loudly: they
-# print `TODO(issue #N)` and the stub command exits 1. GNU make then reports its
-# own exit status 2, which is make's documented status for a failed recipe (1 is
+# Implemented: `lint` and `sim-tiny` (issue #2, Verilator flow).
+#
+# Everything else is still a scaffold stub. Stubs fail loudly: they print
+# `TODO(issue #N)` and the stub command exits 1. GNU make then reports its own
+# exit status 2, which is make's documented status for a failed recipe (1 is
 # reserved for -q question mode), so `make <target>; echo $$?` prints 2. No stub
 # ever silently succeeds. Run `make help` for the target list and the issue that
 # implements each one.
+#
+# The four SPEC 12.1 build modes are all driven by scripts/build_verilator.py.
+# `lint` and `sim-tiny` use the lint and fast modes; the coverage and debug modes
+# are invoked directly (see sim/verilator/README.md) until sim-coverage lands in
+# issue #17.
 
 SHELL := /bin/sh
 
@@ -74,7 +85,17 @@ WSL_DISTRO   ?= Ubuntu-24.04
 WSL_REPO_DIR ?= /mnt/d/agielx-7-radar-test
 CONFIG       ?= tiny
 SEED         ?= 1
+# sim-tiny runs the loopback test once per seed. Three distinct seeds is the
+# floor the issue #2 gate asks for; SEEDS='1 3 7 11 17' widens it without a
+# rebuild. The SPEC 25 ten-seed list belongs to seed-sweep (issue #23), not here.
+SEEDS        ?= 1 2 3
 JOBS         ?= 16
+TEST         ?= test_stream_loopback
+PYTHON       ?= python3
+RESULTS_DIR  ?= results/simulation
+
+BUILD_VERILATOR := $(PYTHON) scripts/build_verilator.py
+SIM_TINY_BIN     = sim/verilator/build/fast_tiny/Vbenchmark_sim_top_$(TEST)
 
 ifeq ($(HOST_KIND),windows)
   QUARTUS_SH ?= C:/altera_pro/26.1/quartus/bin64/quartus_sh.exe
@@ -91,19 +112,63 @@ define TODO
 	@printf 'TODO(issue #%s): implemented by %s. Not yet available.\n' '$(1)' "'$(2)'" 1>&2; exit 1
 endef
 
-# --- simulation-side recipe ------------------------------------------------
-# On Windows, re-dispatch into WSL. On WSL/Linux, run the (not yet existing)
-# Verilator flow.
+# --- simulation-side recipes -----------------------------------------------
+# On Windows every simulation target re-dispatches into WSL, forwarding the
+# tunable variables so the WSL-side make sees the same configuration. On
+# WSL/Linux the real Verilator flow runs.
 
 ifeq ($(HOST_KIND),windows)
-define SIM_RECIPE
+
+define SIM_DISPATCH
 	@printf '[dispatch] %s -> wsl -d %s make -C %s\n' '$@' '$(WSL_DISTRO)' '$(WSL_REPO_DIR)'
-	@wsl.exe -d $(WSL_DISTRO) -- make -C $(WSL_REPO_DIR) $@
+	@wsl.exe -d $(WSL_DISTRO) -- make -C $(WSL_REPO_DIR) $@ \
+	    CONFIG='$(CONFIG)' SEED='$(SEED)' SEEDS='$(SEEDS)' JOBS='$(JOBS)' \
+	    TEST='$(TEST)' RESULTS_DIR='$(RESULTS_DIR)'
 endef
+
+LINT_RECIPE     = $(SIM_DISPATCH)
+SIM_TINY_RECIPE = $(SIM_DISPATCH)
+SIM_STUB_17     = $(SIM_DISPATCH)
+SIM_STUB_20     = $(SIM_DISPATCH)
+
 else
-define SIM_RECIPE
-	$(call TODO,2,Phase 0: Verilator flow)
+
+# `lint`: SPEC 12.1 lint build. build_verilator.py omits --Wno-fatal, so any
+# warning not justified in sim/verilator/lint_waivers.vlt exits non-zero.
+define LINT_RECIPE
+	@printf '[lint] verilator --lint-only --Wall, config=%s, waivers=%s\n' \
+	    '$(CONFIG)' 'sim/verilator/lint_waivers.vlt'
+	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) --test $(TEST)
 endef
+
+# `sim-tiny`: SPEC 12.1 fast build, then the loopback test once per seed in
+# SEEDS. Each run prints its own seed and RESULT: line; a single failing seed
+# fails the target, and the remaining seeds still run so one invocation shows
+# whether a failure is seed-specific.
+define SIM_TINY_RECIPE
+	$(BUILD_VERILATOR) --mode fast --config tiny --jobs $(JOBS) --test $(TEST)
+	@printf '[sim-tiny] seeds: %s\n' '$(SEEDS)'
+	@rc=0; for s in $(SEEDS); do \
+	    printf '\n[sim-tiny] ===== seed %s =====\n' "$$s"; \
+	    ./$(SIM_TINY_BIN) +seed=$$s +results=$(RESULTS_DIR) || rc=1; \
+	  done; \
+	  if [ $$rc -ne 0 ]; then \
+	    printf '\n[sim-tiny] FAILED (seeds: %s)\n' '$(SEEDS)' 1>&2; exit 1; \
+	  fi; \
+	  printf '\n[sim-tiny] PASS for every seed: %s\n' '$(SEEDS)'
+endef
+
+# Remaining simulation entry points. The Verilator flow itself exists as of
+# issue #2; what these targets are missing is the RTL and the tests they would
+# run, so they stay stubs pointed at the issues that deliver those.
+define SIM_STUB_17
+	$(call TODO,17,Phase 3: Medium pipeline integration - stress and coverage)
+endef
+
+define SIM_STUB_20
+	$(call TODO,20,Phase 5: Full-scale elaboration and smoke tests)
+endef
+
 endif
 
 # --- Quartus-side recipe ---------------------------------------------------
@@ -132,19 +197,20 @@ help:
 	@printf 'Simulation:    WSL %s, Verilator\n' '$(WSL_DISTRO)'
 	@printf 'Quartus:       %s\n' '$(QUARTUS_SH)'
 	@printf 'Config:        CONFIG=%s -> %s   SEED=%s   JOBS=%s\n' '$(CONFIG)' '$(CONFIG_JSON)' '$(SEED)' '$(JOBS)'
+	@printf 'sim-tiny:      TEST=%s   SEEDS=%s\n' '$(TEST)' '$(SEEDS)'
 	@printf '\n'
 	@printf 'TARGET             SIDE      STATUS\n'
 	@printf -- '------------------ --------- ---------------------------------------------\n'
 	@printf '%-18s %-9s %s\n' 'help'             'local'   'this message (default goal)'
 	@printf '%-18s %-9s %s\n' 'env-check'        'local'   'report detected toolchain locations'
 	@printf '\n'
-	@printf '%-18s %-9s %s\n' 'lint'             'wsl'     'TODO(issue #2) Verilator lint'
-	@printf '%-18s %-9s %s\n' 'sim-tiny'         'wsl'     'TODO(issue #2) tiny-config regression'
-	@printf '%-18s %-9s %s\n' 'sim-medium'       'wsl'     'TODO(issue #2) medium-config regression'
-	@printf '%-18s %-9s %s\n' 'sim-random'       'wsl'     'TODO(issue #2) randomized regression'
-	@printf '%-18s %-9s %s\n' 'sim-stress'       'wsl'     'TODO(issue #2) long stress test'
-	@printf '%-18s %-9s %s\n' 'sim-coverage'     'wsl'     'TODO(issue #2) coverage build and report'
-	@printf '%-18s %-9s %s\n' 'sim-full-smoke'   'wsl'     'TODO(issue #2) full-scale smoke test'
+	@printf '%-18s %-9s %s\n' 'lint'             'wsl'     'verilator --lint-only --Wall (zero unwaived warnings)'
+	@printf '%-18s %-9s %s\n' 'sim-tiny'         'wsl'     'fast build + loopback test over SEEDS'
+	@printf '%-18s %-9s %s\n' 'sim-medium'       'wsl'     'TODO(issue #17) medium-config regression'
+	@printf '%-18s %-9s %s\n' 'sim-random'       'wsl'     'TODO(issue #17) randomized regression'
+	@printf '%-18s %-9s %s\n' 'sim-stress'       'wsl'     'TODO(issue #17) long stress test'
+	@printf '%-18s %-9s %s\n' 'sim-coverage'     'wsl'     'TODO(issue #17) coverage build and report'
+	@printf '%-18s %-9s %s\n' 'sim-full-smoke'   'wsl'     'TODO(issue #20) full-scale smoke test'
 	@printf '\n'
 	@printf '%-18s %-9s %s\n' 'quartus-map'      'windows' 'TODO(issue #3) Analysis and Synthesis'
 	@printf '%-18s %-9s %s\n' 'quartus-fit'      'windows' 'TODO(issue #3) Fitter'
@@ -156,8 +222,13 @@ help:
 	@printf '%-18s %-9s %s\n' 'compare-baseline' 'local'   'TODO(issue #21) compare current run to baseline'
 	@printf '%-18s %-9s %s\n' 'reproduce-final'  'both'    'TODO(issue #25) reproduce the final result'
 	@printf '\n'
-	@printf 'Every implementation target is still a stub: it prints TODO(issue #N) and\n'
-	@printf 'exits 1. GNU make reports its own exit status 2 for a failed recipe.\n'
+	@printf 'lint and sim-tiny are implemented (issue #2). Every other target is still\n'
+	@printf 'a stub: it prints TODO(issue #N) and exits 1. GNU make reports its own exit\n'
+	@printf 'status 2 for a failed recipe.\n'
+	@printf '\n'
+	@printf 'The coverage and debug build modes (SPEC 12.1) have no make target yet; run\n'
+	@printf 'scripts/build_verilator.py --mode coverage|debug directly. See\n'
+	@printf 'sim/verilator/README.md.\n'
 
 env-check:
 	@printf 'HOST_KIND     = %s\n' '$(HOST_KIND)'
@@ -171,32 +242,39 @@ env-check:
 	@printf 'CONFIG        = %s -> %s' '$(CONFIG)' '$(CONFIG_JSON)'
 	@if test -f '$(CONFIG_JSON)'; then printf '   [found]\n'; else printf '   [MISSING]\n'; fi
 	@printf 'SEED          = %s\n' '$(SEED)'
+	@printf 'SEEDS         = %s\n' '$(SEEDS)'
 	@printf 'JOBS          = %s\n' '$(JOBS)'
+	@printf 'TEST          = %s\n' '$(TEST)'
+	@printf 'RESULTS_DIR   = %s\n' '$(RESULTS_DIR)'
+	@printf 'PYTHON        = %s' '$(PYTHON)'
+	@if command -v $(PYTHON) >/dev/null 2>&1; then printf '   [found]\n'; else printf '   [MISSING]\n'; fi
+	@printf 'verilator     = %s' "$$(command -v verilator 2>/dev/null || echo '(not on PATH)')"
+	@if command -v verilator >/dev/null 2>&1; then printf '   [%s]\n' "$$(verilator --version)"; else printf '\n'; fi
 
 # ===========================================================================
 # Simulation targets (SPEC.md 16) — WSL / Verilator
 # ===========================================================================
 
 lint:
-	$(SIM_RECIPE)
+	$(LINT_RECIPE)
 
 sim-tiny:
-	$(SIM_RECIPE)
+	$(SIM_TINY_RECIPE)
 
 sim-medium:
-	$(SIM_RECIPE)
+	$(SIM_STUB_17)
 
 sim-random:
-	$(SIM_RECIPE)
+	$(SIM_STUB_17)
 
 sim-stress:
-	$(SIM_RECIPE)
+	$(SIM_STUB_17)
 
 sim-coverage:
-	$(SIM_RECIPE)
+	$(SIM_STUB_17)
 
 sim-full-smoke:
-	$(SIM_RECIPE)
+	$(SIM_STUB_20)
 
 # ===========================================================================
 # Quartus targets (SPEC.md 16) — Windows Quartus Prime Pro 26.1
