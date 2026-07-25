@@ -6,7 +6,6 @@
 #
 # This file is HAND MAINTAINED and deliberately minimal. Do not open the
 # project in the GUI and save it: the GUI appends tool bookkeeping
-# (PROJECT_CREATION_TIME_DATE, LAST_QUARTUS_VERSION, partition/floorplan noise)
 # that makes compile-to-compile diffs unreviewable. The Quartus version is
 # detected at compile time by quartus/scripts/compile.tcl and recorded in the
 # exported JSON (SPEC.md 17); it is intentionally NOT hardcoded here.
@@ -72,7 +71,3 @@ set_instance_assignment -name VIRTUAL_PIN ON -to out_end_of_frame
 set_instance_assignment -name VIRTUAL_PIN ON -to "out_stream_id[*]"
 set_instance_assignment -name VIRTUAL_PIN ON -to "out_sequence[*]"
 set_instance_assignment -name VIRTUAL_PIN ON -to "out_user[*]"
-set_global_assignment -name PWRMGT_VOLTAGE_OUTPUT_FORMAT "LINEAR FORMAT"
-set_global_assignment -name PWRMGT_LINEAR_FORMAT_N "-12"
-set_global_assignment -name AUTO_OPEN_DRAIN_PINS OFF
-set_global_assignment -name LAST_QUARTUS_VERSION "26.1.0 Pro Edition"
