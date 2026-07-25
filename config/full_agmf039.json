@@ -1,0 +1,40 @@
+{
+  "name": "full_agmf039",
+  "description": "Full-device configuration for AGMF039R47B1E1VC. Quartus benchmark, seed sweeps, timing closure.",
+  "spec_reference": "SPEC.md 11 (Full AGMF039), SPEC.md 3 (nominal full-scale configuration)",
+  "schema_version": 1,
+  "purpose": [
+    "Full-device Quartus benchmark",
+    "Short full-scale Verilator smoke tests",
+    "Seed sweeps",
+    "Timing-closure optimization"
+  ],
+  "sized_params": [
+    "N_ANTENNAS",
+    "SAMPLES_PER_CYCLE",
+    "FFT_SIZE",
+    "PFB_TAPS",
+    "N_BEAMS",
+    "HISTORY_FRAMES",
+    "PACKET_W"
+  ],
+  "invariant_params": [
+    "SAMPLE_W",
+    "COEFF_W",
+    "POWER_W",
+    "N_VIRTUAL_CHANS"
+  ],
+  "params": {
+    "N_ANTENNAS": 16,
+    "SAMPLES_PER_CYCLE": 8,
+    "FFT_SIZE": 1024,
+    "PFB_TAPS": 16,
+    "N_BEAMS": 16,
+    "HISTORY_FRAMES": 512,
+    "PACKET_W": 512,
+    "SAMPLE_W": 16,
+    "COEFF_W": 16,
+    "POWER_W": 40,
+    "N_VIRTUAL_CHANS": 4
+  }
+}

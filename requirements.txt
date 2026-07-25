@@ -1,0 +1,11 @@
+# Python dependencies for scripts/ and model/python/.
+# Canonical interpreter: WSL Ubuntu-24.04 python3 (3.12).
+#
+# Keep this minimal: add a dependency in the issue that first imports it, never in
+# advance. Pin only when a version difference would change generated data.
+#
+# Install:  python3 -m pip install -r requirements.txt
+
+# Vector generation, coefficient generation, and reference-model support
+# (model/python/, scripts/generate_coefficients.py).
+numpy>=1.26

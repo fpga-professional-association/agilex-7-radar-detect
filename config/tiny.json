@@ -1,0 +1,40 @@
+{
+  "name": "tiny",
+  "description": "Smallest elaboration. Unit tests, fast lint, fast randomized simulation, debug traces.",
+  "spec_reference": "SPEC.md 11 (Tiny)",
+  "schema_version": 1,
+  "purpose": [
+    "Unit tests",
+    "Fast lint",
+    "Fast randomized simulation",
+    "Debug traces"
+  ],
+  "sized_params": [
+    "N_ANTENNAS",
+    "SAMPLES_PER_CYCLE",
+    "FFT_SIZE",
+    "PFB_TAPS",
+    "N_BEAMS",
+    "HISTORY_FRAMES",
+    "PACKET_W"
+  ],
+  "invariant_params": [
+    "SAMPLE_W",
+    "COEFF_W",
+    "POWER_W",
+    "N_VIRTUAL_CHANS"
+  ],
+  "params": {
+    "N_ANTENNAS": 2,
+    "SAMPLES_PER_CYCLE": 1,
+    "FFT_SIZE": 64,
+    "PFB_TAPS": 4,
+    "N_BEAMS": 2,
+    "HISTORY_FRAMES": 4,
+    "PACKET_W": 64,
+    "SAMPLE_W": 16,
+    "COEFF_W": 16,
+    "POWER_W": 40,
+    "N_VIRTUAL_CHANS": 4
+  }
+}

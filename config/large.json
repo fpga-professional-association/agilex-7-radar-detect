@@ -1,0 +1,39 @@
+{
+  "name": "large",
+  "description": "Pre-synthesis integration size. Longer stress tests and early Quartus calibration.",
+  "spec_reference": "SPEC.md 11 (Large)",
+  "schema_version": 1,
+  "purpose": [
+    "Pre-synthesis integration",
+    "Longer stress tests",
+    "Early Quartus calibration"
+  ],
+  "sized_params": [
+    "N_ANTENNAS",
+    "SAMPLES_PER_CYCLE",
+    "FFT_SIZE",
+    "PFB_TAPS",
+    "N_BEAMS",
+    "HISTORY_FRAMES",
+    "PACKET_W"
+  ],
+  "invariant_params": [
+    "SAMPLE_W",
+    "COEFF_W",
+    "POWER_W",
+    "N_VIRTUAL_CHANS"
+  ],
+  "params": {
+    "N_ANTENNAS": 8,
+    "SAMPLES_PER_CYCLE": 4,
+    "FFT_SIZE": 1024,
+    "PFB_TAPS": 16,
+    "N_BEAMS": 8,
+    "HISTORY_FRAMES": 64,
+    "PACKET_W": 256,
+    "SAMPLE_W": 16,
+    "COEFF_W": 16,
+    "POWER_W": 40,
+    "N_VIRTUAL_CHANS": 4
+  }
+}
