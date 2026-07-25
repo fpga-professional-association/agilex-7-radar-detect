@@ -34,10 +34,11 @@ Header comments are parsed, not decoration:
 | Key | Meaning |
 |---|---|
 | `schema` | format version; a reader that does not recognise it fails |
-| `kind` | `ops` or `accum` |
+| `kind` | `ops`, `accum` or `cmult` |
 | `rounding_mode` | `nearest_even` or `half_up`; a build whose `FXP_ROUND_MODE` disagrees fails immediately rather than "passing" against whichever implementation matches |
 | `seed` | the generator seed that produced the file |
 | `count` | number of records; a truncated file fails rather than passing short |
+| `prod_w` | `cmult` only: width of the exact full-precision product. A build whose `fxp::cmult::kCmulProdW` disagrees fails rather than "passing" against whichever implementation matches |
 
 ### `fxp_ops.vec` — combinational operations
 
@@ -76,6 +77,41 @@ Sequence families: `climb_*` / `bounce_*` / `recover_*` cross overflow in both
 directions; `policy_*` accumulate worst-case Q1.15 products at the `acc_w(32, N)` policy
 width and must never saturate; `no_growth_32` is the counter-example with the growth bits
 omitted; `walk_w*` are seeded random walks.
+
+### `cmult.vec` — complex multiplier (issue #9)
+
+```text
+# columns: id a_re a_im b_re b_im p_re p_im y_re y_im flags_re flags_im
+cm_m1_m1_m1_m1 -32768 -32768 -32768 -32768 0 2147483648 0 32767 0 2
+```
+
+One record per operand pair, carrying **both** observable output formats of
+`rtl/common/complex_multiplier.sv`, so one file proves the `ROUND_OUT = 1` and the
+`ROUND_OUT = 0` build:
+
+| Field | Meaning |
+|---|---|
+| `a_re`, `a_im`, `b_re`, `b_im` | the two complex operands, Q1.15 per component |
+| `p_re`, `p_im` | the **exact** full-precision product, `prod_w = 33` bits (Q3.30). Never saturates and has no flags |
+| `y_re`, `y_im` | the rounded Q1.15 product |
+| `flags_re`, `flags_im` | packed saturation flags per component: `sat_pos << 1 \| sat_neg` |
+
+The line above is the record a reader should look at first. It is `(-1-1j) x (-1-1j)`, whose
+imaginary part is `+2^31` — one past the top of a signed 32-bit field, which is the whole
+reason the full-precision port is 33 bits — and which then rounds to `+2^16` and saturates
+to `0x7FFF` with `sat_pos`.
+
+Families: `cm_*` is the 144-pair grid of every ordered pair of twelve corner operands;
+`cmb_*` sweeps the round-then-saturate boundary one LSB at a time in both directions, through
+both tie directions; `cms_*` puts each of the three Karatsuba pre-adders at its own extreme;
+`cmu_*` multiplies by the near-unit values `±1` and `±j`; `cml_*` is every single-LSB sign
+combination; `cmr_*` is the seeded random set.
+
+The generator asserts two properties for **every** record as it writes it, so producing the
+file re-proves them over the whole set: that the three-real-multiply factorization gives the
+same integers as the four-real-multiply form, and that the exact product is representable in
+`prod_w` bits. The statistical argument is made at run time instead — `sim/tests/test_cmult.cpp`
+draws at least 24 000 fresh pairs per seed — so this file stays a reviewable size.
 
 ## Changing these files
 

@@ -74,9 +74,42 @@ TODO — populated by issue #6.
 
 TODO — populated by issue #15.
 
-### 3.5 DSP kernels (`rtl/pfb/`, `rtl/fft/`, `rtl/beamformer/`, `rtl/covariance/`, `rtl/cfar/`)
+### 3.5 DSP kernels (`rtl/common/`, `rtl/pfb/`, `rtl/fft/`, `rtl/beamformer/`, `rtl/covariance/`, `rtl/cfar/`)
 
-TODO — populated by issues #9–#14.
+The first Phase 2 kernel lives under `rtl/common/` rather than in one of the block
+directories, because it belongs to all of them: the FIR lane, the PFB, the FFT butterfly
+and the beamforming dot product are each built out of it, and none of them owns it.
+
+| Path | Parameters | Issue | Function |
+|---|---|---|---|
+| `rtl/common/complex_multiplier.sv` | `VARIANT` (`"MULT4"` / `"MULT3"`), `PIPE_STAGES` 1–5, `ROUND_OUT` | #9 | The SPEC §6 complex product in both required forms, bit-identical. Exact 33-bit Q3.30 output always; rounded Q1.15 output with `fxp_flags_t` saturation flags when `ROUND_OUT = 1`. Fixed-latency valid pipeline, no ready. Latency == `PIPE_STAGES`. |
+
+Simulation-only and synthesis-only companions, listed here because they belong to the same
+contract:
+
+| Path | Parameters | Issue | Function |
+|---|---|---|---|
+| `sim/verilator/tops/cmult_top.sv` | none | #9 | Verification top holding the whole parameter space at once: both variants at every legal `PIPE_STAGES`, plus the `ROUND_OUT = 0` pair. One stimulus port, an observation mux, and a parameter echo the test reads the latency expectation from. |
+| `sim/assertions/cmult_assertions.sv` | `PIPE_STAGES`, `ROUND_OUT`, `PROD_W` | #9 | The SPEC §14 property set for a matched MULT4/MULT3 pair; see VERIFICATION_PLAN.md §5.9. |
+| `quartus/calibration/cmult_wrap.sv` | `VARIANT_SEL`, `PIPE_STAGES`, `ROUND_OUT` | #9 | Synthesis wrapper for the SPEC §18 calibration sweep: one boundary register layer on each side of the kernel, so the measured paths are register-to-register fabric paths rather than I/O paths. Not simulation RTL, but listed in `files_cmult.f` so `make lint` covers it. |
+
+**Interface shape, and why it has no `ready`.** The multiplier is a fixed-latency
+arithmetic kernel, not a stream stage: `valid_in` in, `valid_out` `PIPE_STAGES` cycles
+later, no backpressure. Backpressure is a block-level concern and is provided by the
+SPEC §5 primitives in `rtl/stream/` when the kernel is wrapped into a lane. Putting a ready
+chain here would put `m_ready` on the enable of every DSP register, which is exactly what
+SPEC §23 warns against and what would stop Quartus retiming the pipeline. The datapath
+registers are consequently free-running and unreset; only the valid chain is reset — "reset
+validity, not every datapath bit".
+
+**Pipeline shape.** Five register locations, switched on in a fixed priority order —
+operands, multiplier outputs, post-adder, results, pre-adders — so that latency equals
+`PIPE_STAGES` exactly for both variants at every legal value. The order puts the two
+registers a DSP block owns natively first, so at `PIPE_STAGES = 2` the whole multiply sits
+inside the block and the fabric sees only the post-adder. The full table and its rationale
+are in the module header and in DECISIONS.md (issue #9).
+
+Issues #10–#14 populate the block directories and consume this module.
 
 ### 3.6 Packet fabric (`rtl/packet/`)
 
@@ -242,5 +275,20 @@ TODO — populated by issue #2 (config plumbing into the build) and issue #20.
 
 ## 8. Latency and throughput budget
 
-TODO — populated per block by the implementing issues; consolidated by issue #17 and
+| Block | Latency (cycles) | Throughput | Issue |
+|---|---|---|---|
+| `stream_skid_buffer` | 1 | 1 beat/cycle | #5 |
+| `stream_elastic_buffer` | 1 | 1 beat/cycle at any `DEPTH >= 2` | #5 |
+| `stream_pipe` | `STAGES + 1` | 1 beat/cycle for `OUT_DEPTH >= STAGES + 2` | #5 |
+| `stream_loopback` | 3 | 1 beat/cycle | #2, #5 |
+| `complex_multiplier` | `PIPE_STAGES` (1–5) | 1 operand pair/cycle, no backpressure | #9 |
+
+`complex_multiplier`'s latency is exactly its parameter, by construction and for both
+variants — the register-location priority order is chosen so that the enables sum to
+`PIPE_STAGES`. It is measured from the RTL rather than assumed: `sim/tests/test_cmult.cpp`
+drives one isolated beat into each elaborated instance, counts edges to `valid_out`, and
+compares against the `cfg_pipe_stages` the top echoes back from the instance's own
+parameter. A block composing this kernel can therefore treat the number as a contract.
+
+TODO — remaining blocks populated by the implementing issues; consolidated by issue #17 and
 issue #20.

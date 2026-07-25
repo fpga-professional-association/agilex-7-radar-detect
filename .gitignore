@@ -63,3 +63,18 @@ sim/verilator/generated/
 # source of truth generates, so they cannot drift. The machine-readable
 # results/regmap/regmap.json IS generated output and is covered by the
 # results/*/* rule above. See DECISIONS.md (issue #7, decision 2).
+
+# SPEC 18 calibration sweep working copies (scripts/run_calibration.py).
+#
+# Each point compiles in its own copy of quartus/calibration/, placed two levels
+# below the repository root so the ../../rtl paths in the copied qsf still
+# resolve. The copies are deleted after each point unless --keep-work is given;
+# these patterns are the safety net, and they also cover a compile run by hand
+# inside the tracked calibration project.
+results/calib_*/
+quartus/calibration/output_files/
+quartus/calibration/qdb/
+quartus/calibration/db/
+quartus/calibration/dni/
+quartus/calibration/incremental_db/
+quartus/calibration/tmp-clearbox/

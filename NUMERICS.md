@@ -133,13 +133,29 @@ real = a_re*b_re - a_im*b_im
 imag = a_re*b_im + a_im*b_re
 ```
 
-Both partial products are summed at full Q2.30 precision and the result is rounded
-**once**, at the output. Rounding each partial product first would double the
-quantisation noise and would not match the model. SPEC §6 also requires an optional
-three-real-multiply variant for the Quartus DSP/ALM comparison; that is an arithmetic
-restructuring of the *same* numerics and belongs to the kernel that uses it (issues #11,
-#12). It must produce this exact result, bit for bit, and proving so is that issue's
-gate — not a licence to round differently.
+Both partial products are summed at full precision and the result is rounded **once**, at
+the output. Rounding each partial product first would double the quantisation noise and
+would not match the model. SPEC §6 also requires an optional three-real-multiply variant
+for the Quartus DSP/ALM comparison; that is an arithmetic restructuring of the *same*
+numerics, it must produce this exact result bit for bit, and it is not a licence to round
+differently. Both variants landed with issue #9 as `rtl/common/complex_multiplier.sv`;
+see §9.0.
+
+**The two-term sum does not fit Q2.30.** Stated here because it is the one place where
+"a Q1.15 product is 32 bits" stops being enough, and a reader who assumes otherwise
+writes a 32-bit port:
+
+```text
+imag((-1.0 - 1.0j) x (-1.0 - 1.0j)) = (-2^15)(-2^15) + (-2^15)(-2^15) = +2^31
+```
+
+`+2^31` is one past the top of a signed 32-bit field. The exact sum of two Q1.15 products
+therefore needs `acc_w(32, 2) = 33` bits — the general growth rule of §7, whose bound is
+**tight** in this case rather than conservative — and the format is Q3.30: thirty
+fractional bits, three integer bits including the sign. Nothing is lost and nothing
+saturates at that width. Saturation enters only on the way back to Q1.15, and on exactly
+this input pair: `+2^31 >> 15 = +2^16` rounds to 65536 and clamps to `0x7FFF` with
+`sat_pos`.
 
 ## 4. Rounding policy
 
@@ -393,6 +409,44 @@ exercised: `telemetry_top` carries three deliberately 8-bit counters for exactly
 Each kernel issue fills in its own subsection. Every one of them is bound by §§2–8: the
 subsections below say *which* formats a block consumes and produces and *where* its one
 quantisation point sits — never a different rounding rule.
+
+### 9.0 Complex multiplier (issue #9)
+
+`rtl/common/complex_multiplier.sv`. The kernel every later block multiplies with, so its
+contract is stated first and the blocks below inherit it.
+
+| | |
+|---|---|
+| Consumes | two `fxp_complex_t`, Q1.15 per component |
+| Produces (exact) | `p_re` / `p_im`, **Q3.30 in `FXP_PROD_W + 1 = 33` bits**, never saturates, no flags |
+| Produces (quantised) | `y_re` / `y_im`, Q1.15, present when `ROUND_OUT = 1` |
+| Quantisation point | exactly one, at the output: `fxp_round_sat(p, FXP_PROD_SHIFT, FXP_SAMPLE_W)` |
+| Flags | `fxp_sat_flags(fxp_round(p, FXP_PROD_SHIFT), FXP_SAMPLE_W)` per component, plus their OR as `ovf` |
+| Latency | `PIPE_STAGES` cycles exactly, for both variants, for every legal value |
+
+Two arithmetic realisations, **bit-identical by construction**:
+
+```text
+MULT4   re = a_re*b_re - a_im*b_im            4 x (16 x 16 -> 32b), 2 post-adds
+        im = a_re*b_im + a_im*b_re
+
+MULT3   k1 = a_re * (b_re + b_im)             3 x (16 x 17 -> 33b), 3 pre-adds,
+        k2 = b_im * (a_re + a_im)             2 post-adds
+        k3 = b_re * (a_im - a_re)
+        re = k1 - k2      im = k1 + k3
+```
+
+The MULT3 identities are identities in **Z**: distributivity and cancellation of integer
+terms, no division and no rounding, so they hold bit-exactly in two's complement provided
+no intermediate wraps. The width discharge is `|pre-add| <= 2^16` (17 bits), `|k| <= 2^31`
+(33 bits), `|k1 ± k2,3| = |result| <= 2^31` (33 bits). The RTL forms the post-adder one bit
+wider than the output and casts down; both the cast and the whole core are checked against
+`fxp_pkg`'s canonical four-multiply definition by in-module assertions on every simulated
+cycle. See VERIFICATION_PLAN.md §5.9 and DECISIONS.md (issue #9).
+
+The **choice** between the two, and the choice of `PIPE_STAGES`, is a SPEC §18 measurement,
+not a numerical question: both give the same bits. See `results/synthesis/calibration_cmult.json`
+and the table in DECISIONS.md.
 
 ### 9.1 Polyphase FIR bank
 

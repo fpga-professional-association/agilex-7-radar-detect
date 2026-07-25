@@ -1092,3 +1092,270 @@ the register plane and needs `rtl/control/`, which `files.f` does not carry unti
 brings the whole plane into `benchmark_sim_top`; until then it is linted through
 `files_telemetry.f`, which `make lint` runs as step 7 of 7. `sim-tiny` grows two tests and one
 top, not a new entry point — the arrangement issues #4, #5, #6 and #7 each used.
+
+## 2026-07-25 — Complex multiplier: full-precision width, Karatsuba exactness, pipeline shape, calibration methodology  (issue #9)
+
+Context: SPEC §6 defines the four-real-multiply complex product and requires an optional
+three-real-multiply variant "parameterized so Quartus results can compare" DSP consumption,
+ALM consumption, pipeline depth, routing pressure, Fmax and power. SPEC §18 requires the
+kernel to be synthesized on its own, before the full design, with those quantities measured
+rather than argued. This is the first Phase 2 kernel and the first entry in the calibration
+database; the FIR lane, the PFB, the FFT butterfly and the beamforming dot product are all
+built out of it, so what is decided here is decided for every kernel that follows.
+
+**Decision 1 — the full-precision output is 33 bits, not 32, and it is exact.** A single
+Q1.15 × Q1.15 product is Q2.30 in 32 bits and that is where most descriptions stop. The
+*sum* of two of them is not:
+
+```text
+imag((-1.0 - 1.0j) x (-1.0 - 1.0j)) = (-2^15)(-2^15) + (-2^15)(-2^15) = +2^31
+```
+
+`+2^31` is one past the top of a signed 32-bit field. `fxp_pkg`'s own accumulator-width
+policy already says so — `fxp_mac_q15_acc_w(2) = 32 + ceil(log2 2) = 33` — and this is the
+case where that bound is **tight** rather than conservative by a bit. So `p_re` / `p_im` are
+33 bits, Q3.30, and they never saturate and carry no flags.
+
+The alternative — call the port Q2.30, clamp, and set a flag — was rejected. It makes the
+"full precision" output not full precision, it puts a saturation event on the one input pair
+a reviewer is most likely to try first, and it would silently change the numerics of every
+accumulation tree that sums these products, because a saturated addend is not associative.
+The port width is written as `[FXP_PROD_W:0]` and checked against `fxp_mac_q15_acc_w(2)` at
+elaboration, so it moves if the format ever does. Rounding to Q1.15 is unaffected and is a
+single `fxp_round_sat` at the output; it saturates on exactly the pair above.
+
+**Decision 2 — the three-multiply form is Karatsuba/Gauss, and its exactness is a ring
+identity, not a tolerance.** The factorization is
+
+```text
+k1 = a_re * (b_re + b_im)
+k2 = b_im * (a_re + a_im)
+k3 = b_re * (a_im - a_re)
+re = k1 - k2            im = k1 + k3
+```
+
+Expanding: `k1 - k2 = a_re*b_re + a_re*b_im - a_re*b_im - a_im*b_im = a_re*b_re - a_im*b_im`,
+and `k1 + k3 = a_re*b_re + a_re*b_im + a_im*b_re - a_re*b_re = a_re*b_im + a_im*b_re`. Every
+step is distributivity and cancellation of **integer** terms — no division, no rounding — so
+the identities hold in **Z** and therefore bit-exactly in two's complement, *provided no
+intermediate wraps*. That proviso is the only real obligation, and it is a statement about
+widths:
+
+| term | bound | width |
+|---|---|---|
+| operands | 2^15 | 16 |
+| `b_re+b_im`, `a_re+a_im`, `a_im-a_re` | 2^16 | 17 |
+| `k1`, `k2`, `k3` | 2^15 · 2^16 = 2^31 | 33 |
+| `k1-k2`, `k1+k3` (= the result) | 2^31 | 33 |
+
+The last row is where a naive bound says 34, and where relying on the reviewer being right
+would be a mistake. So the RTL **forms the post-adder at 34 bits and casts down to 33**, and
+a simulation-only assertion checks that the cast is lossless on every cycle. A second pair of
+assertions compares the whole arithmetic core against `fxp_pkg::fxp_cmul_q15_re_raw` and
+`_im_raw` — the package's canonical four-multiply definition — using a shadow copy of the
+operands delayed to the same pipeline level. That is the exactness claim checked against the
+*package*, not against a second copy of the same algebra.
+
+There are three further independent statements of the same fact, because one proof of an
+identity that everything downstream depends on is not enough: the C++ model writes the two
+paths out separately and `test_fxp_vectors` agrees them over the 6561-pair Q1.15 corner grid
+and 200 000 pseudo-random pairs; the NumPy generator asserts the agreement for every one of
+the 864 committed vectors as it writes them; and `cmult_assertions` compares the two RTL
+variants bit-for-bit on every valid beat of every simulation.
+
+The alternative factorization — the one that computes `(a_re+a_im)(b_re+b_im)` and subtracts
+both cross terms — was not chosen. It needs the *same* three multiplies, but one of its
+multiplies has a sum on **both** operands, i.e. a 17×17 product rather than 16×17. That is
+one more bit on the multiplier for no arithmetic gain, and on a device whose DSP is natively
+18×19 it is exactly the bit that would push an operand out of the native width.
+
+**Decision 3 — five register locations, enabled in a fixed priority order, so latency *is*
+the parameter.** `PIPE_STAGES` selects which of five cut points are registered:
+
+| `PIPE_STAGES` | 1 | 2 | 3 | 4 | 5 |
+|---|---|---|---|---|---|
+| `REG_IN` operands | on | on | on | on | on |
+| `REG_MULT` products | | on | on | on | on |
+| `REG_POST` sums | | | on | on | on |
+| `REG_OUT` results | | | | on | on |
+| `REG_PRE` pre-adds | | | | | on |
+
+The enables sum to `PIPE_STAGES`, so latency equals the parameter exactly, for both variants,
+at every legal value — which is what lets the calibration sweep compare *arithmetic* rather
+than comparing pipeline depths that happen to differ between variants, and what lets a block
+composing this kernel treat the number as a contract rather than looking it up in a table.
+
+The order is not arbitrary. `REG_IN` and `REG_MULT` come first because they are the two
+registers a DSP block owns natively (SPEC §23, "provide registers on both sides of DSP-heavy
+operations"): at `PIPE_STAGES = 2` the entire multiply is inside the block and the fabric
+sees only the post-adder. `REG_POST` is next because the post-adder is the widest fabric
+arithmetic in the module. `REG_OUT` is next because it keeps the rounding network — the one
+place a carry chain crosses 33 bits, and, as the sweep confirms, the critical path — off the
+path into whatever consumes the kernel. `REG_PRE` is last because only MULT3 has anything to
+put there; for MULT4 it is a second operand register, which is not wasted (HyperFlex can
+retime it forward) but is not the first stage worth spending.
+
+**Decision 4 — no `ready`, and no reset on the datapath.** This is a fixed-latency arithmetic
+kernel, not a stream stage. Backpressure is a block-level concern and is provided by the
+SPEC §5 primitives in `rtl/stream/` when the kernel is wrapped into a lane. A ready chain
+here would put `m_ready` on the enable of every DSP register — a broad clock enable feeding
+registers Quartus can then no longer retime freely, which is precisely what SPEC §23 warns
+against. The datapath registers are therefore free-running with no enable, and only the valid
+chain is reset: "reset validity, not every datapath bit". A beat's outputs are meaningful when
+`valid_out` is high and are don't-care otherwise.
+
+**Decision 5 — the calibration probe constraint is 600 MHz, deliberately above the target.**
+`quartus/calibration/cmult_calib.sdc` constrains the calibration project at 1.666 ns
+(600.24 MHz) while SPEC §2's target, and `quartus/constraints/clocks.sdc`, stay at 450 MHz.
+
+A Fitter that meets its constraint stops optimising: it reports positive slack, takes whatever
+placement was good enough, and the reported Fmax becomes a statement about the constraint. On
+a two-DSP design every point of a 450 MHz sweep would come back "met" and the sweep would have
+measured nothing — which is exactly the "theoretical DSP-count arithmetic" SPEC §18 forbids
+building on. Constraining above the achievable range makes every point fail, pushes every
+point as hard as the Fitter knows how, and makes the reported Fmax a measurement of a
+critical path.
+
+This is not SPEC §24's prohibition in reverse. §24 forbids *lowering* a requested clock after
+seeing a poor result, to make a benchmark look better. This *raises* it, before any result
+exists, in a project that is not the benchmark and whose output is a measurement. The
+benchmark's own constraint is untouched, and every calibration record carries both numbers.
+
+**Decision 6 — the calibration Fmax is the register-to-register number, and Quartus's own
+whole-design figure is recorded beside it rather than instead of it.** Measured during
+development: on a virtual-pin harness the worst setup path is always an *output port* path,
+at about −1.33 ns against a 1.666 ns period, and essentially all of it is clock skew of about
+−2.5 ns. The reason is structural: a port is timed against the clock at the `clk` pin, while
+the register driving it sees the clock after the global network's insertion delay. No fitter
+can fix that, and in the real design there is nothing to fix — the block on the other side of
+this boundary is on the same clock network and sees the same insertion delay.
+
+So `timing.fmax_mhz` in each record is computed from the worst setup slack over paths whose
+two ends are both registers, and `timing.quartus_restricted_fmax_mhz` carries Quartus's
+unaltered whole-design figure under a name that says what it is. Nothing is relaxed to
+achieve this: no false path, no multicycle path, no clock group, and the ports stay fully
+constrained — every record checks `unconstrained_paths == 0`. Each record also carries the
+source and destination of the measured path and a `critical_path_in_kernel` flag, so "this
+number is about the kernel" is checked rather than assumed.
+
+**Decision 7 — the sweep is pruned to ten points, in the open.** The full matrix is
+{MULT4, MULT3} × `PIPE_STAGES` {2,3,4,5} × `ROUND_OUT` {1,0} = 16 compiles, and one compile of
+this project on AGMF039R47B1E1VC measures at about nine minutes. The pipeline axis is swept
+fully for both variants at `ROUND_OUT = 1` (8 points), and the output-format axis is measured
+at `PIPE_STAGES = 4` only (2 points), because rounding is a fixed combinational network
+hanging off the post-adder register and does not interact with how many stages precede it —
+measuring it at every depth would buy four copies of one number. The pruning and its reason
+live in the matrix table in `scripts/run_calibration.py`, beside the points themselves, rather
+than in a commit message.
+
+**Decision 8 — the sweep compiles in a copy of the calibration project, always.** Quartus
+exports its in-memory assignment database over the qsf on `project_close`, so even a
+read-only STA run writes `LAST_QUARTUS_VERSION` and three power-management defaults into a
+hand-maintained tracked file; and a compile leaves `db/`, `qdb/` and `output_files/` behind.
+Both were observed during development. Each point therefore compiles in its own copy at
+`results/calib_<kernel>_<point>/` — two levels below the repository root, exactly like
+`quartus/calibration/`, so the `../../rtl` paths in the copied qsf still resolve to the same
+sources — and `quartus/calibration/` stays byte-identical to what a clean checkout has. The
+copy is also what makes `--jobs > 1` possible, since two compiles cannot share a project
+database.
+
+Note the consequence for parameter passing: the compile phase must **let** Quartus export the
+assignment database, because that export is how a `set_parameter` value reaches the
+`quartus_syn` process. `-dont_export_assignments` — which `quartus/scripts/compile.tcl` uses
+as its primary defence — would silently discard the swept parameters. The byte-level
+snapshot/restore is therefore the primary defence here rather than the backup one, and every
+record carries the parameters Quartus reported having elaborated, so a sweep whose parameters
+did not apply shows up as a mismatch rather than as ten identical results.
+
+### Measured calibration data (SPEC §18, seed 1)
+
+Seed 1, AGMF039R47B1E1VC, Quartus Prime Pro 26.1.0 Build 110, probe constraint 600.24 MHz.
+Full records in `results/synthesis/calibration_cmult.json` (generated, not committed).
+
+| variant | stages | out | DSP needed | DSP placed | DSP mode | mults | ALM (total) | ALM (kernel) | regs (design/hyper) | Fmax MHz | depth | fit s |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| MULT4 | 2 | rounded | 2 | 2 | 2x sum of two 18x18 | 4 | 151 | 54.2 | 107 / 104 | 517.1 | 3 | 495 |
+| MULT3 | 2 | rounded | 2 | 3 | 3x two independent 18x18, 3x pre-adder | 3 | 186 | 88.8 | 107 / 104 | 367.2 | 4 | 506 |
+| MULT4 | 3 | rounded | 2 | 2 | 2x sum of two 18x18 | 4 | 187 | 91.1 | 108 / 104 | 490.2 | 3 | 507 |
+| MULT3 | 3 | rounded | 2 | 3 | 3x two independent 18x18, 3x pre-adder | 3 | 215 | 118.3 | 240 / 236 | 418.9 | 4 | 484 |
+| MULT4 | 4 | rounded | 2 | 2 | 2x sum of two 18x18 | 4 | 192 | 102.0 | 273 / 140 | 715.3* | 1 | 498 |
+| MULT3 | 4 | rounded | 2 | 3 | 3x two independent 18x18, 3x pre-adder | 3 | 220 | 126.4 | 405 / 271 | 483.6 | 5 | 487 |
+| MULT4 | 5 | rounded | 2 | 2 | 2x sum of two 18x18 | 4 | 197 | 105.4 | 383 / 173 | 742.4* | 2 | 530 |
+| MULT3 | 5 | rounded | 2 | 3 | 3x two independent 18x18, 3x pre-adder | 3 | 220 | 125.3 | 339 / 138 | 713.8* | 1 | 487 |
+| MULT4 | 4 | full | 2 | 2 | 2x sum of two 18x18 | 4 | 88 | 1.2 | 138 / 133 | 1302.1* | 0 | 497 |
+| MULT3 | 4 | full | 2 | 3 | 3x two independent 18x18, 3x pre-adder | 3 | 126 | 40.2 | 238 / 133 | 909.1* | 1 | 470 |
+
+`*` = the register-to-register paths met the 600 MHz probe, so that Fmax is a lower bound rather than a measured limit.
+
+**The three-multiply form saves a multiplier and does not save a DSP block.** That is the
+whole reason SPEC 18 exists, and it is the opposite of what the arithmetic suggests.
+
+Quartus maps MULT4's four 16x16 multiplies into **two** DSP blocks in `Sum of Two 18x18`
+mode: the block's native two-multiplier-with-shared-adder mode absorbs both the multiplies
+*and* the post-adder for one output component, and two blocks cover both components. MULT3's
+three multiplies go into **three** blocks in `Two Independent 18x18` mode — one product per
+adder, so they cannot share — with the three Karatsuba pre-adders landing in the block's
+`Fixed Point Dedicated Pre-Adder` rather than in ALMs. The Fitter estimates one of the three
+is recoverable by dense merging, so it reports "DSP Blocks Needed = 2" for both variants, but
+it *places* three for MULT3 and two for MULT4.
+
+The saving a three-multiply form buys is a saving in **multipliers**, and this block's
+granularity is two multipliers with one adder. Three multiplies therefore cannot occupy fewer
+than two blocks — and MULT4's four already fit in two.
+
+**What MULT3 pays instead is the post-adders.** Because its three products come out of three
+separate blocks, `k1-k2` and `k1+k3` must be built in fabric at 33 bits. The `full` pair
+isolates that cost exactly, with the rounding network removed from both:
+
+| | ALM (kernel entity) | Fmax |
+|---|---|---|
+| MULT4, 4 stages, full-precision out | **1.2** | >= 1302 MHz |
+| MULT3, 4 stages, full-precision out | **40.2** | >= 909 MHz |
+
+MULT4's kernel is essentially *nothing but two DSP blocks*. MULT3's 39 extra ALMs are two
+34-bit fabric adders at roughly half an ALM per bit, which is what they should cost. The same
+gap appears at every rounded depth (+29 to +35 total ALMs), and MULT3 is slower at every
+depth: -150 MHz at 2 stages, -71 at 3, -232 at 4, -29 at 5.
+
+**The rounding network, not the multiply, is the critical path.** MULT4 at 4 stages costs
+102.0 kernel ALMs and reaches 715 MHz with `ROUND_OUT = 1`; the same point with
+`ROUND_OUT = 0` costs 1.2 kernel ALMs and reaches at least 1302 MHz. Rounding and saturating
+two 33-bit values to Q1.15 is therefore about a hundred ALMs and roughly half the achievable
+clock — considerably more than the arithmetic it follows. That is a measurement of what
+NUMERICS.md 7 already required on numerical grounds ("no intermediate saturation inside an
+accumulation tree"): a FIR lane or a beamformer dot product must carry the full-precision
+port through the accumulation and round **once** at the end, and now the cost of getting that
+wrong has a number.
+
+**Retiming.** Every point reports the same Fitter limiting reason — `Path Limit`, "Retiming
+has used all available register locations in the critical chain path" — i.e. the Hyper-Retimer
+did everything it could and the remaining delay is combinational. It is visibly working: at
+`PIPE_STAGES = 2` the kernel holds 2 dedicated registers (the valid chain; every datapath
+register is inside the DSP), while at 4 and 5 the retimer has spread 200-332 registers, most
+of them Hyper-Registers, across the kernel. The Design Assistant flags one rule on this
+design, `RES-10201 Power Up Don't Care Setting May Prevent Retiming`, which is the expected
+consequence of deliberately not resetting the datapath (decision 4) and is recorded rather
+than acted on.
+
+**Decision 9 — the default for downstream kernels.** **MULT4 at `PIPE_STAGES = 4` is the default, and the module's parameter defaults now say so.**
+
+MULT4 wins on every measured axis: same DSP blocks needed, fewer placed, 29-35 fewer ALMs,
+and faster at every pipeline depth. Nothing in the sweep argues for MULT3 on this device.
+
+`PIPE_STAGES = 4` rather than 3: at 3 the kernel reaches 490 MHz against SPEC 2's 450 MHz
+target — inside the target, but with no margin for the logic a real lane puts around it — and
+at 4 it clears the 600 MHz probe outright at a cost of 11 kernel ALMs and one cycle of
+latency. The fourth stage is the output register, and the sweep shows that is the one that
+takes the rounding network off the path into the consumer.
+
+Downstream kernels that accumulate should instantiate it with `ROUND_OUT = 0`, carry the
+33-bit exact port through the accumulation, and quantise once at the end. That is what
+NUMERICS.md 7 requires numerically, and the sweep prices it at about a hundred ALMs and half
+the clock per avoided rounding.
+
+**MULT3 stays.** It is not dead code and it is not kept out of politeness to SPEC 6. The
+result above is a property of *this* block's granularity at *these* operand widths: a kernel
+whose coefficients push an operand past the native 18x19 multiplier — a wider coefficient
+format, or a complex multiply feeding a 27x27 mode — changes which side of the trade wins,
+and the sweep that answers that question is one matrix entry away. What the sweep has settled
+is the default, not the parameter.

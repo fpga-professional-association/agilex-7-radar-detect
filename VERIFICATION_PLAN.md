@@ -110,6 +110,7 @@ expected numerical values.
 | CDC assertion set (issue #6) | `sim/tests/test_cdc_assertions.cpp` | one clean mode, four violating modes | first pointer step; first handshake | n/a (deterministic injection) | reset before every mode | n/a | the set under test; each mode names the assertion it must provoke |
 | `perf_counter` + `telemetry_block` (issue #8) | `sim/tests/test_perf_counters.cpp` | count, gate, clear and snapshot on 8-bit probes; traffic counted exactly against a harness tally; injected overflow, saturation and CDC events; FIFO high-water against the FIFO's own tracker | SPEC §13.4 wrap: 300 events into an 8-bit modulo counter, the same into a saturating one, and a weighted counter that steps *over* the boundary rather than landing on it; a coherent 21-register sweep taken while traffic runs | 40 frames of randomized traffic at heavy/bursty backpressure interleaved with randomized register access, snapshots, clears and event injection, then a full window dump | reset re-run before three of the nine passes; every reset default re-read; `ENABLE`/`CLEAR` exercised as a second, software-visible reset | heavy source and bursty sink; the stall counter is required to be non-zero, so a pass in which nothing stalled is a failed pass | `telemetry_assertions` inside every `perf_counter`: gate, clear, shadow-holds, shadow-latched, shadow-valid, sticky wrap, and the mode-specific saturating/modulo pair. Live counters compared with the tally, and all three probes with `telemetry::CounterModel`, on **every cycle** |
 | `seq_checker` (issue #8) | `sim/tests/test_seq_checker.cpp` | gap, duplicate, reorder and untracked each injected alone and required to land in its own category with its own count; nominal traffic required to produce exactly zero | the duplicate/reorder boundary (one behind against two behind); a gap of one; `0xFFFF -> 0x0000` in order, and a gap, a duplicate and a reorder that straddle it | ~500 beats carrying ~16% deliberate faults of all four kinds, against `telemetry::SeqTrackerModel` | reset re-run before seven of the nine passes; `SEQ_ENABLE` low then high checked to re-initialise rather than report a loss | n/a for the injected path (no handshake); the nominal pass runs at heavy source and bursty sink backpressure | `seq_checker_assertions` inside the module: one classification per beat, no classification without a transfer, no zero-beat gap. Classification, counts and sticky flags compared with the model on **every cycle** |
+| `complex_multiplier`, all 12 elaborations (issue #9) | `sim/tests/test_cmult.cpp` (RTL vs NumPy vs C++) and `model/cpp/test/test_fxp_vectors.cpp` group 4 (C++ vs NumPy) | 864 directed vectors from `model/vectors/cmult.vec`, each checked against 12 RTL instances, both C++ arithmetic paths and the NumPy expectation | the 144-pair Q1.15 corner grid including `(-1-1j)^2`, the +2^31 case that needs the 33rd bit; the round-then-saturate edge swept one LSB at a time in both directions, both tie directions; the Karatsuba pre-adder extremes at ±2^16; every single-LSB sign combination | 24 000 fresh operand pairs per seed (12 000 dense, 12 000 bursty-gapped); a third of the drawn components come from the Q1.15 endpoints so full-scale combinations appear in the random stream and not only in the directed set | reset re-run before every pass and before every DUT of the latency sweep | n/a (fixed-latency kernel, no ready); the gapped pass is the valid-pipeline stress | `cmult_assertions` on all 6 matched MULT4/MULT3 pairs on every cycle, plus `a_cmult_re/im_matches_pkg` and `a_cmult_post_adder_fits_*` inside the module itself. A flag audit fails the run if all four saturation cases were not observed |
 | `fxp_pkg` + `fxp_sticky_flags` (issue #4) | `model/cpp/test/test_fxp_vectors.cpp` (C++ vs NumPy) and `sim/tests/test_fxp_rtl.cpp` (RTL vs NumPy vs C++) | 927 directed vectors | max pos/neg and one/two past, at 8 widths; all four rounding tie classes; ±1.0 wrap; round-then-saturate across the endpoints; every Q1.15 boundary multiply pair | 530 seeded vectors + 6 seeded accumulator walks | accumulator cleared at every sequence start; DUT reset before the first | n/a (no handshake) | property sweeps: shift-0 identity, saturation idempotence, measured rounding bias, accumulator non-overflow |
 
 One row per module, added by the issue that implements it. `stream_loopback` was rebuilt
@@ -467,6 +468,44 @@ invent one. It is also why a fault cannot be injected into the datapath to test 
 the producer-side assertion fires first, correctly, and aborts. `telemetry_top` therefore
 gives the checker a stimulus override, and `test_seq_checker` drives faults into it directly.
 
+### 5.9 Complex-multiplier assertion set (SPEC §14, issue #9)
+
+Two sets, in two places, for two different obligations.
+
+**Inside the module** (`rtl/common/complex_multiplier.sv`, under `ifndef SYNTHESIS`), so they
+hold in every build that instantiates the kernel, with no test-side wiring — the arrangement
+the stream, CDC and telemetry primitives already use:
+
+| Assertion | What a failure means |
+|---|---|
+| `a_cmult_re_matches_pkg` / `a_cmult_im_matches_pkg` | the arithmetic core disagrees with `fxp_pkg::fxp_cmul_q15_{re,im}_raw`, the package's canonical four-multiply definition, on operands carried alongside the pipeline in a shadow chain. For `VARIANT = "MULT3"` this *is* the Karatsuba exactness claim, checked against the package rather than against a second copy of the same algebra |
+| `a_cmult_post_adder_fits_re` / `_im` | the MULT3 post-adder, formed at 34 bits and cast to the 33-bit output, lost a bit — i.e. the width discharge in NUMERICS.md §9.0 is wrong |
+
+**On a matched pair** (`sim/assertions/cmult_assertions.sv`, instantiated by `cmult_top` once
+per MULT4/MULT3 pair — all five pipeline depths plus the `ROUND_OUT = 0` pair):
+
+| Assertion | What a failure means |
+|---|---|
+| `a_cmult_latency_a` / `_b` | `valid_out` is not `valid_in` delayed by exactly `PIPE_STAGES`, measured against an independent shift register in the checker. A kernel whose latency is not its parameter breaks every block that composes it |
+| `a_cmult_valid_aligned` | the two variants present results on different cycles. A queue-based scoreboard would still call them equal; this does not |
+| `a_cmult_p_re_match` / `_p_im_` / `_y_re_` / `_y_im_` / `_flags_re_` / `_flags_im_` / `_ovf_` | the two variants disagree on an output bit. This is the SPEC §6 obligation that the three-multiply form "must produce this exact result", checked structurally rather than by trusting that both happened to match one reference model |
+| `a_cmult_round_re` / `_im` | the rounded output is not `fxp_round_sat` of the full-precision output. The two ports must be two views of one number, not two computations |
+| `a_cmult_flags_re_def` / `_im_def` | a saturation flag does not equal `fxp_sat_flags(fxp_round(p, …))`. This is SPEC §14's "saturation flags match the expected overflow cases", stated as a *definition* so it holds on every operand pair rather than only on the directed ones |
+| `a_cmult_ovf_def` | `ovf` is not the OR of the four flag bits |
+| `a_cmult_no_flags_when_unrounded` | `ROUND_OUT = 0` produced a non-zero rounded output or a flag. Without it, that configuration would be checked for what it does produce and never for what it must not |
+
+**No violator top for this set, and why.** Issues #5 and #6 each built a deliberately broken
+DUT so their assertion sets could be proven to fire. This issue does not, because the same
+evidence is available more cheaply and more honestly: the assertions above are redundant
+with an independent oracle — the C++ model and the committed NumPy vectors — so a fault that
+one misses the other catches, and both were exercised together during development by
+inverting the sign of the MULT3 imaginary post-adder. That single-character fault was caught
+by `a_cmult_p_im_match` (by name, aborting the run) and independently by
+`test_cmult`'s `rtl_vs_model` and `rtl_vs_vector` counters, on beat 13 of the directed set.
+A third RTL implementation maintained solely to be wrong would add maintenance without adding
+a check that the oracle does not already provide. Where issues #5 and #6 needed a violator —
+because a protocol assertion has no oracle to be redundant with — this set has one.
+
 ## 6. Coverage strategy
 
 Coverage build, metrics collected, targets per phase, and how coverage reports are
@@ -505,8 +544,9 @@ error messages — the failure-minimisation metadata SPEC §12.2 asks for.
 
 | Target | Status |
 |---|---|
-| `make lint` | implemented (issue #2, extended by #5, #7, #6 and #8) — `regmap-check`, then `--lint-only --Wall` on `benchmark_sim_top`, `stream_prims_top`, `stream_violator_top`, `control_top`, `cdc_prims_top`, `cdc_violator_top` and `telemetry_top`; zero unwaived warnings |
-| `make sim-tiny` | implemented (issue #2, extended by #5, #7, #6 and #8) — `numerics-check`, `regmap-check` and `cdc-inventory`, then the fast build of seven tops, then `test_stream_loopback`, `test_stream_primitives`, `test_stream_assertions`, `test_control_regs`, `test_sync_fifo`, `test_async_fifo`, `test_cdc_synchronizers`, `test_cdc_assertions`, `test_perf_counters` and `test_seq_checker` once per seed in `SEEDS` (default `1 2 3`) |
+| `make lint` | implemented (issue #2, extended by #5, #7, #6, #8 and #9) — `regmap-check`, then `--lint-only --Wall` on `benchmark_sim_top`, `stream_prims_top`, `stream_violator_top`, `control_top`, `cdc_prims_top`, `cdc_violator_top`, `telemetry_top` and `cmult_top`; zero unwaived warnings |
+| `make sim-tiny` | implemented (issue #2, extended by #5, #7, #6, #8 and #9) — `numerics-check`, `regmap-check` and `cdc-inventory`, then the fast build of eight tops, then `test_stream_loopback`, `test_stream_primitives`, `test_stream_assertions`, `test_control_regs`, `test_sync_fifo`, `test_async_fifo`, `test_cdc_synchronizers`, `test_cdc_assertions`, `test_perf_counters`, `test_seq_checker` and `test_cmult` once per seed in `SEEDS` (default `1 2 3`) |
+| `make calibrate-cmult` | implemented (issue #9) — not a SPEC §16 entry point and not part of any regression: the SPEC §18 resource-calibration sweep, Windows side, about an hour and a half of Fitter time. `make calibrate-summary` rebuilds the JSON and the table from evidence already on disk |
 | `make regmap-check` | implemented (issue #7) — not a SPEC §16 entry point; a prerequisite of `lint` and `sim-tiny`, runnable alone while editing `control/regmap.json` |
 | `make cdc-inventory` | implemented (issue #6) — not a SPEC §16 entry point; a prerequisite of `sim-tiny`, runnable alone. Fails on any unclassified crossing |
 | `make sim-medium` | TODO(issue #17) |
