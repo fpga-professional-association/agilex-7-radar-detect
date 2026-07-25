@@ -180,6 +180,22 @@ def derive_stream_params(params: dict) -> dict:
         "STREAM_PRIM_EB_DEEP_DEPTH": 8,
         "STREAM_PRIM_PIPE_STAGES": 4,
         "STREAM_PRIM_PIPE_OUT_DEPTH": 6,
+        # Geometry of the DUTs in sim/verilator/tops/cdc_prims_top.sv (issue #6),
+        # so the CDC unit tests and that top agree on depth and synchronizer stage
+        # count without either hard-coding the other's numbers. These are
+        # unit-test sizes, not design sizes: a real crossing sizes DEPTH against
+        # its own synchronizer round trip (see rtl/cdc/async_fifo.sv).
+        "CDC_SYNC_FIFO_DEPTH": 8,
+        "CDC_SYNC_FIFO_SA_DEPTH": 4,
+        "CDC_ASYNC_FIFO_DEPTH": 8,
+        "CDC_STREAM_CDC_DEPTH": 16,
+        "CDC_SYNC_STAGES": 2,
+        "CDC_HANDSHAKE_W": 16,
+        # Geometry of sim/verilator/tops/cdc_violator.sv, the SPEC 14 negative
+        # test's deliberately broken crossing. Four pointer bits is the smallest
+        # width at which a binary counter diverges from a Gray one within three
+        # increments, which is what mode 1 has to demonstrate.
+        "CDC_VIOLATOR_PTR_W": 4,
     }
 
 
