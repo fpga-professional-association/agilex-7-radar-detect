@@ -1,0 +1,40 @@
+# Claude Code local settings
+.claude/settings.local.json
+
+# Pre-repo scratch Quartus shell (not part of the benchmark)
+radar-detect.qpf
+radar-detect.qsf
+radar-detect.qws
+dni/
+qdb/
+
+# Quartus generated outputs
+output_files/
+tmp-clearbox/
+*.qws
+*.qdb
+quartus/project/qdb/
+quartus/project/dni/
+quartus/project/output_files/
+quartus/project/tmp-clearbox/
+
+# Verilator / simulation outputs
+obj_dir/
+*.fst
+*.fst.hier
+*.vcd
+sim/verilator/build*/
+
+# Results are generated, never committed (dirs kept via .gitkeep)
+results/**
+!results/**/.gitkeep
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Editor / OS noise
+*.swp
+.DS_Store
+Thumbs.db
