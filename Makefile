@@ -135,6 +135,34 @@ VIOL_FILES   := sim/verilator/files_violator.f
 VIOL_TEST    := test_stream_assertions
 VIOL_BIN      = sim/verilator/build/fast_tiny_$(VIOL_TOP)/V$(VIOL_TOP)_$(VIOL_TEST)
 
+# --- register/control plane (issue #7, SPEC 9 / 13.1 / 14) -----------------
+# A fourth self-contained build, for the reason the others have one: a failure
+# in it is unambiguously a control-plane failure. control_top holds the whole of
+# rtl/control/ plus a second fabric attached to a block that never answers, so
+# the watchdog escape is an exercised path rather than an untested comment.
+CONTROL_TOP   := control_top
+CONTROL_FILES := sim/verilator/files_control.f
+CONTROL_TEST  := test_control_regs
+CONTROL_BIN    = sim/verilator/build/fast_tiny_$(CONTROL_TOP)/V$(CONTROL_TOP)_$(CONTROL_TEST)
+
+# The register map is generated from control/regmap.json by scripts/gen_regmap.py.
+# The SystemVerilog package, the C++ header and docs/regmap.md are committed — a
+# clean checkout must lint and simulate without running a generator first — and
+# `--check` regenerates them in memory and fails if what is on disk differs. So
+# neither a hand edit of a generated file nor a source-of-truth change that was
+# never regenerated survives `make lint` or `make sim-tiny`.
+GEN_REGMAP = $(PYTHON) scripts/gen_regmap.py
+
+# `regmap-check` is host-independent: it is Python reading two text files, so it
+# runs wherever make runs and is never dispatched into WSL. Not a SPEC 16 entry
+# point; it is a prerequisite of both lint and sim-tiny, and is runnable on its
+# own while editing the register map.
+define REGMAP_CHECK_RECIPE
+	$(PYTHON_CHECK)
+	@printf '[regmap] checking generated artefacts against %s\n' 'control/regmap.json'
+	$(GEN_REGMAP) --check
+endef
+
 # --- numerics cross-check (issue #4, SPEC 6 / 12.4) ------------------------
 # `numerics-check` is NOT a SPEC 16 entry point; it is a sub-target that
 # `sim-tiny` depends on, so the fixed-point equivalence proof runs on every
@@ -195,14 +223,18 @@ else
 define LINT_RECIPE
 	@printf '[lint] verilator --lint-only --Wall, config=%s, waivers=%s\n' \
 	    '$(CONFIG)' 'sim/verilator/lint_waivers.vlt'
-	@printf '[lint] 1/3 %s\n' 'benchmark_sim_top'
+	$(REGMAP_CHECK_RECIPE)
+	@printf '[lint] 1/4 %s\n' 'benchmark_sim_top'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) --test $(TEST)
-	@printf '[lint] 2/3 %s\n' '$(STREAM_TOP)'
+	@printf '[lint] 2/4 %s\n' '$(STREAM_TOP)'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
 	    --top $(STREAM_TOP) --files $(STREAM_FILES) --test $(STREAM_TEST)
-	@printf '[lint] 3/3 %s\n' '$(VIOL_TOP)'
+	@printf '[lint] 3/4 %s\n' '$(VIOL_TOP)'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
 	    --top $(VIOL_TOP) --files $(VIOL_FILES) --test $(VIOL_TEST)
+	@printf '[lint] 4/4 %s\n' '$(CONTROL_TOP)'
+	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
+	    --top $(CONTROL_TOP) --files $(CONTROL_FILES) --test $(CONTROL_TEST)
 endef
 
 # `sim-tiny`: SPEC 12.1 fast build of all three simulation tops, then every test
@@ -220,13 +252,17 @@ endef
 #                            when every expected assertion fired, so an
 #                            expected failure is a passing result for the suite.
 define SIM_TINY_RECIPE
+	$(REGMAP_CHECK_RECIPE)
 	$(BUILD_VERILATOR) --mode fast --config tiny --jobs $(JOBS) --test $(TEST)
 	$(BUILD_VERILATOR) --mode fast --config tiny --jobs $(JOBS) \
 	    --top $(STREAM_TOP) --files $(STREAM_FILES) --test $(STREAM_TEST)
 	$(BUILD_VERILATOR) --mode fast --config tiny --jobs $(JOBS) \
 	    --top $(VIOL_TOP) --files $(VIOL_FILES) --test $(VIOL_TEST)
+	$(BUILD_VERILATOR) --mode fast --config tiny --jobs $(JOBS) \
+	    --top $(CONTROL_TOP) --files $(CONTROL_FILES) --test $(CONTROL_TEST)
 	@printf '[sim-tiny] seeds: %s\n' '$(SEEDS)'
-	@printf '[sim-tiny] tests: %s %s %s\n' '$(TEST)' '$(STREAM_TEST)' '$(VIOL_TEST)'
+	@printf '[sim-tiny] tests: %s %s %s %s\n' '$(TEST)' '$(STREAM_TEST)' \
+	    '$(VIOL_TEST)' '$(CONTROL_TEST)'
 	@rc=0; for s in $(SEEDS); do \
 	    printf '\n[sim-tiny] ===== seed %s : %s =====\n' "$$s" '$(TEST)'; \
 	    ./$(SIM_TINY_BIN) +seed=$$s +results=$(RESULTS_DIR) || rc=1; \
@@ -235,6 +271,8 @@ define SIM_TINY_RECIPE
 	    printf '\n[sim-tiny] ===== seed %s : %s (expects assertions to fire) =====\n' \
 	        "$$s" '$(VIOL_TEST)'; \
 	    ./$(VIOL_BIN) +seed=$$s +results=$(RESULTS_DIR) || rc=1; \
+	    printf '\n[sim-tiny] ===== seed %s : %s =====\n' "$$s" '$(CONTROL_TEST)'; \
+	    ./$(CONTROL_BIN) +seed=$$s +results=$(RESULTS_DIR) || rc=1; \
 	  done; \
 	  if [ $$rc -ne 0 ]; then \
 	    printf '\n[sim-tiny] FAILED (seeds: %s)\n' '$(SEEDS)' 1>&2; exit 1; \
@@ -382,6 +420,7 @@ help:
 	@printf '\n'
 	@printf '%-18s %-9s %s\n' 'lint'             'wsl'     'verilator --lint-only --Wall (zero unwaived warnings)'
 	@printf '%-18s %-9s %s\n' 'numerics-check'   'wsl'     'SPEC 6/12.4 fixed-point equivalence (sub-target of sim-tiny)'
+	@printf '%-18s %-9s %s\n' 'regmap-check'     'local'   'SPEC 9 register map: generated artefacts match control/regmap.json'
 	@printf '%-18s %-9s %s\n' 'sim-tiny'         'wsl'     'numerics-check + fast build + loopback test over SEEDS'
 	@printf '%-18s %-9s %s\n' 'sim-medium'       'wsl'     'TODO(issue #17) medium-config regression'
 	@printf '%-18s %-9s %s\n' 'sim-random'       'wsl'     'TODO(issue #17) randomized regression'
@@ -460,6 +499,11 @@ endif
 numerics-check:
 	$(NUMERICS_RECIPE)
 
+# The register-map regeneration gate (issue #7). Also run inside lint and
+# sim-tiny; standalone here so it can be run while editing control/regmap.json.
+regmap-check:
+	$(REGMAP_CHECK_RECIPE)
+
 sim-tiny:
 	$(SIM_TINY_RECIPE)
 
@@ -537,7 +581,7 @@ reproduce-final:
 	$(call TODO,25,Evidence package and reproducibility)
 
 .PHONY: help env-check \
-        lint numerics-check \
+        lint numerics-check regmap-check \
         sim-tiny sim-medium sim-random sim-stress sim-coverage sim-full-smoke \
         quartus-map quartus-fit quartus-sta quartus-report quartus-compile \
         seed-sweep compare-baseline reproduce-final

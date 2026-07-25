@@ -52,3 +52,14 @@ Thumbs.db
 
 # Generated Verilator config package / headers (from config/*.json)
 sim/verilator/generated/
+
+# NOTE (issue #7): the generated register map is deliberately NOT ignored.
+# rtl/control/generated/regmap_pkg.sv, model/cpp/regmap/regmap.hpp and
+# docs/regmap.md are produced by scripts/gen_regmap.py from control/regmap.json
+# and are committed, because a clean checkout must lint and simulate the control
+# plane without running a generator first, and because a register-map change has
+# to be reviewable as a diff. `make regmap-check` — a prerequisite of both
+# `make lint` and `make sim-tiny` — fails if any of them differs from what the
+# source of truth generates, so they cannot drift. The machine-readable
+# results/regmap/regmap.json IS generated output and is covered by the
+# results/*/* rule above. See DECISIONS.md (issue #7, decision 2).

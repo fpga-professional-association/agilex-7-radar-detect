@@ -9,6 +9,7 @@
 //   stream drivers                 stream_driver.h
 //   randomized backpressure        random.h  (BackpressureGenerator)
 //   scoreboards                    scoreboard.h
+//   register reads and writes      reg_driver.h  (issue #7)
 //   timeout detection              timeout.h
 //   assertion and error collection error_collector.h
 //   failure minimization metadata  run_summary.h  (seed + per-category errors)
@@ -17,7 +18,6 @@
 //
 // Not yet provided, and owned elsewhere by design:
 //
-//   register reads and writes      issue #7 (register/control plane)
 //   memory model                   issue #15 / #24 (history memory, HBM2e)
 //   reference-model invocation     issue #4 (bit-accurate C++ model)
 //
@@ -29,6 +29,7 @@
 #include "harness/clock_scheduler.h"
 #include "harness/error_collector.h"
 #include "harness/random.h"
+#include "harness/reg_driver.h"
 #include "harness/reset_sequencer.h"
 #include "harness/run_summary.h"
 #include "harness/scoreboard.h"

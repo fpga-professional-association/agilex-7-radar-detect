@@ -632,3 +632,112 @@ reason `fxp_probe_top` has one: a failure in a self-contained build is unambiguo
 failure of the thing that build tests. The violator's RTL is knowingly incorrect and appears
 in no other file list, so it can never reach the design build. `make lint` now lints all
 three tops.
+
+## 2026-07-26 — Register plane: source of truth, generation strategy, decode and response protocol  (issue #7)
+
+**Decision 1 — the register map is one hand-edited JSON file, and everything else is
+generated from it.** `control/regmap.json` declares blocks, windows, registers, fields,
+access types and reset values; `scripts/gen_regmap.py` emits the SystemVerilog package, the
+C++ harness header, `docs/regmap.md` and the machine-readable `results/regmap/regmap.json`.
+Nothing else may define a register address anywhere in the repository.
+
+*JSON rather than YAML.* The repository ships no YAML parser and `requirements.txt` carries
+only numpy, so a YAML source of truth would add a dependency that a clean checkout needs
+before it can lint (SPEC §16 requires a clean checkout plus documented variables to be
+sufficient). The one thing JSON costs is comments — and that turns out to be a benefit,
+because every rationale that would have been a comment is a `description` field instead,
+which flows into `docs/regmap.md` and into the header comments of the generated package
+rather than dying in the source file.
+
+*Why `control/` and not `config/`.* `scripts/build_verilator.py` enumerates `config/*.json`
+as the list of available size configurations (`--config <stem>`), so a register description
+dropped in there would appear as an elaboration config named `regmap`. The register map is
+not a size configuration; it gets its own directory.
+
+**Decision 2 — the generated SystemVerilog, C++ header and Markdown table are committed;
+the machine-readable JSON is not.** SPEC §10 says generated files are not committed, and the
+plain reading of that rule would have the register package regenerated on every build, as
+`config_pkg.sv` is. Two things weigh the other way for this artefact: a clean checkout must
+lint and simulate the control plane without first running a generator, and a register-map
+change is exactly the kind of change a reviewer must see as a diff — an address moving by
+four bytes is invisible in a diff of the source of truth alone if nobody can see what it did
+to the map. What makes committing them safe is the drift gate: `make regmap-check` (a
+prerequisite of both `make lint` and `make sim-tiny`) regenerates all three in memory and
+fails on any difference, so a hand-edited generated file and a source-of-truth edit that was
+never regenerated are both build failures. Proven once by hand: editing `REGMAP_BLOCK_MASK`
+in the generated package makes `make lint` exit non-zero with the offending line quoted.
+`results/regmap/regmap.json` stays uncommitted under `results/`, where SPEC §10 puts
+generated output, and is the artefact downstream tooling should read.
+
+*Corollary — no VCS state in a generated artefact.* The ID block's `VERSION` is a static
+number bumped by hand in the source of truth, not a `git describe`. The generated files must
+be a pure function of the source tree, or the drift check would fail on a clean checkout with
+a different VCS state, and two people building one commit would get different register
+contents.
+
+**Decision 3 — generate the tables, hand-write the logic: one CSR engine, thin per-block
+wrappers.** The alternative shapes are a hand-written decode per block (the access-type
+semantics then exist five times, and the fifth copy gets W1C backwards) or fully generated
+block RTL (nobody reviews a generated `always_ff`). What is generated here is data with no
+rationale to lose: five 32-bit masks per register — reset, writable, write-1-to-clear,
+write-1-pulse, hardware-driven — as flat vectors. `rtl/control/reg_csr_block.sv` is the one
+hand-written implementation of what those masks mean, and each block (`reg_block_id`,
+`reg_block_build_params`, `reg_block_ctrl`, `reg_block_fault`, `reg_block_scratch`) is that
+engine plus the wiring only it can know: `config_pkg` values into the build-parameter block,
+the arming-gated injection and its saturating counter into the fault block, the enable and
+pulse outputs out of the control block. Wiring is by generated index localparam, never by
+literal position, so reordering registers in the source of truth cannot silently transpose
+two of them.
+
+*Where a register is not writable at all,* the write is refused with `error=1`; where it is
+partly writable, the write succeeds and the non-writable bits are ignored. That distinction
+is a property of the generated masks, not of code, and `SCRATCH3` exists to test it.
+
+**Decision 4 — uniform 4 KiB windows, so the decode is an address-bit compare.** Every
+block, implemented or planned, occupies one window aligned to its own size; the generator
+enforces it. Membership is then `address[15:12] == base[15:12]`, the word index inside the
+window is one expression shared by every block, and adding a block adds a comparator rather
+than a range subtraction. The cost is address space, of which a 16-bit plane has more than
+this design will use. Windows for the groups SPEC §9 names but no issue has built yet
+(coefficients and bank select, CFAR and integration, counters, snapshot/debug) are declared
+now and answer `error=1`: reserving the address space is free today and expensive later, and
+the generator refuses to build a map that does not claim every one of the sixteen SPEC §9
+groups.
+
+**Decision 5 — the response protocol answers everything, in bounded time, and never
+stalls.** One outstanding transaction; the master holds the request stable until `ready`;
+`ready` is one cycle per accepted request, with `read_data` and `error` valid in that cycle
+and driven inert outside it. Every access completes in exactly two cycles — one to decode,
+one in the block — and the test asserts that on every one of its ~1200 transactions rather
+than in a single directed case.
+
+Malformed and unmapped requests are *answered*, not stalled: both enables at once, an
+unaligned address, a write with no byte enables, an address outside every window, an address
+inside a window but past the block's last register, and a write to a read-only register all
+produce `ready=1, error=1` with no side effect. A bus that hangs on a bad address turns a
+one-line software bug into a dead device and an unusable simulation.
+
+The last defence is the fabric's watchdog: if a selected block does not answer within
+`REG_WATCHDOG_CYCLES` (15), the fabric completes the transaction itself with `error=1` and
+returns to idle. It cannot fire for any block in this design — their responses are registers,
+not handshakes — which is the point: it covers the block that has not been written yet, the
+one behind a future clock crossing, and the one whose author assumed a bus that stalls
+politely. `control_top` therefore instantiates a *second* fabric against a deliberately dead
+block, so the escape is an exercised path with a measured latency rather than an untested
+comment.
+
+**Decision 6 — the plane is single-clock (`cfg_clk`), and stops cleanly at the domain
+boundary.** Everything in `rtl/control/` is synchronous to `cfg_clk`, so a failure in the
+control plane is never a CDC question. Enables leave as levels and resets leave as one-cycle
+pulses, which is exactly what a level synchroniser and a toggle synchroniser respectively
+want at their inputs; the crossings themselves belong to the issue #6 primitives and to the
+blocks that consume them. No crossing is invented here.
+
+**Decision 7 — the assertions watch the master as well as the fabric.**
+`sim/assertions/reg_if_checker.sv` is instantiated inside `reg_fabric` under
+`ifndef SYNTHESIS`, the same mechanism `rtl/stream/` uses. Half its properties check the
+fabric (one `ready` per request, never two running, `error` and `read_data` only in a
+response cycle, a bounded outstanding count); half check the *master* — that the request is
+bit-stable until answered — because a harness that violates the protocol it is testing for is
+otherwise invisible, and every result it produces is worthless. Verified load-bearing:
+perturbing the driver's address mid-transaction fires `a_request_stable` by name.
