@@ -7,10 +7,10 @@ for the register and control plane ([SPEC.md](../SPEC.md) §9, issue #7). Edit t
 and re-run the generator; `make regmap-check` fails the build on any hand edit here or
 on a source change that was never regenerated.
 
-- Register-map version: **1.0.0** (schema 1)
+- Register-map version: **1.1.0** (schema 1)
 - Interface: 32-bit data, 16-bit byte address, 4 byte enables
 - Window per block: `0x1000` bytes
-- Blocks declared: 9 (5 implemented), registers implemented: 28
+- Blocks declared: 9 (6 implemented), registers implemented: 49
 
 ## Access types
 
@@ -36,7 +36,7 @@ the non-writable bits (`error=0`).
 | `scratch` | `0x4000`–`0x4FFF` | 4 | implemented | Snapshot and debug control |
 | `coeff` | `0x5000`–`0x5FFF` | 0 | planned (#10, #11, #12, #16) | Coefficient and weight programming; Active bank selection |
 | `cfar` | `0x6000`–`0x6FFF` | 0 | planned (#14, #16) | CFAR settings; Integration settings |
-| `counters` | `0x7000`–`0x7FFF` | 0 | planned (#8) | Stream counters; Stall counters; FIFO high-water marks; Overflow and saturation counts; Frame counts; Sequence errors; CDC errors |
+| `counters` | `0x7000`–`0x7FFF` | 21 | implemented | Stream counters; Stall counters; FIFO high-water marks; Overflow and saturation counts; Frame counts; Sequence errors; CDC errors; Snapshot and debug control |
 | `debug` | `0x8000`–`0x8FFF` | 0 | planned (#19) | Snapshot and debug control |
 
 Any address outside every implemented window, any address inside a window but beyond
@@ -52,9 +52,9 @@ Fixed identification of the control plane itself. Every field is a constant fold
 | Offset | Address | Register | Access | Reset | Description |
 |---|---|---|---|---|---|
 | `0x000` | `0x0000` | `MAGIC` | RO | `0x52414441` | Constant marker. Reading 0x52414441 ('RADA') at block base proves a control plane is present and the address decode is alive. |
-| `0x004` | `0x0004` | `VERSION` | RO | `0x01000001` | Register-map version, from regmap_version in the source of truth. Static build data, deliberately not a git describe: the same source tree must produce the same register contents on any machine, and a VCS-derived value would make the generated artefacts depend on checkout state. |
-| `0x008` | `0x0008` | `GEOMETRY` | RO | `0x10201C09` | Shape of the register plane, so a discovery walk needs no compiled-in constants. |
-| `0x00C` | `0x000C` | `CAPABILITY` | RO | `0x0000001F` | One bit per declared block, set when that block is implemented in this build. Bit i is block i in declaration order; a planned block reads 0 and its window returns error. |
+| `0x004` | `0x0004` | `VERSION` | RO | `0x01010001` | Register-map version, from regmap_version in the source of truth. Static build data, deliberately not a git describe: the same source tree must produce the same register contents on any machine, and a VCS-derived value would make the generated artefacts depend on checkout state. |
+| `0x008` | `0x0008` | `GEOMETRY` | RO | `0x10203109` | Shape of the register plane, so a discovery walk needs no compiled-in constants. |
+| `0x00C` | `0x000C` | `CAPABILITY` | RO | `0x0000009F` | One bit per declared block, set when that block is implemented in this build. Bit i is block i in declaration order; a planned block reads 0 and its window returns error. |
 
 ### `ID.MAGIC` — `0x0000`
 
@@ -67,7 +67,7 @@ Fixed identification of the control plane itself. Every field is a constant fold
 | Bits | Field | Access | Reset | Source | Description |
 |---|---|---|---|---|---|
 | `31:24` | `MAJOR` | RO | `0x1` | — | Incompatible layout change. |
-| `23:16` | `MINOR` | RO | `0x0` | — | Registers or fields added. |
+| `23:16` | `MINOR` | RO | `0x1` | — | Registers or fields added. |
 | `15:8` | `PATCH` | RO | `0x0` | — | Documentation-only change. |
 | `7:0` | `SCHEMA` | RO | `0x1` | — | Source-of-truth schema version. |
 
@@ -76,7 +76,7 @@ Fixed identification of the control plane itself. Every field is a constant fold
 | Bits | Field | Access | Reset | Source | Description |
 |---|---|---|---|---|---|
 | `7:0` | `N_BLOCKS` | RO | `0x9` | — | Declared blocks, implemented and planned. |
-| `15:8` | `N_REGS` | RO | `0x1C` | — | Implemented registers across all blocks. |
+| `15:8` | `N_REGS` | RO | `0x31` | — | Implemented registers across all blocks. |
 | `23:16` | `DATA_W` | RO | `0x20` | — | Register data width in bits. |
 | `31:24` | `ADDR_W` | RO | `0x10` | — | Register address width in bits. |
 
@@ -84,7 +84,7 @@ Fixed identification of the control plane itself. Every field is a constant fold
 
 | Bits | Field | Access | Reset | Source | Description |
 |---|---|---|---|---|---|
-| `31:0` | `BLOCK_MASK` | RO | `0x1F` | — | Implemented-block bitmap. |
+| `31:0` | `BLOCK_MASK` | RO | `0x9F` | — | Implemented-block bitmap. |
 
 ## `build_params` — `0x1000`
 
@@ -331,10 +331,181 @@ The window is reserved and every access to it returns `error=1`.
 
 ## `counters` — `0x7000`
 
-PLANNED. Performance and health telemetry. The counters themselves are issue #8; this window is where they are read from. Counters live in the telemetry clock domain, so this block will be the first consumer of the issue #6 CDC primitives on the register path.
+Performance and health telemetry for one observed interface (rtl/common/telemetry_block.sv, issue #8). EVERY COUNT REGISTER IN THIS BLOCK READS A SHADOW, NOT A RUNNING COUNTER: write TELEM_CTRL.SNAPSHOT, then read as many registers as you like, and all of them describe the single edge at which that strobe landed. A running counter read through a 32-bit plane cannot be coherent - the low word of a 64-bit beat count can wrap between the two accesses and report a number that never existed - so the plane is never given the chance. SNAPSHOT_ID is the proof: read it before and after a sweep, and equal values mean the sweep saw one instant. The block is instantiated in the domain of the interface it observes, and the register interface, not the counters, is what crosses into cfg_clk when the two differ (issue #19): crossing one bus once is cheaper and far easier to verify than crossing twenty counters.
 
-**Planned, not implemented in this build** (owning issues: #8).
-The window is reserved and every access to it returns `error=1`.
+| Offset | Address | Register | Access | Reset | Description |
+|---|---|---|---|---|---|
+| `0x000` | `0x7000` | `TELEM_CTRL` | MIXED | `0x00000003` | Measurement window and the three strobes. ENABLE gates every counter, so a window can be opened and closed without touching the traffic being measured. SNAPSHOT, CLEAR and STICKY_CLEAR are write-1-pulse and always read 0. |
+| `0x004` | `0x7004` | `TELEM_STATUS` | ROHW | `0x00000000` | Build geometry of this telemetry instance plus the two facts a reader needs before trusting a count: whether a snapshot was ever taken, and whether any counter has passed its maximum since the last clear. |
+| `0x008` | `0x7008` | `SNAPSHOT_ID` | ROHW | `0x00000000` | Snapshots taken since reset or the last CLEAR, saturating. Read it before and after a sweep of this block: if the two agree, every register in between came from one edge. This is the only defence against a second agent snapshotting in the middle of someone else's read sequence, and it costs one register. |
+| `0x00C` | `0x700C` | `BEAT_COUNT_LO` | ROHW | `0x00000000` | SPEC 9 stream counters. Low half of the accepted-transfer count on the observed interface: cycles in which valid && ready. Read together with BEAT_COUNT_HI after one SNAPSHOT; the pair is coherent because both halves come from one shadow. |
+| `0x010` | `0x7010` | `BEAT_COUNT_HI` | ROHW | `0x00000000` | High half of the accepted-transfer count. Reads 0 when WIDE_W is 32 or less. |
+| `0x014` | `0x7014` | `STALL_COUNT_LO` | ROHW | `0x00000000` | SPEC 9 stall counters. Low half of the count of cycles in which the source offered a beat and the sink refused it: valid && !ready. Divided by the beat count this is the backpressure the interface actually suffered, which is the number that decides whether a stage needs more buffering. |
+| `0x018` | `0x7018` | `STALL_COUNT_HI` | ROHW | `0x00000000` | High half of the stall count. |
+| `0x01C` | `0x701C` | `IDLE_COUNT` | ROHW | `0x00000000` | Cycles in which the sink was ready and the source had nothing: !valid && ready. The third arm of the three-way split of a ready cycle - beat, stall, idle - so a starved stage is distinguishable from a stalled one rather than both appearing as 'not full throughput'. |
+| `0x020` | `0x7020` | `FRAME_COUNT` | ROHW | `0x00000000` | SPEC 9 frame counts. Accepted beats carrying end_of_frame, i.e. frames completed on the observed interface. |
+| `0x024` | `0x7024` | `FRAME_START_COUNT` | ROHW | `0x00000000` | Accepted beats carrying start_of_frame. Counted separately from FRAME_COUNT because the difference between the two is the frame that was opened and never closed, which is exactly the symptom of a truncated frame and is invisible in either count alone. |
+| `0x028` | `0x7028` | `FIFO_HIGH_WATER` | ROHW | `0x00000000` | SPEC 9 FIFO high-water marks. The deepest fill level the observed FIFO reached in the measurement window, beside the depth it was built with, so the margin is readable without knowing the elaboration parameters. This is the number that sizes the next revision of a DEPTH. |
+| `0x02C` | `0x702C` | `OVERFLOW_COUNT` | ROHW | `0x00000000` | SPEC 9 overflow counts. Overflow events reported by the observed storage. Unreachable in correct operation, so any non-zero value here is a design defect rather than a traffic condition. |
+| `0x030` | `0x7030` | `SATURATE_COUNT` | ROHW | `0x00000000` | SPEC 9 saturation counts. Arithmetic saturation events reported by the observed datapath (SPEC 6 saturating arithmetic, collected by rtl/common/fxp_sticky_flags.sv). Non-zero is legal and expected on loud input; it is the number that says whether a headroom choice was right. |
+| `0x034` | `0x7034` | `CDC_ERROR_COUNT` | ROHW | `0x00000000` | SPEC 9 CDC errors. Events reported by the crossings the observed path contains - a handshake that did not complete, a Gray pointer that moved by more than one bit. Like OVERFLOW_COUNT, unreachable in correct operation. |
+| `0x038` | `0x7038` | `SEQ_GAP_COUNT` | ROHW | `0x00000000` | SPEC 9 sequence errors. Gap EVENTS seen by the attached seq_checker: occasions on which the sequence number jumped forward. Counted separately from the beats lost, because one gap of forty and forty gaps of one are different failures. |
+| `0x03C` | `0x703C` | `SEQ_DUP_COUNT` | ROHW | `0x00000000` | Beats whose sequence number repeated the one immediately before it: duplication. |
+| `0x040` | `0x7040` | `SEQ_REORDER_COUNT` | ROHW | `0x00000000` | Beats whose sequence number came from behind the current position and was not the immediately preceding one: reordering. |
+| `0x044` | `0x7044` | `SEQ_LOST_BEATS` | ROHW | `0x00000000` | Beats that never arrived, summed over every gap. SEQ_GAP_COUNT says how often the stream broke; this says how much of it was lost. |
+| `0x048` | `0x7048` | `SEQ_UNTRACKED_COUNT` | ROHW | `0x00000000` | Beats on a stream_id at or above TRACKED_IDS. Counted rather than ignored: an instance sized for four streams that silently dropped everything on stream 7 would report a clean run on traffic it never looked at. |
+| `0x04C` | `0x704C` | `SEQ_STATUS` | MIXED | `0x00000000` | Sticky record of which kinds of sequence fault occurred at all, so a fault that happened once in a long run is still visible after the counts have been cleared. The W1C half is this block's own copy, cleared by writing 1; CHECKER_STICKY mirrors the checker's flags, which TELEM_CTRL.STICKY_CLEAR clears. |
+| `0x050` | `0x7050` | `WRAP_STATUS` | W1C | `0x00000000` | One sticky bit per counter, set when that counter passed its maximum. For a modulo counter this says the absolute value is no longer meaningful and only differences are; for a saturating one it says the count has stopped moving. Either way it is the difference between a number and a number that can be believed, which is why SPEC 13.4 exercises wrap deliberately. |
+
+### `COUNTERS.TELEM_CTRL` — `0x7000`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `0` | `ENABLE` | RW | `0x1` | — | Counters advance only while this is 1. Reset to 1 so a design that never touches the control plane still measures itself. |
+| `1` | `SEQ_ENABLE` | RW | `0x1` | — | Enables the sequence checker. Clearing it drops every stream's expectation, so the first beat after it is set again re-initialises instead of reporting a loss. |
+| `2` | `SEQ_SOF_RESYNC` | RW | `0x0` | — | Treat start_of_frame as a sequence resync point. Correct for a source that restarts numbering each frame; masks real loss at every frame boundary for one that does not, hence off by default. |
+| `8` | `SNAPSHOT` | RWP | `0x0` | — | Latch every counter in this block, and the sequence checker's five, into their shadows at one edge. The shadow includes any event in the strobe cycle. |
+| `9` | `CLEAR` | RWP | `0x0` | — | Zero every counter, every shadow, the high-water mark and the shadow-valid flag. Beats a simultaneous event. |
+| `10` | `STICKY_CLEAR` | RWP | `0x0` | — | Clear the sequence checker's sticky flags. Does not touch the counts, and a fault detected in the same cycle still sets them. |
+
+### `COUNTERS.TELEM_STATUS` — `0x7004`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `7:0` | `COUNT_W` | ROHW | `0x0` | `telemetry_block COUNT_W` | Width in bits of the ordinary counters. Anything above it in a count register reads 0. |
+| `15:8` | `WIDE_W` | ROHW | `0x0` | `telemetry_block WIDE_W` | Width in bits of the beat and stall counters, which are presented as a LO/HI pair. |
+| `23:16` | `TRACKED_IDS` | ROHW | `0x0` | `telemetry_block N_TRACKED_IDS` | Streams the sequence checker tracks independently. Beats on a higher stream_id are counted in SEQ_UNTRACKED_COUNT rather than folded onto a tracked stream. |
+| `24` | `SNAP_VALID` | ROHW | `0x0` | — | A snapshot has been taken since reset or the last CLEAR. While this is 0 every count register reads 0 because nothing was captured, not because nothing happened. |
+| `25` | `TRAFFIC_SATURATE` | ROHW | `0x0` | `telemetry_block TRAFFIC_SATURATE` | 0: the traffic counters are exact modulo 2**width and set a WRAP_STATUS bit when they roll. 1: they stop at all ones. |
+| `26` | `ERROR_SATURATE` | ROHW | `0x0` | `telemetry_block ERROR_SATURATE` | The same, for the error and fault counters. 1 by default: a dump taken after a long run must not report a small number because the counter went round. |
+| `27` | `WRAP_ANY` | ROHW | `0x0` | — | Sticky OR of every counter's own range flag. A quick 'are these numbers still absolute' test that does not need WRAP_STATUS decoded. |
+
+### `COUNTERS.SNAPSHOT_ID` — `0x7008`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `31:0` | `VALUE` | ROHW | `0x0` | — | Count of SNAPSHOT strobes. |
+
+### `COUNTERS.BEAT_COUNT_LO` — `0x700C`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `31:0` | `VALUE` | ROHW | `0x0` | — | Bits 31:0 of the beat count. |
+
+### `COUNTERS.BEAT_COUNT_HI` — `0x7010`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `31:0` | `VALUE` | ROHW | `0x0` | — | Bits 63:32 of the beat count. |
+
+### `COUNTERS.STALL_COUNT_LO` — `0x7014`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `31:0` | `VALUE` | ROHW | `0x0` | — | Bits 31:0 of the stall count. |
+
+### `COUNTERS.STALL_COUNT_HI` — `0x7018`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `31:0` | `VALUE` | ROHW | `0x0` | — | Bits 63:32 of the stall count. |
+
+### `COUNTERS.IDLE_COUNT` — `0x701C`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `31:0` | `VALUE` | ROHW | `0x0` | — | Count of starved cycles. |
+
+### `COUNTERS.FRAME_COUNT` — `0x7020`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `31:0` | `VALUE` | ROHW | `0x0` | — | Frames completed. |
+
+### `COUNTERS.FRAME_START_COUNT` — `0x7024`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `31:0` | `VALUE` | ROHW | `0x0` | — | Frames started. |
+
+### `COUNTERS.FIFO_HIGH_WATER` — `0x7028`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `15:0` | `HIGH` | ROHW | `0x0` | — | Maximum fill level since reset or the last CLEAR. |
+| `31:16` | `DEPTH` | ROHW | `0x0` | `telemetry_block FIFO_DEPTH` | Depth the observed FIFO was elaborated with. HIGH equal to DEPTH means it filled. |
+
+### `COUNTERS.OVERFLOW_COUNT` — `0x702C`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `31:0` | `VALUE` | ROHW | `0x0` | — | Overflow events. |
+
+### `COUNTERS.SATURATE_COUNT` — `0x7030`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `31:0` | `VALUE` | ROHW | `0x0` | — | Saturation events. |
+
+### `COUNTERS.CDC_ERROR_COUNT` — `0x7034`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `31:0` | `VALUE` | ROHW | `0x0` | — | CDC error events. |
+
+### `COUNTERS.SEQ_GAP_COUNT` — `0x7038`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `31:0` | `VALUE` | ROHW | `0x0` | — | Gap events. |
+
+### `COUNTERS.SEQ_DUP_COUNT` — `0x703C`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `31:0` | `VALUE` | ROHW | `0x0` | — | Duplicate beats. |
+
+### `COUNTERS.SEQ_REORDER_COUNT` — `0x7040`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `31:0` | `VALUE` | ROHW | `0x0` | — | Out-of-order beats. |
+
+### `COUNTERS.SEQ_LOST_BEATS` — `0x7044`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `31:0` | `VALUE` | ROHW | `0x0` | — | Missing beats. |
+
+### `COUNTERS.SEQ_UNTRACKED_COUNT` — `0x7048`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `31:0` | `VALUE` | ROHW | `0x0` | — | Beats on an untracked stream. |
+
+### `COUNTERS.SEQ_STATUS` — `0x704C`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `0` | `GAP` | W1C | `0x0` | — | A gap was detected. |
+| `1` | `DUP` | W1C | `0x0` | — | A duplicate was detected. |
+| `2` | `REORDER` | W1C | `0x0` | — | A reordered beat was detected. |
+| `3` | `UNTRACKED` | W1C | `0x0` | — | A beat arrived on an untracked stream. |
+| `11:8` | `CHECKER_STICKY` | ROHW | `0x0` | `seq_checker sticky` | The checker's own sticky flags, in the same bit order: untracked, reorder, dup, gap, from bit 11 down to bit 8. |
+
+### `COUNTERS.WRAP_STATUS` — `0x7050`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `0` | `BEAT` | W1C | `0x0` | — | The beat counter passed its maximum. |
+| `1` | `STALL` | W1C | `0x0` | — | The stall counter passed its maximum. |
+| `2` | `IDLE` | W1C | `0x0` | — | The idle counter passed its maximum. |
+| `3` | `FRAME` | W1C | `0x0` | — | The frame counter passed its maximum. |
+| `4` | `FRAME_START` | W1C | `0x0` | — | The frame-start counter passed its maximum. |
+| `5` | `OVERFLOW` | W1C | `0x0` | — | The overflow counter passed its maximum. |
+| `6` | `SATURATE` | W1C | `0x0` | — | The saturation counter passed its maximum. |
+| `7` | `CDC_ERROR` | W1C | `0x0` | — | The CDC error counter passed its maximum. |
+| `8` | `SNAPSHOT_ID` | W1C | `0x0` | — | SNAPSHOT_ID rolled over. Harmless in itself - it is an identity, not a magnitude - but a reader comparing it across a sweep should know that equal values are now only overwhelmingly likely to mean the same instant rather than certain to. |
 
 ## `debug` — `0x8000`
 

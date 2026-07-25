@@ -5,13 +5,37 @@
 // SPEC 8), with the SPEC 9 master port brought straight to the boundary so the
 // C++ register driver in sim/verilator/harness/reg_driver.h can talk to it.
 //
-//   u_fabric        the real fabric: five implemented blocks at the windows
+//   u_fabric        the real fabric: every implemented block at the windows
 //                   control/regmap.json declares.
 //   u_fabric_stuck  a second, one-block fabric whose block never answers, so the
 //                   watchdog escape is exercised as a path rather than asserted
 //                   as a property of unreached code. Wholly independent of the
 //                   first: separate ports, separate state, no shared signal but
 //                   the clock and the reset.
+//
+// The counters window (issue #8)
+// ------------------------------
+// `u_counters` is the SPEC 9 counters block as a REGISTER FILE and nothing else:
+// a bare reg_csr_block carrying the generated table for that window, with its
+// hardware inputs tied off. The real block — rtl/common/telemetry_block.sv — is
+// the same register file plus twenty counters, a high-water tracker and a
+// sequence checker, and it needs a stream to measure, which is why it is
+// verified in sim/verilator/tops/telemetry_top.sv against real traffic rather
+// than here against none.
+//
+// What this instance is for is the other half: that the window decodes, that
+// every access type in it behaves, that a write to a read-only counter is
+// refused, and that the randomized soak covers it exactly like every other
+// block. Those are properties of the plane, which is what control_top is the top
+// for. The hardware-driven fields consequently read zero here and their real
+// values in telemetry_top; both are checked, each in the top where it is the
+// subject.
+//
+// A stub rather than the real block, because control_top's contract with
+// test_control_regs is that a C++ model built purely from the generated tables
+// predicts every response. A block whose read data depends on live traffic would
+// have to be modelled a second time, inside a test about the register plane, to
+// prove something the telemetry test already proves better.
 //
 // Observation outputs. The block storage (`obs_*_csr`) and the pulse vectors are
 // exported so a test can see the register file WITHOUT going through the read
@@ -56,6 +80,11 @@ module control_top
     output wire [REGMAP_FAULT_N_REGS*32-1:0]    obs_fault_csr,
     output wire [REGMAP_FAULT_N_REGS*32-1:0]    obs_fault_pulse,
     output wire [REGMAP_SCRATCH_N_REGS*32-1:0]  obs_scratch_csr,
+    output wire [REGMAP_COUNTERS_N_REGS*32-1:0] obs_counters_csr,
+    // The counters window is the only block here carrying writable storage and
+    // pulse bits in the same register, so it is the one place where "a pulse
+    // fired" and "a bit was stored" have to be separable without the read mux.
+    output wire [REGMAP_COUNTERS_N_REGS*32-1:0] obs_counters_pulse,
 
     // ---- control outputs the blocks drive ----
     output wire [31:0]                          obs_block_enable,
@@ -228,6 +257,34 @@ module control_top
       .error        (blk_error[REGMAP_SCRATCH_INDEX]),
       .csr          (obs_scratch_csr),
       .pulse        (scratch_pulse)
+  );
+
+  // The counters window as a bare register file. See the header for why the
+  // hardware side is tied off here.
+  reg_csr_block #(
+      .N_REGS     (REGMAP_COUNTERS_N_REGS),
+      .IDX_W      (IDX_W),
+      .RESET_VAL  (REGMAP_COUNTERS_RESET),
+      .WMASK      (REGMAP_COUNTERS_WMASK),
+      .W1C_MASK   (REGMAP_COUNTERS_W1CMASK),
+      .PULSE_MASK (REGMAP_COUNTERS_PULSEMASK),
+      .HW_MASK    (REGMAP_COUNTERS_HWMASK)
+  ) u_counters (
+      .clk          (clk),
+      .rst_n        (rst_n),
+      .sel          (blk_sel[REGMAP_COUNTERS_INDEX]),
+      .write_enable (blk_write_enable),
+      .read_enable  (blk_read_enable),
+      .index        (blk_index),
+      .write_data   (blk_write_data),
+      .byte_enable  (blk_byte_enable),
+      .read_data    (blk_read_data[REGMAP_COUNTERS_INDEX*REG_DATA_W +: REG_DATA_W]),
+      .ready        (blk_ready[REGMAP_COUNTERS_INDEX]),
+      .error        (blk_error[REGMAP_COUNTERS_INDEX]),
+      .hw_value     ('0),
+      .hw_set       ('0),
+      .csr          (obs_counters_csr),
+      .pulse        (obs_counters_pulse)
   );
 
   // Invariants of the blocks with no writable and no pulse bits.

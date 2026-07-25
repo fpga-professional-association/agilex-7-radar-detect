@@ -22,19 +22,20 @@ package regmap_pkg;
   localparam int unsigned REGMAP_WINDOW_BYTES = 4096;
   localparam int unsigned REGMAP_WINDOW_W = 12;
   localparam int unsigned REGMAP_N_BLOCKS = 9;
-  localparam int unsigned REGMAP_N_BLOCKS_IMPL = 5;
-  localparam int unsigned REGMAP_N_REGS_TOTAL = 28;
-  localparam logic [31:0] REGMAP_BLOCK_MASK = 32'h0000001F;
+  localparam int unsigned REGMAP_N_BLOCKS_IMPL = 6;
+  localparam int unsigned REGMAP_N_REGS_TOTAL = 49;
+  localparam logic [31:0] REGMAP_BLOCK_MASK = 32'h0000009F;
 
   // ---- implemented block windows, in fabric port order ----
   // The fabric decodes one master port onto these windows; index i here is index i
   // on every per-block port array of rtl/control/reg_fabric.sv.
-  localparam logic [REGMAP_N_BLOCKS_IMPL*REGMAP_ADDR_W-1:0] REGMAP_IMPL_BASE = {16'h4000, 16'h3000, 16'h2000, 16'h1000, 16'h0000};
+  localparam logic [REGMAP_N_BLOCKS_IMPL*REGMAP_ADDR_W-1:0] REGMAP_IMPL_BASE = {16'h7000, 16'h4000, 16'h3000, 16'h2000, 16'h1000, 16'h0000};
   //   [0] id            base 0x0000  4 registers
   //   [1] build_params  base 0x1000  12 registers
   //   [2] ctrl          base 0x2000  4 registers
   //   [3] fault         base 0x3000  4 registers
   //   [4] scratch       base 0x4000  4 registers
+  //   [5] counters      base 0x7000  21 registers
 
   // -------------------------------------------------------------------------
   // Block 0: id — implemented
@@ -126,9 +127,9 @@ package regmap_pkg;
 
   // reset value of the stored bits
   localparam logic [REGMAP_ID_N_REGS*32-1:0] REGMAP_ID_RESET = {
-      32'h0000001F,  // [3]
-      32'h10201C09,  // [2]
-      32'h01000001,  // [1]
+      32'h0000009F,  // [3]
+      32'h10203109,  // [2]
+      32'h01010001,  // [1]
       32'h52414441  // [0]
   };
   // bits a software write may set or clear (RW)
@@ -841,17 +842,540 @@ package regmap_pkg;
   // No registers in this build: every access to 0x6000..0x6FFF returns error=1.
 
   // -------------------------------------------------------------------------
-  // Block 7: counters — PLANNED (#8)
-  // SPEC 9 groups: Stream counters; Stall counters; FIFO high-water marks; Overflow and saturation counts; Frame counts; Sequence errors; CDC errors
-  // PLANNED. Performance and health telemetry. The counters themselves are issue #8;
-  // this window is where they are read from. Counters live in the telemetry clock
-  // domain, so this block will be the first consumer of the issue #6 CDC primitives on
-  // the register path.
+  // Block 7: counters — implemented
+  // SPEC 9 groups: Stream counters; Stall counters; FIFO high-water marks; Overflow and saturation counts; Frame counts; Sequence errors; CDC errors; Snapshot and debug control
+  // Performance and health telemetry for one observed interface
+  // (rtl/common/telemetry_block.sv, issue #8). EVERY COUNT REGISTER IN THIS BLOCK READS
+  // A SHADOW, NOT A RUNNING COUNTER: write TELEM_CTRL.SNAPSHOT, then read as many
+  // registers as you like, and all of them describe the single edge at which that
+  // strobe landed. A running counter read through a 32-bit plane cannot be coherent -
+  // the low word of a 64-bit beat count can wrap between the two accesses and report a
+  // number that never existed - so the plane is never given the chance. SNAPSHOT_ID is
+  // the proof: read it before and after a sweep, and equal values mean the sweep saw
+  // one instant. The block is instantiated in the domain of the interface it observes,
+  // and the register interface, not the counters, is what crosses into cfg_clk when the
+  // two differ (issue #19): crossing one bus once is cheaper and far easier to verify
+  // than crossing twenty counters.
   // -------------------------------------------------------------------------
   localparam logic [REGMAP_ADDR_W-1:0] REGMAP_COUNTERS_BASE = 16'h7000;
   localparam int unsigned REGMAP_COUNTERS_SIZE = 4096;
-  localparam int unsigned REGMAP_COUNTERS_N_REGS = 0;
-  // No registers in this build: every access to 0x7000..0x7FFF returns error=1.
+  localparam int unsigned REGMAP_COUNTERS_N_REGS = 21;
+  localparam int unsigned REGMAP_COUNTERS_INDEX = 5;  // fabric port index
+
+  // TELEM_CTRL @ 0x7000 (MIXED)
+  //   Measurement window and the three strobes. ENABLE gates every counter, so a window
+  //   can be opened and closed without touching the traffic being measured. SNAPSHOT,
+  //   CLEAR and STICKY_CLEAR are write-1-pulse and always read 0.
+  //   [0:0] ENABLE (RW)
+  //       Counters advance only while this is 1. Reset to 1 so a design that never
+  //       touches the control plane still measures itself.
+  //   [1:1] SEQ_ENABLE (RW)
+  //       Enables the sequence checker. Clearing it drops every stream's expectation,
+  //       so the first beat after it is set again re-initialises instead of reporting a
+  //       loss.
+  //   [2:2] SEQ_SOF_RESYNC (RW)
+  //       Treat start_of_frame as a sequence resync point. Correct for a source that
+  //       restarts numbering each frame; masks real loss at every frame boundary for
+  //       one that does not, hence off by default.
+  //   [8:8] SNAPSHOT (RWP)
+  //       Latch every counter in this block, and the sequence checker's five, into
+  //       their shadows at one edge. The shadow includes any event in the strobe cycle.
+  //   [9:9] CLEAR (RWP)
+  //       Zero every counter, every shadow, the high-water mark and the shadow-valid
+  //       flag. Beats a simultaneous event.
+  //   [10:10] STICKY_CLEAR (RWP)
+  //       Clear the sequence checker's sticky flags. Does not touch the counts, and a
+  //       fault detected in the same cycle still sets them.
+  localparam int unsigned REGMAP_COUNTERS_TELEM_CTRL_INDEX = 0;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_COUNTERS_TELEM_CTRL_ADDR = 16'h7000;
+  localparam int unsigned REGMAP_COUNTERS_TELEM_CTRL_ENABLE_LSB = 0;
+  localparam int unsigned REGMAP_COUNTERS_TELEM_CTRL_ENABLE_WIDTH = 1;
+  localparam logic [31:0] REGMAP_COUNTERS_TELEM_CTRL_ENABLE_MASK = 32'h00000001;
+  localparam int unsigned REGMAP_COUNTERS_TELEM_CTRL_SEQ_ENABLE_LSB = 1;
+  localparam int unsigned REGMAP_COUNTERS_TELEM_CTRL_SEQ_ENABLE_WIDTH = 1;
+  localparam logic [31:0] REGMAP_COUNTERS_TELEM_CTRL_SEQ_ENABLE_MASK = 32'h00000002;
+  localparam int unsigned REGMAP_COUNTERS_TELEM_CTRL_SEQ_SOF_RESYNC_LSB = 2;
+  localparam int unsigned REGMAP_COUNTERS_TELEM_CTRL_SEQ_SOF_RESYNC_WIDTH = 1;
+  localparam logic [31:0] REGMAP_COUNTERS_TELEM_CTRL_SEQ_SOF_RESYNC_MASK = 32'h00000004;
+  localparam int unsigned REGMAP_COUNTERS_TELEM_CTRL_SNAPSHOT_LSB = 8;
+  localparam int unsigned REGMAP_COUNTERS_TELEM_CTRL_SNAPSHOT_WIDTH = 1;
+  localparam logic [31:0] REGMAP_COUNTERS_TELEM_CTRL_SNAPSHOT_MASK = 32'h00000100;
+  localparam int unsigned REGMAP_COUNTERS_TELEM_CTRL_CLEAR_LSB = 9;
+  localparam int unsigned REGMAP_COUNTERS_TELEM_CTRL_CLEAR_WIDTH = 1;
+  localparam logic [31:0] REGMAP_COUNTERS_TELEM_CTRL_CLEAR_MASK = 32'h00000200;
+  localparam int unsigned REGMAP_COUNTERS_TELEM_CTRL_STICKY_CLEAR_LSB = 10;
+  localparam int unsigned REGMAP_COUNTERS_TELEM_CTRL_STICKY_CLEAR_WIDTH = 1;
+  localparam logic [31:0] REGMAP_COUNTERS_TELEM_CTRL_STICKY_CLEAR_MASK = 32'h00000400;
+
+  // TELEM_STATUS @ 0x7004 (ROHW)
+  //   Build geometry of this telemetry instance plus the two facts a reader needs
+  //   before trusting a count: whether a snapshot was ever taken, and whether any
+  //   counter has passed its maximum since the last clear.
+  //   [7:0] COUNT_W (ROHW) <- telemetry_block COUNT_W
+  //       Width in bits of the ordinary counters. Anything above it in a count register
+  //       reads 0.
+  //   [15:8] WIDE_W (ROHW) <- telemetry_block WIDE_W
+  //       Width in bits of the beat and stall counters, which are presented as a LO/HI
+  //       pair.
+  //   [23:16] TRACKED_IDS (ROHW) <- telemetry_block N_TRACKED_IDS
+  //       Streams the sequence checker tracks independently. Beats on a higher
+  //       stream_id are counted in SEQ_UNTRACKED_COUNT rather than folded onto a
+  //       tracked stream.
+  //   [24:24] SNAP_VALID (ROHW)
+  //       A snapshot has been taken since reset or the last CLEAR. While this is 0
+  //       every count register reads 0 because nothing was captured, not because
+  //       nothing happened.
+  //   [25:25] TRAFFIC_SATURATE (ROHW) <- telemetry_block TRAFFIC_SATURATE
+  //       0: the traffic counters are exact modulo 2**width and set a WRAP_STATUS bit
+  //       when they roll. 1: they stop at all ones.
+  //   [26:26] ERROR_SATURATE (ROHW) <- telemetry_block ERROR_SATURATE
+  //       The same, for the error and fault counters. 1 by default: a dump taken after
+  //       a long run must not report a small number because the counter went round.
+  //   [27:27] WRAP_ANY (ROHW)
+  //       Sticky OR of every counter's own range flag. A quick 'are these numbers still
+  //       absolute' test that does not need WRAP_STATUS decoded.
+  localparam int unsigned REGMAP_COUNTERS_TELEM_STATUS_INDEX = 1;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_COUNTERS_TELEM_STATUS_ADDR = 16'h7004;
+  localparam int unsigned REGMAP_COUNTERS_TELEM_STATUS_COUNT_W_LSB = 0;
+  localparam int unsigned REGMAP_COUNTERS_TELEM_STATUS_COUNT_W_WIDTH = 8;
+  localparam logic [31:0] REGMAP_COUNTERS_TELEM_STATUS_COUNT_W_MASK = 32'h000000FF;
+  localparam int unsigned REGMAP_COUNTERS_TELEM_STATUS_WIDE_W_LSB = 8;
+  localparam int unsigned REGMAP_COUNTERS_TELEM_STATUS_WIDE_W_WIDTH = 8;
+  localparam logic [31:0] REGMAP_COUNTERS_TELEM_STATUS_WIDE_W_MASK = 32'h0000FF00;
+  localparam int unsigned REGMAP_COUNTERS_TELEM_STATUS_TRACKED_IDS_LSB = 16;
+  localparam int unsigned REGMAP_COUNTERS_TELEM_STATUS_TRACKED_IDS_WIDTH = 8;
+  localparam logic [31:0] REGMAP_COUNTERS_TELEM_STATUS_TRACKED_IDS_MASK = 32'h00FF0000;
+  localparam int unsigned REGMAP_COUNTERS_TELEM_STATUS_SNAP_VALID_LSB = 24;
+  localparam int unsigned REGMAP_COUNTERS_TELEM_STATUS_SNAP_VALID_WIDTH = 1;
+  localparam logic [31:0] REGMAP_COUNTERS_TELEM_STATUS_SNAP_VALID_MASK = 32'h01000000;
+  localparam int unsigned REGMAP_COUNTERS_TELEM_STATUS_TRAFFIC_SATURATE_LSB = 25;
+  localparam int unsigned REGMAP_COUNTERS_TELEM_STATUS_TRAFFIC_SATURATE_WIDTH = 1;
+  localparam logic [31:0] REGMAP_COUNTERS_TELEM_STATUS_TRAFFIC_SATURATE_MASK = 32'h02000000;
+  localparam int unsigned REGMAP_COUNTERS_TELEM_STATUS_ERROR_SATURATE_LSB = 26;
+  localparam int unsigned REGMAP_COUNTERS_TELEM_STATUS_ERROR_SATURATE_WIDTH = 1;
+  localparam logic [31:0] REGMAP_COUNTERS_TELEM_STATUS_ERROR_SATURATE_MASK = 32'h04000000;
+  localparam int unsigned REGMAP_COUNTERS_TELEM_STATUS_WRAP_ANY_LSB = 27;
+  localparam int unsigned REGMAP_COUNTERS_TELEM_STATUS_WRAP_ANY_WIDTH = 1;
+  localparam logic [31:0] REGMAP_COUNTERS_TELEM_STATUS_WRAP_ANY_MASK = 32'h08000000;
+
+  // SNAPSHOT_ID @ 0x7008 (ROHW)
+  //   Snapshots taken since reset or the last CLEAR, saturating. Read it before and
+  //   after a sweep of this block: if the two agree, every register in between came
+  //   from one edge. This is the only defence against a second agent snapshotting in
+  //   the middle of someone else's read sequence, and it costs one register.
+  //   [31:0] VALUE (ROHW)
+  //       Count of SNAPSHOT strobes.
+  localparam int unsigned REGMAP_COUNTERS_SNAPSHOT_ID_INDEX = 2;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_COUNTERS_SNAPSHOT_ID_ADDR = 16'h7008;
+  localparam int unsigned REGMAP_COUNTERS_SNAPSHOT_ID_VALUE_LSB = 0;
+  localparam int unsigned REGMAP_COUNTERS_SNAPSHOT_ID_VALUE_WIDTH = 32;
+  localparam logic [31:0] REGMAP_COUNTERS_SNAPSHOT_ID_VALUE_MASK = 32'hFFFFFFFF;
+
+  // BEAT_COUNT_LO @ 0x700C (ROHW)
+  //   SPEC 9 stream counters. Low half of the accepted-transfer count on the observed
+  //   interface: cycles in which valid && ready. Read together with BEAT_COUNT_HI after
+  //   one SNAPSHOT; the pair is coherent because both halves come from one shadow.
+  //   [31:0] VALUE (ROHW)
+  //       Bits 31:0 of the beat count.
+  localparam int unsigned REGMAP_COUNTERS_BEAT_COUNT_LO_INDEX = 3;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_COUNTERS_BEAT_COUNT_LO_ADDR = 16'h700C;
+  localparam int unsigned REGMAP_COUNTERS_BEAT_COUNT_LO_VALUE_LSB = 0;
+  localparam int unsigned REGMAP_COUNTERS_BEAT_COUNT_LO_VALUE_WIDTH = 32;
+  localparam logic [31:0] REGMAP_COUNTERS_BEAT_COUNT_LO_VALUE_MASK = 32'hFFFFFFFF;
+
+  // BEAT_COUNT_HI @ 0x7010 (ROHW)
+  //   High half of the accepted-transfer count. Reads 0 when WIDE_W is 32 or less.
+  //   [31:0] VALUE (ROHW)
+  //       Bits 63:32 of the beat count.
+  localparam int unsigned REGMAP_COUNTERS_BEAT_COUNT_HI_INDEX = 4;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_COUNTERS_BEAT_COUNT_HI_ADDR = 16'h7010;
+  localparam int unsigned REGMAP_COUNTERS_BEAT_COUNT_HI_VALUE_LSB = 0;
+  localparam int unsigned REGMAP_COUNTERS_BEAT_COUNT_HI_VALUE_WIDTH = 32;
+  localparam logic [31:0] REGMAP_COUNTERS_BEAT_COUNT_HI_VALUE_MASK = 32'hFFFFFFFF;
+
+  // STALL_COUNT_LO @ 0x7014 (ROHW)
+  //   SPEC 9 stall counters. Low half of the count of cycles in which the source
+  //   offered a beat and the sink refused it: valid && !ready. Divided by the beat
+  //   count this is the backpressure the interface actually suffered, which is the
+  //   number that decides whether a stage needs more buffering.
+  //   [31:0] VALUE (ROHW)
+  //       Bits 31:0 of the stall count.
+  localparam int unsigned REGMAP_COUNTERS_STALL_COUNT_LO_INDEX = 5;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_COUNTERS_STALL_COUNT_LO_ADDR = 16'h7014;
+  localparam int unsigned REGMAP_COUNTERS_STALL_COUNT_LO_VALUE_LSB = 0;
+  localparam int unsigned REGMAP_COUNTERS_STALL_COUNT_LO_VALUE_WIDTH = 32;
+  localparam logic [31:0] REGMAP_COUNTERS_STALL_COUNT_LO_VALUE_MASK = 32'hFFFFFFFF;
+
+  // STALL_COUNT_HI @ 0x7018 (ROHW)
+  //   High half of the stall count.
+  //   [31:0] VALUE (ROHW)
+  //       Bits 63:32 of the stall count.
+  localparam int unsigned REGMAP_COUNTERS_STALL_COUNT_HI_INDEX = 6;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_COUNTERS_STALL_COUNT_HI_ADDR = 16'h7018;
+  localparam int unsigned REGMAP_COUNTERS_STALL_COUNT_HI_VALUE_LSB = 0;
+  localparam int unsigned REGMAP_COUNTERS_STALL_COUNT_HI_VALUE_WIDTH = 32;
+  localparam logic [31:0] REGMAP_COUNTERS_STALL_COUNT_HI_VALUE_MASK = 32'hFFFFFFFF;
+
+  // IDLE_COUNT @ 0x701C (ROHW)
+  //   Cycles in which the sink was ready and the source had nothing: !valid && ready.
+  //   The third arm of the three-way split of a ready cycle - beat, stall, idle - so a
+  //   starved stage is distinguishable from a stalled one rather than both appearing as
+  //   'not full throughput'.
+  //   [31:0] VALUE (ROHW)
+  //       Count of starved cycles.
+  localparam int unsigned REGMAP_COUNTERS_IDLE_COUNT_INDEX = 7;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_COUNTERS_IDLE_COUNT_ADDR = 16'h701C;
+  localparam int unsigned REGMAP_COUNTERS_IDLE_COUNT_VALUE_LSB = 0;
+  localparam int unsigned REGMAP_COUNTERS_IDLE_COUNT_VALUE_WIDTH = 32;
+  localparam logic [31:0] REGMAP_COUNTERS_IDLE_COUNT_VALUE_MASK = 32'hFFFFFFFF;
+
+  // FRAME_COUNT @ 0x7020 (ROHW)
+  //   SPEC 9 frame counts. Accepted beats carrying end_of_frame, i.e. frames completed
+  //   on the observed interface.
+  //   [31:0] VALUE (ROHW)
+  //       Frames completed.
+  localparam int unsigned REGMAP_COUNTERS_FRAME_COUNT_INDEX = 8;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_COUNTERS_FRAME_COUNT_ADDR = 16'h7020;
+  localparam int unsigned REGMAP_COUNTERS_FRAME_COUNT_VALUE_LSB = 0;
+  localparam int unsigned REGMAP_COUNTERS_FRAME_COUNT_VALUE_WIDTH = 32;
+  localparam logic [31:0] REGMAP_COUNTERS_FRAME_COUNT_VALUE_MASK = 32'hFFFFFFFF;
+
+  // FRAME_START_COUNT @ 0x7024 (ROHW)
+  //   Accepted beats carrying start_of_frame. Counted separately from FRAME_COUNT
+  //   because the difference between the two is the frame that was opened and never
+  //   closed, which is exactly the symptom of a truncated frame and is invisible in
+  //   either count alone.
+  //   [31:0] VALUE (ROHW)
+  //       Frames started.
+  localparam int unsigned REGMAP_COUNTERS_FRAME_START_COUNT_INDEX = 9;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_COUNTERS_FRAME_START_COUNT_ADDR = 16'h7024;
+  localparam int unsigned REGMAP_COUNTERS_FRAME_START_COUNT_VALUE_LSB = 0;
+  localparam int unsigned REGMAP_COUNTERS_FRAME_START_COUNT_VALUE_WIDTH = 32;
+  localparam logic [31:0] REGMAP_COUNTERS_FRAME_START_COUNT_VALUE_MASK = 32'hFFFFFFFF;
+
+  // FIFO_HIGH_WATER @ 0x7028 (ROHW)
+  //   SPEC 9 FIFO high-water marks. The deepest fill level the observed FIFO reached in
+  //   the measurement window, beside the depth it was built with, so the margin is
+  //   readable without knowing the elaboration parameters. This is the number that
+  //   sizes the next revision of a DEPTH.
+  //   [15:0] HIGH (ROHW)
+  //       Maximum fill level since reset or the last CLEAR.
+  //   [31:16] DEPTH (ROHW) <- telemetry_block FIFO_DEPTH
+  //       Depth the observed FIFO was elaborated with. HIGH equal to DEPTH means it
+  //       filled.
+  localparam int unsigned REGMAP_COUNTERS_FIFO_HIGH_WATER_INDEX = 10;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_COUNTERS_FIFO_HIGH_WATER_ADDR = 16'h7028;
+  localparam int unsigned REGMAP_COUNTERS_FIFO_HIGH_WATER_HIGH_LSB = 0;
+  localparam int unsigned REGMAP_COUNTERS_FIFO_HIGH_WATER_HIGH_WIDTH = 16;
+  localparam logic [31:0] REGMAP_COUNTERS_FIFO_HIGH_WATER_HIGH_MASK = 32'h0000FFFF;
+  localparam int unsigned REGMAP_COUNTERS_FIFO_HIGH_WATER_DEPTH_LSB = 16;
+  localparam int unsigned REGMAP_COUNTERS_FIFO_HIGH_WATER_DEPTH_WIDTH = 16;
+  localparam logic [31:0] REGMAP_COUNTERS_FIFO_HIGH_WATER_DEPTH_MASK = 32'hFFFF0000;
+
+  // OVERFLOW_COUNT @ 0x702C (ROHW)
+  //   SPEC 9 overflow counts. Overflow events reported by the observed storage.
+  //   Unreachable in correct operation, so any non-zero value here is a design defect
+  //   rather than a traffic condition.
+  //   [31:0] VALUE (ROHW)
+  //       Overflow events.
+  localparam int unsigned REGMAP_COUNTERS_OVERFLOW_COUNT_INDEX = 11;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_COUNTERS_OVERFLOW_COUNT_ADDR = 16'h702C;
+  localparam int unsigned REGMAP_COUNTERS_OVERFLOW_COUNT_VALUE_LSB = 0;
+  localparam int unsigned REGMAP_COUNTERS_OVERFLOW_COUNT_VALUE_WIDTH = 32;
+  localparam logic [31:0] REGMAP_COUNTERS_OVERFLOW_COUNT_VALUE_MASK = 32'hFFFFFFFF;
+
+  // SATURATE_COUNT @ 0x7030 (ROHW)
+  //   SPEC 9 saturation counts. Arithmetic saturation events reported by the observed
+  //   datapath (SPEC 6 saturating arithmetic, collected by
+  //   rtl/common/fxp_sticky_flags.sv). Non-zero is legal and expected on loud input; it
+  //   is the number that says whether a headroom choice was right.
+  //   [31:0] VALUE (ROHW)
+  //       Saturation events.
+  localparam int unsigned REGMAP_COUNTERS_SATURATE_COUNT_INDEX = 12;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_COUNTERS_SATURATE_COUNT_ADDR = 16'h7030;
+  localparam int unsigned REGMAP_COUNTERS_SATURATE_COUNT_VALUE_LSB = 0;
+  localparam int unsigned REGMAP_COUNTERS_SATURATE_COUNT_VALUE_WIDTH = 32;
+  localparam logic [31:0] REGMAP_COUNTERS_SATURATE_COUNT_VALUE_MASK = 32'hFFFFFFFF;
+
+  // CDC_ERROR_COUNT @ 0x7034 (ROHW)
+  //   SPEC 9 CDC errors. Events reported by the crossings the observed path contains -
+  //   a handshake that did not complete, a Gray pointer that moved by more than one
+  //   bit. Like OVERFLOW_COUNT, unreachable in correct operation.
+  //   [31:0] VALUE (ROHW)
+  //       CDC error events.
+  localparam int unsigned REGMAP_COUNTERS_CDC_ERROR_COUNT_INDEX = 13;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_COUNTERS_CDC_ERROR_COUNT_ADDR = 16'h7034;
+  localparam int unsigned REGMAP_COUNTERS_CDC_ERROR_COUNT_VALUE_LSB = 0;
+  localparam int unsigned REGMAP_COUNTERS_CDC_ERROR_COUNT_VALUE_WIDTH = 32;
+  localparam logic [31:0] REGMAP_COUNTERS_CDC_ERROR_COUNT_VALUE_MASK = 32'hFFFFFFFF;
+
+  // SEQ_GAP_COUNT @ 0x7038 (ROHW)
+  //   SPEC 9 sequence errors. Gap EVENTS seen by the attached seq_checker: occasions on
+  //   which the sequence number jumped forward. Counted separately from the beats lost,
+  //   because one gap of forty and forty gaps of one are different failures.
+  //   [31:0] VALUE (ROHW)
+  //       Gap events.
+  localparam int unsigned REGMAP_COUNTERS_SEQ_GAP_COUNT_INDEX = 14;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_COUNTERS_SEQ_GAP_COUNT_ADDR = 16'h7038;
+  localparam int unsigned REGMAP_COUNTERS_SEQ_GAP_COUNT_VALUE_LSB = 0;
+  localparam int unsigned REGMAP_COUNTERS_SEQ_GAP_COUNT_VALUE_WIDTH = 32;
+  localparam logic [31:0] REGMAP_COUNTERS_SEQ_GAP_COUNT_VALUE_MASK = 32'hFFFFFFFF;
+
+  // SEQ_DUP_COUNT @ 0x703C (ROHW)
+  //   Beats whose sequence number repeated the one immediately before it: duplication.
+  //   [31:0] VALUE (ROHW)
+  //       Duplicate beats.
+  localparam int unsigned REGMAP_COUNTERS_SEQ_DUP_COUNT_INDEX = 15;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_COUNTERS_SEQ_DUP_COUNT_ADDR = 16'h703C;
+  localparam int unsigned REGMAP_COUNTERS_SEQ_DUP_COUNT_VALUE_LSB = 0;
+  localparam int unsigned REGMAP_COUNTERS_SEQ_DUP_COUNT_VALUE_WIDTH = 32;
+  localparam logic [31:0] REGMAP_COUNTERS_SEQ_DUP_COUNT_VALUE_MASK = 32'hFFFFFFFF;
+
+  // SEQ_REORDER_COUNT @ 0x7040 (ROHW)
+  //   Beats whose sequence number came from behind the current position and was not the
+  //   immediately preceding one: reordering.
+  //   [31:0] VALUE (ROHW)
+  //       Out-of-order beats.
+  localparam int unsigned REGMAP_COUNTERS_SEQ_REORDER_COUNT_INDEX = 16;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_COUNTERS_SEQ_REORDER_COUNT_ADDR = 16'h7040;
+  localparam int unsigned REGMAP_COUNTERS_SEQ_REORDER_COUNT_VALUE_LSB = 0;
+  localparam int unsigned REGMAP_COUNTERS_SEQ_REORDER_COUNT_VALUE_WIDTH = 32;
+  localparam logic [31:0] REGMAP_COUNTERS_SEQ_REORDER_COUNT_VALUE_MASK = 32'hFFFFFFFF;
+
+  // SEQ_LOST_BEATS @ 0x7044 (ROHW)
+  //   Beats that never arrived, summed over every gap. SEQ_GAP_COUNT says how often the
+  //   stream broke; this says how much of it was lost.
+  //   [31:0] VALUE (ROHW)
+  //       Missing beats.
+  localparam int unsigned REGMAP_COUNTERS_SEQ_LOST_BEATS_INDEX = 17;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_COUNTERS_SEQ_LOST_BEATS_ADDR = 16'h7044;
+  localparam int unsigned REGMAP_COUNTERS_SEQ_LOST_BEATS_VALUE_LSB = 0;
+  localparam int unsigned REGMAP_COUNTERS_SEQ_LOST_BEATS_VALUE_WIDTH = 32;
+  localparam logic [31:0] REGMAP_COUNTERS_SEQ_LOST_BEATS_VALUE_MASK = 32'hFFFFFFFF;
+
+  // SEQ_UNTRACKED_COUNT @ 0x7048 (ROHW)
+  //   Beats on a stream_id at or above TRACKED_IDS. Counted rather than ignored: an
+  //   instance sized for four streams that silently dropped everything on stream 7
+  //   would report a clean run on traffic it never looked at.
+  //   [31:0] VALUE (ROHW)
+  //       Beats on an untracked stream.
+  localparam int unsigned REGMAP_COUNTERS_SEQ_UNTRACKED_COUNT_INDEX = 18;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_COUNTERS_SEQ_UNTRACKED_COUNT_ADDR = 16'h7048;
+  localparam int unsigned REGMAP_COUNTERS_SEQ_UNTRACKED_COUNT_VALUE_LSB = 0;
+  localparam int unsigned REGMAP_COUNTERS_SEQ_UNTRACKED_COUNT_VALUE_WIDTH = 32;
+  localparam logic [31:0] REGMAP_COUNTERS_SEQ_UNTRACKED_COUNT_VALUE_MASK = 32'hFFFFFFFF;
+
+  // SEQ_STATUS @ 0x704C (MIXED)
+  //   Sticky record of which kinds of sequence fault occurred at all, so a fault that
+  //   happened once in a long run is still visible after the counts have been cleared.
+  //   The W1C half is this block's own copy, cleared by writing 1; CHECKER_STICKY
+  //   mirrors the checker's flags, which TELEM_CTRL.STICKY_CLEAR clears.
+  //   [0:0] GAP (W1C)
+  //       A gap was detected.
+  //   [1:1] DUP (W1C)
+  //       A duplicate was detected.
+  //   [2:2] REORDER (W1C)
+  //       A reordered beat was detected.
+  //   [3:3] UNTRACKED (W1C)
+  //       A beat arrived on an untracked stream.
+  //   [11:8] CHECKER_STICKY (ROHW) <- seq_checker sticky
+  //       The checker's own sticky flags, in the same bit order: untracked, reorder,
+  //       dup, gap, from bit 11 down to bit 8.
+  localparam int unsigned REGMAP_COUNTERS_SEQ_STATUS_INDEX = 19;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_COUNTERS_SEQ_STATUS_ADDR = 16'h704C;
+  localparam int unsigned REGMAP_COUNTERS_SEQ_STATUS_GAP_LSB = 0;
+  localparam int unsigned REGMAP_COUNTERS_SEQ_STATUS_GAP_WIDTH = 1;
+  localparam logic [31:0] REGMAP_COUNTERS_SEQ_STATUS_GAP_MASK = 32'h00000001;
+  localparam int unsigned REGMAP_COUNTERS_SEQ_STATUS_DUP_LSB = 1;
+  localparam int unsigned REGMAP_COUNTERS_SEQ_STATUS_DUP_WIDTH = 1;
+  localparam logic [31:0] REGMAP_COUNTERS_SEQ_STATUS_DUP_MASK = 32'h00000002;
+  localparam int unsigned REGMAP_COUNTERS_SEQ_STATUS_REORDER_LSB = 2;
+  localparam int unsigned REGMAP_COUNTERS_SEQ_STATUS_REORDER_WIDTH = 1;
+  localparam logic [31:0] REGMAP_COUNTERS_SEQ_STATUS_REORDER_MASK = 32'h00000004;
+  localparam int unsigned REGMAP_COUNTERS_SEQ_STATUS_UNTRACKED_LSB = 3;
+  localparam int unsigned REGMAP_COUNTERS_SEQ_STATUS_UNTRACKED_WIDTH = 1;
+  localparam logic [31:0] REGMAP_COUNTERS_SEQ_STATUS_UNTRACKED_MASK = 32'h00000008;
+  localparam int unsigned REGMAP_COUNTERS_SEQ_STATUS_CHECKER_STICKY_LSB = 8;
+  localparam int unsigned REGMAP_COUNTERS_SEQ_STATUS_CHECKER_STICKY_WIDTH = 4;
+  localparam logic [31:0] REGMAP_COUNTERS_SEQ_STATUS_CHECKER_STICKY_MASK = 32'h00000F00;
+
+  // WRAP_STATUS @ 0x7050 (W1C)
+  //   One sticky bit per counter, set when that counter passed its maximum. For a
+  //   modulo counter this says the absolute value is no longer meaningful and only
+  //   differences are; for a saturating one it says the count has stopped moving.
+  //   Either way it is the difference between a number and a number that can be
+  //   believed, which is why SPEC 13.4 exercises wrap deliberately.
+  //   [0:0] BEAT (W1C)
+  //       The beat counter passed its maximum.
+  //   [1:1] STALL (W1C)
+  //       The stall counter passed its maximum.
+  //   [2:2] IDLE (W1C)
+  //       The idle counter passed its maximum.
+  //   [3:3] FRAME (W1C)
+  //       The frame counter passed its maximum.
+  //   [4:4] FRAME_START (W1C)
+  //       The frame-start counter passed its maximum.
+  //   [5:5] OVERFLOW (W1C)
+  //       The overflow counter passed its maximum.
+  //   [6:6] SATURATE (W1C)
+  //       The saturation counter passed its maximum.
+  //   [7:7] CDC_ERROR (W1C)
+  //       The CDC error counter passed its maximum.
+  //   [8:8] SNAPSHOT_ID (W1C)
+  //       SNAPSHOT_ID rolled over. Harmless in itself - it is an identity, not a
+  //       magnitude - but a reader comparing it across a sweep should know that equal
+  //       values are now only overwhelmingly likely to mean the same instant rather
+  //       than certain to.
+  localparam int unsigned REGMAP_COUNTERS_WRAP_STATUS_INDEX = 20;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_COUNTERS_WRAP_STATUS_ADDR = 16'h7050;
+  localparam int unsigned REGMAP_COUNTERS_WRAP_STATUS_BEAT_LSB = 0;
+  localparam int unsigned REGMAP_COUNTERS_WRAP_STATUS_BEAT_WIDTH = 1;
+  localparam logic [31:0] REGMAP_COUNTERS_WRAP_STATUS_BEAT_MASK = 32'h00000001;
+  localparam int unsigned REGMAP_COUNTERS_WRAP_STATUS_STALL_LSB = 1;
+  localparam int unsigned REGMAP_COUNTERS_WRAP_STATUS_STALL_WIDTH = 1;
+  localparam logic [31:0] REGMAP_COUNTERS_WRAP_STATUS_STALL_MASK = 32'h00000002;
+  localparam int unsigned REGMAP_COUNTERS_WRAP_STATUS_IDLE_LSB = 2;
+  localparam int unsigned REGMAP_COUNTERS_WRAP_STATUS_IDLE_WIDTH = 1;
+  localparam logic [31:0] REGMAP_COUNTERS_WRAP_STATUS_IDLE_MASK = 32'h00000004;
+  localparam int unsigned REGMAP_COUNTERS_WRAP_STATUS_FRAME_LSB = 3;
+  localparam int unsigned REGMAP_COUNTERS_WRAP_STATUS_FRAME_WIDTH = 1;
+  localparam logic [31:0] REGMAP_COUNTERS_WRAP_STATUS_FRAME_MASK = 32'h00000008;
+  localparam int unsigned REGMAP_COUNTERS_WRAP_STATUS_FRAME_START_LSB = 4;
+  localparam int unsigned REGMAP_COUNTERS_WRAP_STATUS_FRAME_START_WIDTH = 1;
+  localparam logic [31:0] REGMAP_COUNTERS_WRAP_STATUS_FRAME_START_MASK = 32'h00000010;
+  localparam int unsigned REGMAP_COUNTERS_WRAP_STATUS_OVERFLOW_LSB = 5;
+  localparam int unsigned REGMAP_COUNTERS_WRAP_STATUS_OVERFLOW_WIDTH = 1;
+  localparam logic [31:0] REGMAP_COUNTERS_WRAP_STATUS_OVERFLOW_MASK = 32'h00000020;
+  localparam int unsigned REGMAP_COUNTERS_WRAP_STATUS_SATURATE_LSB = 6;
+  localparam int unsigned REGMAP_COUNTERS_WRAP_STATUS_SATURATE_WIDTH = 1;
+  localparam logic [31:0] REGMAP_COUNTERS_WRAP_STATUS_SATURATE_MASK = 32'h00000040;
+  localparam int unsigned REGMAP_COUNTERS_WRAP_STATUS_CDC_ERROR_LSB = 7;
+  localparam int unsigned REGMAP_COUNTERS_WRAP_STATUS_CDC_ERROR_WIDTH = 1;
+  localparam logic [31:0] REGMAP_COUNTERS_WRAP_STATUS_CDC_ERROR_MASK = 32'h00000080;
+  localparam int unsigned REGMAP_COUNTERS_WRAP_STATUS_SNAPSHOT_ID_LSB = 8;
+  localparam int unsigned REGMAP_COUNTERS_WRAP_STATUS_SNAPSHOT_ID_WIDTH = 1;
+  localparam logic [31:0] REGMAP_COUNTERS_WRAP_STATUS_SNAPSHOT_ID_MASK = 32'h00000100;
+
+  // reset value of the stored bits
+  localparam logic [REGMAP_COUNTERS_N_REGS*32-1:0] REGMAP_COUNTERS_RESET = {
+      32'h00000000,  // [20]
+      32'h00000000,  // [19]
+      32'h00000000,  // [18]
+      32'h00000000,  // [17]
+      32'h00000000,  // [16]
+      32'h00000000,  // [15]
+      32'h00000000,  // [14]
+      32'h00000000,  // [13]
+      32'h00000000,  // [12]
+      32'h00000000,  // [11]
+      32'h00000000,  // [10]
+      32'h00000000,  // [9]
+      32'h00000000,  // [8]
+      32'h00000000,  // [7]
+      32'h00000000,  // [6]
+      32'h00000000,  // [5]
+      32'h00000000,  // [4]
+      32'h00000000,  // [3]
+      32'h00000000,  // [2]
+      32'h00000000,  // [1]
+      32'h00000003  // [0]
+  };
+  // bits a software write may set or clear (RW)
+  localparam logic [REGMAP_COUNTERS_N_REGS*32-1:0] REGMAP_COUNTERS_WMASK = {
+      32'h00000000,  // [20]
+      32'h00000000,  // [19]
+      32'h00000000,  // [18]
+      32'h00000000,  // [17]
+      32'h00000000,  // [16]
+      32'h00000000,  // [15]
+      32'h00000000,  // [14]
+      32'h00000000,  // [13]
+      32'h00000000,  // [12]
+      32'h00000000,  // [11]
+      32'h00000000,  // [10]
+      32'h00000000,  // [9]
+      32'h00000000,  // [8]
+      32'h00000000,  // [7]
+      32'h00000000,  // [6]
+      32'h00000000,  // [5]
+      32'h00000000,  // [4]
+      32'h00000000,  // [3]
+      32'h00000000,  // [2]
+      32'h00000000,  // [1]
+      32'h00000007  // [0]
+  };
+  // bits cleared by writing 1, set by hardware (W1C)
+  localparam logic [REGMAP_COUNTERS_N_REGS*32-1:0] REGMAP_COUNTERS_W1CMASK = {
+      32'h000001FF,  // [20]
+      32'h0000000F,  // [19]
+      32'h00000000,  // [18]
+      32'h00000000,  // [17]
+      32'h00000000,  // [16]
+      32'h00000000,  // [15]
+      32'h00000000,  // [14]
+      32'h00000000,  // [13]
+      32'h00000000,  // [12]
+      32'h00000000,  // [11]
+      32'h00000000,  // [10]
+      32'h00000000,  // [9]
+      32'h00000000,  // [8]
+      32'h00000000,  // [7]
+      32'h00000000,  // [6]
+      32'h00000000,  // [5]
+      32'h00000000,  // [4]
+      32'h00000000,  // [3]
+      32'h00000000,  // [2]
+      32'h00000000,  // [1]
+      32'h00000000  // [0]
+  };
+  // bits that pulse for one cycle and read 0 (RWP)
+  localparam logic [REGMAP_COUNTERS_N_REGS*32-1:0] REGMAP_COUNTERS_PULSEMASK = {
+      32'h00000000,  // [20]
+      32'h00000000,  // [19]
+      32'h00000000,  // [18]
+      32'h00000000,  // [17]
+      32'h00000000,  // [16]
+      32'h00000000,  // [15]
+      32'h00000000,  // [14]
+      32'h00000000,  // [13]
+      32'h00000000,  // [12]
+      32'h00000000,  // [11]
+      32'h00000000,  // [10]
+      32'h00000000,  // [9]
+      32'h00000000,  // [8]
+      32'h00000000,  // [7]
+      32'h00000000,  // [6]
+      32'h00000000,  // [5]
+      32'h00000000,  // [4]
+      32'h00000000,  // [3]
+      32'h00000000,  // [2]
+      32'h00000000,  // [1]
+      32'h00000700  // [0]
+  };
+  // bits read from the hardware input, not from storage (ROHW)
+  localparam logic [REGMAP_COUNTERS_N_REGS*32-1:0] REGMAP_COUNTERS_HWMASK = {
+      32'h00000000,  // [20]
+      32'h00000F00,  // [19]
+      32'hFFFFFFFF,  // [18]
+      32'hFFFFFFFF,  // [17]
+      32'hFFFFFFFF,  // [16]
+      32'hFFFFFFFF,  // [15]
+      32'hFFFFFFFF,  // [14]
+      32'hFFFFFFFF,  // [13]
+      32'hFFFFFFFF,  // [12]
+      32'hFFFFFFFF,  // [11]
+      32'hFFFFFFFF,  // [10]
+      32'hFFFFFFFF,  // [9]
+      32'hFFFFFFFF,  // [8]
+      32'hFFFFFFFF,  // [7]
+      32'hFFFFFFFF,  // [6]
+      32'hFFFFFFFF,  // [5]
+      32'hFFFFFFFF,  // [4]
+      32'hFFFFFFFF,  // [3]
+      32'hFFFFFFFF,  // [2]
+      32'h0FFFFFFF,  // [1]
+      32'h00000000  // [0]
+  };
 
   // -------------------------------------------------------------------------
   // Block 8: debug — PLANNED (#19)

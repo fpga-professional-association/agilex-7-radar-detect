@@ -108,6 +108,8 @@ expected numerical values.
 | `cdc_handshake` (issue #6) | `sim/tests/test_cdc_synchronizers.cpp`, phases `handshake_burst` and `handshake_gapped` | every value observed in order, none lost, duplicated or invented, at all 7 ratios | back-to-back at the crossing's maximum rate; idle gaps up to 12 cycles | randomized gap lengths per ratio | two-domain reset before every phase | `s_valid` held against `s_ready` | `cdc_handshake_checker` in the source domain, plus `a_no_phantom_transfer` |
 | `cdc_sync2` (issue #6) | `sim/tests/test_cdc_synchronizers.cpp`, phase `status_bit` | the output equals the held input at the end of every 64-cycle window | at most one output transition per window (glitch / wrong-stage detector) | randomized value per window, per ratio | two-domain reset before every phase | n/a | elaboration `$fatal` on `WIDTH > 1` without `GRAY_CODED`, and on `STAGES < 2` |
 | CDC assertion set (issue #6) | `sim/tests/test_cdc_assertions.cpp` | one clean mode, four violating modes | first pointer step; first handshake | n/a (deterministic injection) | reset before every mode | n/a | the set under test; each mode names the assertion it must provoke |
+| `perf_counter` + `telemetry_block` (issue #8) | `sim/tests/test_perf_counters.cpp` | count, gate, clear and snapshot on 8-bit probes; traffic counted exactly against a harness tally; injected overflow, saturation and CDC events; FIFO high-water against the FIFO's own tracker | SPEC §13.4 wrap: 300 events into an 8-bit modulo counter, the same into a saturating one, and a weighted counter that steps *over* the boundary rather than landing on it; a coherent 21-register sweep taken while traffic runs | 40 frames of randomized traffic at heavy/bursty backpressure interleaved with randomized register access, snapshots, clears and event injection, then a full window dump | reset re-run before three of the nine passes; every reset default re-read; `ENABLE`/`CLEAR` exercised as a second, software-visible reset | heavy source and bursty sink; the stall counter is required to be non-zero, so a pass in which nothing stalled is a failed pass | `telemetry_assertions` inside every `perf_counter`: gate, clear, shadow-holds, shadow-latched, shadow-valid, sticky wrap, and the mode-specific saturating/modulo pair. Live counters compared with the tally, and all three probes with `telemetry::CounterModel`, on **every cycle** |
+| `seq_checker` (issue #8) | `sim/tests/test_seq_checker.cpp` | gap, duplicate, reorder and untracked each injected alone and required to land in its own category with its own count; nominal traffic required to produce exactly zero | the duplicate/reorder boundary (one behind against two behind); a gap of one; `0xFFFF -> 0x0000` in order, and a gap, a duplicate and a reorder that straddle it | ~500 beats carrying ~16% deliberate faults of all four kinds, against `telemetry::SeqTrackerModel` | reset re-run before seven of the nine passes; `SEQ_ENABLE` low then high checked to re-initialise rather than report a loss | n/a for the injected path (no handshake); the nominal pass runs at heavy source and bursty sink backpressure | `seq_checker_assertions` inside the module: one classification per beat, no classification without a transfer, no zero-beat gap. Classification, counts and sticky flags compared with the model on **every cycle** |
 | `fxp_pkg` + `fxp_sticky_flags` (issue #4) | `model/cpp/test/test_fxp_vectors.cpp` (C++ vs NumPy) and `sim/tests/test_fxp_rtl.cpp` (RTL vs NumPy vs C++) | 927 directed vectors | max pos/neg and one/two past, at 8 widths; all four rounding tie classes; ±1.0 wrap; round-then-saturate across the endpoints; every Q1.15 boundary multiply pair | 530 seeded vectors + 6 seeded accumulator walks | accumulator cleared at every sequence start; DUT reset before the first | n/a (no handshake) | property sweeps: shift-0 identity, saturation idempotence, measured rounding bias, accumulator non-overflow |
 
 One row per module, added by the issue that implements it. `stream_loopback` was rebuilt
@@ -142,6 +144,19 @@ and each was caught (`make sim-tiny`, seed 1):
 | `stream_elastic_buffer` occupancy output under-reports by one | `occupancy` error: reported fill disagrees with the harness count of beats in flight |
 | `stream_pipe` credit gate always open | `capacity` error (7 beats in flight against a capacity of 6) and the `a_credits_bounded` assertion |
 | `stream_skid_buffer` drops the skidded beat instead of draining it | `sequence` and `order` errors from the scoreboard, and the `a_seq_continuous` assertion |
+
+Three more were injected into the issue #8 telemetry primitives, against the checks that
+issue adds, and each was caught (`make sim-tiny`, seed 1):
+
+| Injected fault | Detected as |
+|---|---|
+| `perf_counter` ignores `SATURATE` and wraps instead | `a_sat_holds_max` assertion, plus a `counter_model` divergence at the wrapping cycle (RTL 0, model 255) |
+| `perf_counter` shadow latches `count_q` instead of `count_d` (a stale snapshot) | `a_shadow_latched` assertion, plus a `counter_model` divergence on all three probes in the same cycle |
+| `seq_checker` stops classifying a duplicate | `seq_classify` (the directed case names the category it expected), `seq_count` and `seq_sticky` divergences against `telemetry::SeqTrackerModel` |
+
+Each of the three was caught by two independent mechanisms — an assertion inside the RTL and
+the cycle-accurate C++ model — which is the property that makes the pair worth having: the
+assertion localises the defect, and the model proves it changed an observable.
 
 The clean tree was rebuilt and re-run after each injection and passed, so the detections
 are attributable to the fault and not to the edit.
@@ -404,6 +419,54 @@ and exited non-zero.
 Two runs of the script produce byte-identical JSON (crossings are emitted in instance-path
 order), which is what lets the report be diffed between revisions.
 
+Issue #8 adds no crossing: `telemetry_block` is single-clock by construction and the register
+interface, not the counters, is what crosses when the register plane is in another domain
+(DECISIONS.md issue #8, decision 4). The inventory is therefore unchanged at **24 crossings,
+0 unknown**, which is itself the check that the claim is true.
+
+### 5.8 Telemetry assertion set (SPEC §14, issue #8)
+
+SPEC §14 requires assertions for "arithmetic overflow where overflow is forbidden" and for
+"sequence discontinuity". Both are delivered as property text in
+`sim/assertions/telemetry_sva.svh` and instantiated from inside the RTL under
+`ifndef SYNTHESIS`, so they are active in the fast build with no test-side wiring — the
+arrangement `stream_protocol_checker` and the CDC checkers already use.
+
+There is exactly **one** counter implementation and one sequence classifier in this design, so
+checking each at its own definition checks every instance in every build: the telemetry
+block's nine counters, the sequence checker's five, the three narrow probes, and every counter
+a Phase 2 kernel instantiates without its author knowing this file exists.
+
+| Assertion | Instantiated in | What a failure means |
+|---|---|---|
+| `a_count_gated` | `perf_counter` | the counter advanced while the measurement window was shut, so every number downstream is wrong by an unknown amount |
+| `a_count_cleared` | `perf_counter` | a clear did not take effect in one cycle, or lost to a simultaneous event |
+| `a_shadow_holds` | `perf_counter` | the shadow moved without a strobe — the whole coherent-read mechanism is void |
+| `a_shadow_latched` | `perf_counter` | the shadow does not equal the live count one cycle after a strobe, i.e. the snapshot is off by one event |
+| `a_shadow_valid` | `perf_counter` | the shadow-valid flag dropped without a clear |
+| `a_wrapped_sticky` | `perf_counter` | the sticky range flag dropped without a clear |
+| `a_wrap_needs_event` | `perf_counter` | the counter passed its maximum in a cycle with nothing to add |
+| `a_sat_holds_max` | `perf_counter`, saturating instances | SPEC §14 forbidden overflow: a saturating counter reported passing its limit without holding all ones |
+| `a_sat_never_falls` | `perf_counter`, saturating instances | a saturating counter decreased, so an event was lost to overflow |
+| `a_mod_wraps_down` | `perf_counter`, modulo instances | a reported wrap was not a wrap: every increment is below the modulus, so the value after must be below the value before |
+| `a_seq_one_kind` | `seq_checker` | one beat classified as more than one kind of fault, so the counts double-count and still look plausible |
+| `a_seq_needs_beat` | `seq_checker` | a fault reported with no accepted transfer |
+| `a_seq_gap_nonzero` | `seq_checker` | a loss of zero beats reported |
+
+Two covers, counted only in the `--mode coverage` build, record that the interesting states
+were reached rather than merely not violated: `c_wrap` (a counter passed its maximum at all)
+and `c_snapshot_while_counting` (a snapshot taken in a cycle in which the counter was still
+moving — the case the whole shadow mechanism exists for).
+
+The stream's own continuity is checked elsewhere and deliberately: `STREAM_SVA_FRAMING` in
+`sim/assertions/stream_sva.svh` already asserts that the sequence field increments by one per
+beat on every interface inside a stream primitive. That property is about the producer; the
+three above are about the detector. The two together are what make the counts trustworthy —
+one says a nominal run contains no discontinuity, the others say the classifier does not
+invent one. It is also why a fault cannot be injected into the datapath to test the checker:
+the producer-side assertion fires first, correctly, and aborts. `telemetry_top` therefore
+gives the checker a stimulus override, and `test_seq_checker` drives faults into it directly.
+
 ## 6. Coverage strategy
 
 Coverage build, metrics collected, targets per phase, and how coverage reports are
@@ -442,8 +505,8 @@ error messages — the failure-minimisation metadata SPEC §12.2 asks for.
 
 | Target | Status |
 |---|---|
-| `make lint` | implemented (issue #2, extended by #5, #7 and #6) — `regmap-check`, then `--lint-only --Wall` on `benchmark_sim_top`, `stream_prims_top`, `stream_violator_top`, `control_top`, `cdc_prims_top` and `cdc_violator_top`; zero unwaived warnings |
-| `make sim-tiny` | implemented (issue #2, extended by #5, #7 and #6) — `numerics-check`, `regmap-check` and `cdc-inventory`, then the fast build of six tops, then `test_stream_loopback`, `test_stream_primitives`, `test_stream_assertions`, `test_control_regs`, `test_sync_fifo`, `test_async_fifo`, `test_cdc_synchronizers` and `test_cdc_assertions` once per seed in `SEEDS` (default `1 2 3`). Clean run: 52 s |
+| `make lint` | implemented (issue #2, extended by #5, #7, #6 and #8) — `regmap-check`, then `--lint-only --Wall` on `benchmark_sim_top`, `stream_prims_top`, `stream_violator_top`, `control_top`, `cdc_prims_top`, `cdc_violator_top` and `telemetry_top`; zero unwaived warnings |
+| `make sim-tiny` | implemented (issue #2, extended by #5, #7, #6 and #8) — `numerics-check`, `regmap-check` and `cdc-inventory`, then the fast build of seven tops, then `test_stream_loopback`, `test_stream_primitives`, `test_stream_assertions`, `test_control_regs`, `test_sync_fifo`, `test_async_fifo`, `test_cdc_synchronizers`, `test_cdc_assertions`, `test_perf_counters` and `test_seq_checker` once per seed in `SEEDS` (default `1 2 3`) |
 | `make regmap-check` | implemented (issue #7) — not a SPEC §16 entry point; a prerequisite of `lint` and `sim-tiny`, runnable alone while editing `control/regmap.json` |
 | `make cdc-inventory` | implemented (issue #6) — not a SPEC §16 entry point; a prerequisite of `sim-tiny`, runnable alone. Fails on any unclassified crossing |
 | `make sim-medium` | TODO(issue #17) |

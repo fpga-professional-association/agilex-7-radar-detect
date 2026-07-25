@@ -948,3 +948,147 @@ unambiguously a failure of the thing that build tests. `cdc_violator_top`'s RTL 
 wrong and appears in no other file list, so it can never reach the design build. Clean
 `make sim-tiny` on the merged tree: 52 s for six tops, seven tests and three seeds, inside the
 runtime budget.
+
+---
+
+## 2026-07-26 — Telemetry: snapshot coherence, counter wrap policy, sequence resync semantics  (issue #8)
+
+Context: SPEC §9 requires the register plane to expose stream counters, stall counters, FIFO
+high-water marks, overflow and saturation counts, frame counts, sequence errors and CDC
+errors; SPEC §5 requires sequence numbers to permit end-to-end loss and ordering checks;
+SPEC §13.4 requires the long stress test to exercise counter wrap. Every datapath block from
+Phase 2 onward reports through these primitives, so what is decided here is decided for the
+whole benchmark.
+
+**Decision 1 — the register plane never reads a running counter; it reads a shadow.** Every
+count register in the `counters` window presents a shadow register, and
+`TELEM_CTRL.SNAPSHOT` is a write-1-pulse that latches every counter in the block — and the
+sequence checker's five beside it — into their shadows at one edge.
+
+The problem is not hypothetical. The beat counter is 64 bits and the plane is 32, so reading
+it takes two accesses; between them the low word can wrap, and the pair then names a beat
+count that never existed. The same failure in slower motion applies to any two counters meant
+to describe one interval: a stall count read after a beat count can exceed it, and a
+utilisation figure computed from the two can exceed 1. A telemetry system whose numbers are
+individually plausible and jointly impossible is worse than no telemetry, because nothing
+about the output says which reading to distrust.
+
+The captured value is defined against the counter's **next state**, not its current one: the
+shadow latches what the counter itself takes at the strobe edge, so a snapshot includes any
+event in the strobe cycle and the shadow equals the live count for the whole of the following
+cycle. Stating the rule that way removes the off-by-one from every call site, and it is
+checked directly — `a_shadow_latched` in `sim/assertions/telemetry_sva.svh` asserts
+`snapshot |=> (shadow == count)`.
+
+Two supporting registers exist because the mechanism has two failure modes a number cannot
+express. `TELEM_STATUS.SNAP_VALID` separates "nothing happened" from "you never asked": before
+the first snapshot every shadow reads zero, and zero is also a perfectly good count.
+`SNAPSHOT_ID` counts the strobes, so a reader proves its sweep was coherent by reading that
+register before and after — equal values mean nobody else snapshotted in the middle. It is
+deliberately modulo rather than saturating and deliberately not gated by `ENABLE`: a
+saturated identity would compare equal to every later one and silently stop detecting the race
+it exists to detect, and a coherence proof must work on a block whose measurement window is
+shut.
+
+Rejected: *a shadow-copy strobe per counter* moves the coherence problem into software and
+guarantees somebody gets it wrong. *A wide atomic read port* is not expressible in the SPEC §9
+32-bit interface. *Reading twice and retrying on disagreement* costs two sweeps, does not
+converge under sustained traffic, and is exactly the software workaround one register removes.
+
+**Decision 2 — traffic counters wrap, error counters saturate; both are parameters and the
+mode is readable at run time.** A traffic counter (beats, stalls, idle cycles, frames, frame
+starts) is a rate measure: after a wrap the difference between two reads is still exactly
+right, which is the quantity anyone uses, and SPEC §13.4 asks for wrap to be exercised rather
+than avoided. An error counter (FIFO overflows, arithmetic saturations, CDC errors, and the
+sequence checker's five) is a magnitude, and a dump taken long after a run must not report a
+small number because the counter went round — the argument `reg_block_fault.sv` made for its
+own counter in issue #7, now made once in `perf_counter` and reused everywhere.
+
+Neither mode has an undefined overflow: the adder in `rtl/common/perf_counter.sv` is one bit
+wider than the counter and its carry out **is** the wrap decision, so the boundary behaviour
+is structural rather than a property of the synthesiser. `WRAP_STATUS` carries one sticky bit
+per counter and `TELEM_STATUS.WRAP_ANY` their OR, so a reader always knows whether an absolute
+value still means anything; `TELEM_STATUS.TRAFFIC_SATURATE` and `.ERROR_SATURATE` report which
+arithmetic was built, so software never has to assume.
+
+Widths: 64 bits for beats and stalls (1.3 million years at 450 MHz — the pair never wraps in
+any real run, and the LO/HI presentation is what makes decision 1 load-bearing), 32 for
+everything else. Wrap is nevertheless a **directed** test rather than a reasoned-about
+condition: `telemetry_top` instantiates three deliberately 8-bit `perf_counter` probes, and
+`test_perf_counters` wraps them in 300 events, in every seed, in milliseconds. One of the
+three takes increments larger than one, so the boundary is *stepped over* rather than landed
+on — the case an equality test for "counter == all ones" misses entirely.
+
+**Decision 3 — sequence classification is a signed half-circle, and the resync rules are
+explicit.** `rtl/common/seq_checker.sv` computes `delta = (seq - expect) mod 2**SEQ_W` per
+tracked stream and splits the modular circle in half:
+
+| `delta` | verdict | expectation |
+|---|---|---|
+| `0` | in order | advances |
+| `2**SEQ_W - 1` | **duplicate** — the beat just accepted, again | held |
+| `0 < delta < 2**(SEQ_W-1)` | **gap**, of `delta` beats | resynchronises forward |
+| otherwise (backwards, not the last) | **reorder** | held |
+
+Nothing special-cases the top of the range, which is exactly why nothing breaks at it: at
+`SEQ_W = 16` the step from `0xFFFF` to `0x0000` has `delta = 0`, and a gap that straddles the
+wrap is still a small forward delta. Duplication is separated from reordering because they
+have different causes and different fixes, and one counter for both would hide which.
+
+A gap **resynchronises forward** — one lost burst is one report, not one report per beat
+forever after — while a duplicate or a reorder leaves the expectation alone, because a beat
+from behind says nothing about where the stream now is. Gap *events* and beats *lost* are
+counted separately: one gap of forty and forty gaps of one are different failures.
+
+Initialisation, stated because a checker that invents an expectation reports a loss on every
+stream that legitimately starts elsewhere: the first beat of a stream after reset, after
+`ENABLE` was low, or after a resync establishes `expect = seq + 1` and is never an error.
+`ENABLE` low clears every stream's known bit, so closing and reopening a measurement window
+starts clean instead of reporting a gap the size of everything that flowed while it was shut.
+
+`sof_resync` is a **runtime input**, exposed as `TELEM_CTRL.SEQ_SOF_RESYNC` and off by
+default, rather than the elaboration parameter the issue text suggested. Two reasons. It is
+the better interface — a source whose numbering restarts per frame and one whose numbering is
+continuous can share an elaboration and be told apart by software — and a parameter would
+leave `sof` unreferenced in every instance that switched the feature off, which
+`verilator --lint-only --Wall` reports as an unused input and this project does not waive.
+Both behaviours are therefore reachable in one build, and `test_seq_checker` pass 6 checks
+both against the same instance: with resync off a `start_of_frame` does not excuse a jump.
+
+A fifth verdict, **untracked**, covers a beat on a `stream_id` at or above `N_IDS`. It is
+counted rather than ignored: an instance sized for four streams that silently dropped
+everything on stream 7 would report a clean run on traffic it never looked at. Sizing the
+parameter too small is then a visible number.
+
+**Decision 4 — telemetry is single-clock; what crosses domains is the register interface, not
+the counters.** `telemetry_block` is instantiated in the domain of the interface it observes,
+because counting in the domain where the events occur is the only way to count them exactly.
+When the register plane is in a different domain (SPEC §8 puts it in `cfg_clk`), the crossing
+is one issue-#6 handshake on the register bus, not twenty crossings on twenty counters — one
+thing to verify instead of twenty, and decision 1 is what makes it correct, because the
+cfg-side reader strobes a snapshot and then reads shadows that are not moving. That crossing
+belongs to the multi-domain integration (issue #19); `telemetry_top` is deliberately
+single-clock so that a counting error and a CDC error cannot be confused while the counting
+itself is being proved. This supersedes the note in the issue-#7 `counters` block description
+that said the counters would live in the telemetry clock domain and be the first consumer of
+the CDC primitives on the register path.
+
+**Decision 5 — `control_top` attaches the counters window to a bare `reg_csr_block`.**
+Implementing the block changes `REGMAP_N_BLOCKS_IMPL`, so `control_top` has to instantiate
+something at that window or the fabric waits on a block that is not there. It instantiates the
+register file without its hardware: the access types, the decode, the read-only refusals and
+the randomized soak then cover the counters window like every other block, while the counters
+themselves are verified in `telemetry_top` against real traffic. The alternative — the real
+`telemetry_block` with its stream inputs tied off — would require `test_control_regs` to model
+telemetry hardware a second time inside a test about the register plane, to prove something
+the telemetry test already proves better. The hardware-driven fields consequently read zero
+there and their real values in `telemetry_top`; both are checked, each in the top where it is
+the subject.
+
+**Decision 6 — `perf_counter` and `seq_checker` join `files.f`; `telemetry_block` does not.**
+The first two are design RTL that every kernel from Phase 2 onward instantiates, and `files.f`
+is the single definition of what "the design" is. `telemetry_block` is the counters block of
+the register plane and needs `rtl/control/`, which `files.f` does not carry until issue #19
+brings the whole plane into `benchmark_sim_top`; until then it is linted through
+`files_telemetry.f`, which `make lint` runs as step 7 of 7. `sim-tiny` grows two tests and one
+top, not a new entry point — the arrangement issues #4, #5, #6 and #7 each used.
