@@ -47,8 +47,9 @@ issue #17. Lint runs `--Wall` *without* `--Wno-fatal`, so any warning not justif
 launches builds and aggregates results and is never in the per-cycle path. Present today:
 multi-clock generation and event scheduling, per-domain reset sequencing, stream drivers
 and monitors, randomized backpressure, scoreboards, timeout detection, error collection,
-deterministic seeding, register read/write (`reg_driver.h`, issue #7) and optional FST
-tracing. Still owned elsewhere: memory model (issues #15, #24), reference-model invocation
+deterministic seeding, register read/write (`reg_driver.h`, issue #7), the CDC
+clock-ratio sweep (`clock_ratios.h`, issue #6) and optional FST tracing. Still owned
+elsewhere: memory model (issues #15, #24), reference-model invocation
 (issue #4).
 
 **Clock scheduler.** Integer picosecond time; each clock is stored as a half period, so a
@@ -98,6 +99,15 @@ expected numerical values.
 | `stream_pipe` STAGES=4 OUT_DEPTH=6 (issue #5) | `sim/tests/test_stream_primitives.cpp`, dut3 | exact latency 5 and one beat per cycle | credits exhausted and refilled | 4 randomized stall passes | reset re-run before every pass | as above | shared checker plus buffer-has-room, credits-bounded and credit-conservation |
 | stream protocol assertion set (issue #5) | `sim/tests/test_stream_assertions.cpp` | one clean mode, four violating modes | first stall, first frame boundary | n/a (deterministic injection) | reset before every mode | stalls forced to provoke modes 1 and 2 | the set under test; each mode names the assertion it must provoke |
 | register/control plane (issue #7) | `sim/tests/test_control_regs.cpp` | identification, build parameters, reset defaults, W1C and pulse semantics, hardware-computed status | walking ones and zeros on every scratch bit; all 15 non-zero byte-enable patterns; the half-writable register; every malformed and unmapped address form | 600 seeded transactions against a C++ model of the map (~30% illegal), then a full register dump | reset re-run before three of the nine passes; every reset default re-read | n/a (no handshake to stall); the watchdog covers a block that never answers | `reg_if_checker` inside `reg_fabric`: master stability, one ready per request, error and read-data confinement, bounded response |
+| `sync_fifo` DEPTH=8, registered output, `STORAGE="regs"` (issue #6) | `sim/tests/test_sync_fifo.cpp`, fifo0 | every observable compared against `model/cpp/cdc/fifo_ref.h` on every cycle | frame length 1..8 sweep; empty, full, almost-full and almost-empty all reached | 4 randomized stall passes | reset re-run before every pass | fast/slow producer x fast/slow consumer, plus bursty both | overflow, underflow, occupancy-shadow, occupancy-bound, pointer-consistency, high-water and sticky-flag assertions inside the FIFO, plus the SPEC §5 checker on both interfaces |
+| `sync_fifo` DEPTH=4, show-ahead, `STORAGE="mlab"` (issue #6) | `sim/tests/test_sync_fifo.cpp`, fifo1 | as above, with zero-latency output | fills to DEPTH in every stall pass | 4 randomized stall passes | reset re-run before every pass | as above | as above |
+| `async_fifo` DEPTH=8, `STORAGE="m20k"` (issue #6) | `sim/tests/test_async_fifo.cpp`, afifo | 7 clock ratios x 2 stall profiles, scoreboarded on transaction identity | in-flight reaches the full DEPTH+1 capacity at every ratio; empty and full both reached | randomized stalls on both sides, independent per domain | two-domain reset re-run before every pass, with different release delays per domain | free-running and stalled profiles at every ratio | Gray one-bit on both pointers, pointer sanity per domain, overflow, underflow, reset-pointers-cleared |
+| `stream_cdc` A->B, registered output (issue #6) | `sim/tests/test_async_fifo.cpp`, scdc_f | as above, with the full SPEC §5 field geometry | occupancy swept 0..DEPTH; almost-full reached | as above | as above | as above | the async FIFO set plus the SPEC §5 checker in both clock domains |
+| `stream_cdc` B->A, show-ahead read side (issue #6) | `sim/tests/test_async_fifo.cpp`, scdc_r | as above, source in the other domain | as above | as above | as above | as above | as above |
+| `cdc_pulse` (issue #6) | `sim/tests/test_cdc_synchronizers.cpp`, phases `pulse_paced` and `pulse_overrun` | delivered strobes equal accepted pulses at all 7 ratios | back-to-back offers on every source cycle (overrun); `src_busy` honoured (paced) | randomized offer pattern per ratio | two-domain reset before every phase | n/a (no handshake); the busy/overrun path is the flow control | `a_no_toggle_while_busy`, `a_no_phantom_pulse`; sticky overrun must latch and then clear |
+| `cdc_handshake` (issue #6) | `sim/tests/test_cdc_synchronizers.cpp`, phases `handshake_burst` and `handshake_gapped` | every value observed in order, none lost, duplicated or invented, at all 7 ratios | back-to-back at the crossing's maximum rate; idle gaps up to 12 cycles | randomized gap lengths per ratio | two-domain reset before every phase | `s_valid` held against `s_ready` | `cdc_handshake_checker` in the source domain, plus `a_no_phantom_transfer` |
+| `cdc_sync2` (issue #6) | `sim/tests/test_cdc_synchronizers.cpp`, phase `status_bit` | the output equals the held input at the end of every 64-cycle window | at most one output transition per window (glitch / wrong-stage detector) | randomized value per window, per ratio | two-domain reset before every phase | n/a | elaboration `$fatal` on `WIDTH > 1` without `GRAY_CODED`, and on `STAGES < 2` |
+| CDC assertion set (issue #6) | `sim/tests/test_cdc_assertions.cpp` | one clean mode, four violating modes | first pointer step; first handshake | n/a (deterministic injection) | reset before every mode | n/a | the set under test; each mode names the assertion it must provoke |
 | `fxp_pkg` + `fxp_sticky_flags` (issue #4) | `model/cpp/test/test_fxp_vectors.cpp` (C++ vs NumPy) and `sim/tests/test_fxp_rtl.cpp` (RTL vs NumPy vs C++) | 927 directed vectors | max pos/neg and one/two past, at 8 widths; all four rounding tie classes; ±1.0 wrap; round-then-saturate across the endpoints; every Q1.15 boundary multiply pair | 530 seeded vectors + 6 seeded accumulator walks | accumulator cleared at every sequence start; DUT reset before the first | n/a (no handshake) | property sweeps: shift-0 identity, saturation idempotence, measured rounding bias, accumulator non-overflow |
 
 One row per module, added by the issue that implements it. `stream_loopback` was rebuilt
@@ -171,8 +181,7 @@ TODO — populated by issue #20.
 ## 5. Assertions (SPEC §14)
 
 Protocol, CDC, and structural assertions, and where each is enabled. Assertion sources
-live in `sim/assertions/`. CDC assertions are issue #6; packet-fabric assertions are
-issue #18.
+live in `sim/assertions/`. Packet-fabric assertions are issue #18.
 
 ### 5.1 Stream protocol assertion set (issue #5)
 
@@ -306,6 +315,95 @@ fields overlap, if a reset value does not fit its field, if a hardware-driven or
 carries a non-zero reset, or if the blocks do not between them claim all sixteen SPEC §9
 register groups.
 
+### 5.5 CDC assertion set (issue #6)
+
+SPEC §14 names two CDC obligations explicitly — *CDC handshake completion* and *Gray-pointer
+one-bit transitions* — alongside the FIFO overflow, underflow and illegal-simultaneous-state
+checks that apply to the asynchronous FIFO as much as to the synchronous one. One definition
+of the property text lives in `sim/assertions/cdc_sva.svh`, wrapped as two modules
+(`sim/assertions/cdc_gray_checker.sv`, `sim/assertions/cdc_handshake_checker.sv`). Both ways
+of attaching it are in use, exactly as for the stream set:
+
+* **by instantiation** — `async_fifo` instantiates a Gray checker on each of its two pointers
+  and `cdc_handshake` instantiates a handshake checker on its source-side request, inside
+  `` `ifndef SYNTHESIS ``. Any design built from these primitives is therefore checked at
+  every crossing with no test-side wiring, in the SPEC §12.1 fast build.
+* **by `bind`** — `sim/verilator/tops/cdc_violator_top.sv` binds both checkers onto a module
+  that carries no assertions of its own.
+
+| Property | Kind | Checks |
+|---|---|---|
+| `a_gray_one_bit` | immediate | a Gray-coded pointer changes at most one bit per cycle |
+| `c_gray_moved` | cover | the pointer actually moved during the run (a stationary pointer satisfies the assertion vacuously) |
+| `a_hs_req_held` | concurrent | a raised request is never withdrawn before it is answered |
+| `a_hs_data_stable` | concurrent | the payload is frozen for the whole request window |
+| `a_hs_ack_after_req` | concurrent | an acknowledge rises only while a request is outstanding |
+| `a_hs_ack_held` | concurrent | the acknowledge is not dropped while the request is still up |
+| `a_hs_completes` | immediate | no request goes unanswered for more than `ACK_TIMEOUT` cycles (bounded liveness) |
+| `c_hs_completed` | cover | a full request/acknowledge overlap was reached |
+| `a_fifo_no_overflow` | immediate | the write pointer never runs more than DEPTH ahead of the read pointer, per domain |
+| `a_no_overflow` / `a_no_underflow` | immediate | no write committed while full, no read committed while empty |
+| `a_wr_reset_pointers_cleared` / `a_rd_reset_pointers_cleared` | immediate | both pointers are zero when the crossing leaves reset — the detector for "the two resets were not asserted together" |
+| `a_no_toggle_while_busy` / `a_no_phantom_pulse` | immediate | `cdc_pulse` never accepts a pulse while busy, and never delivers more strobes than it accepted |
+| `a_no_phantom_transfer` | immediate | `cdc_handshake` never delivers more values than were offered |
+
+**Scope note, and why one checker was deleted.** The Gray one-bit rule is a statement about
+consecutive values of the pointer *register*, so the checker is attached only in the domain
+that owns the pointer. Attaching it to a synchronizer *output* fails on correct RTL at every
+non-unity clock ratio, because a faster source domain legitimately advances several Gray steps
+between two destination samples; this was measured at 2:1 on the first run of the ratio sweep
+and the two instances were removed. See DECISIONS.md (issue #6) decision 6.
+
+### 5.6 Proof that the CDC assertions fire (issue #6)
+
+`sim/tests/test_cdc_assertions.cpp` drives `cdc_violator_top` — a deliberately broken crossing
+with both checkers bound onto it — once per violation mode, and requires the *named* property
+to fire. Expected-failure handling is identical to §5.2: this test and
+`test_stream_assertions.cpp` are the only two places that call
+`Verilated::fatalOnError(false)`, so a deliberate violation becomes an observable event and
+the binary exits 0 when every expected failure was seen.
+
+| Mode | Injected violation | Required assertion |
+|---|---|---|
+| 0 | none — correct Gray pointer and correct four-phase handshake | *none may fire*, over a 400-cycle run |
+| 1 | pointer increments in binary and is presented as Gray-coded | `a_gray_one_bit` |
+| 2 | handshake payload mutated while the request was outstanding | `a_hs_data_stable` |
+| 3 | request dropped before it was acknowledged | `a_hs_req_held` |
+| 4 | acknowledge raised with no request outstanding | `a_hs_ack_after_req` |
+
+Modes 1 and 2 are the two the issue #6 gate names: the Gray transition rule and the handshake
+payload-stability rule are the properties the entire asynchronous-FIFO and multibit-handshake
+construction rests on. Each mode fires exactly one assertion, by name, within the first seven
+cycles; the clean mode fires none. The run is failed by a violating mode in which nothing
+fired, by the wrong property firing, or by the clean mode asserting. This test runs in
+`make sim-tiny` on every seed.
+
+### 5.7 CDC inventory (SPEC §8, issue #6)
+
+SPEC §8 requires "an explicit CDC inventory report". `scripts/cdc_inventory.py` produces
+`results/simulation/cdc_inventory.json` (generated, never committed) by joining two sources:
+a scan of `rtl/` for the `(* cdc_primitive = ... *)` attribute above each crossing module,
+and the fully elaborated instance tree from `verilator --xml-only`. Each entry carries the
+instance path, the crossing type, the source and destination clock nets resolved to top-level
+names, the payload width, the synchronizer depth, and the nearest enclosing composite
+crossing. Rationale for the mechanism, and the alternatives rejected, are in DECISIONS.md
+(issue #6) decision 5.
+
+The report is a gate, not a document: `make cdc-inventory` runs it with `--strict`, is a
+prerequisite of `make sim-tiny`, and fails on a non-empty `unknown` list. `unknown` includes
+any instantiated module with two or more clock-like ports that carries no `cdc_primitive`
+attribute, so a crossing added later without being declared fails the regression rather than
+being silently omitted.
+
+Current state (`cdc_prims_top`, the design containing every crossing this issue delivers):
+**24 crossings, 0 unknown** — 3 `async_fifo_gray`, 2 `stream_cdc`, 1 `handshake_4phase`,
+1 `pulse_toggle`, 17 `sync_ff`. Verified self-maintaining by re-running the script against a
+catalog containing only `cdc_sync2`: it reported the seven composite crossings as `unknown`
+and exited non-zero.
+
+Two runs of the script produce byte-identical JSON (crossings are emitted in instance-path
+order), which is what lets the report be diffed between revisions.
+
 ## 6. Coverage strategy
 
 Coverage build, metrics collected, targets per phase, and how coverage reports are
@@ -344,9 +442,10 @@ error messages — the failure-minimisation metadata SPEC §12.2 asks for.
 
 | Target | Status |
 |---|---|
-| `make lint` | implemented (issue #2, extended by #5 and #7) — `regmap-check`, then `--lint-only --Wall` on `benchmark_sim_top`, `stream_prims_top`, `stream_violator_top` and `control_top`; zero unwaived warnings |
-| `make sim-tiny` | implemented (issue #2, extended by #5 and #7) — `numerics-check` and `regmap-check`, then the fast build of four tops, then `test_stream_loopback`, `test_stream_primitives`, `test_stream_assertions` and `test_control_regs` once per seed in `SEEDS` (default `1 2 3`) |
+| `make lint` | implemented (issue #2, extended by #5, #7 and #6) — `regmap-check`, then `--lint-only --Wall` on `benchmark_sim_top`, `stream_prims_top`, `stream_violator_top`, `control_top`, `cdc_prims_top` and `cdc_violator_top`; zero unwaived warnings |
+| `make sim-tiny` | implemented (issue #2, extended by #5, #7 and #6) — `numerics-check`, `regmap-check` and `cdc-inventory`, then the fast build of six tops, then `test_stream_loopback`, `test_stream_primitives`, `test_stream_assertions`, `test_control_regs`, `test_sync_fifo`, `test_async_fifo`, `test_cdc_synchronizers` and `test_cdc_assertions` once per seed in `SEEDS` (default `1 2 3`). Clean run: 52 s |
 | `make regmap-check` | implemented (issue #7) — not a SPEC §16 entry point; a prerequisite of `lint` and `sim-tiny`, runnable alone while editing `control/regmap.json` |
+| `make cdc-inventory` | implemented (issue #6) — not a SPEC §16 entry point; a prerequisite of `sim-tiny`, runnable alone. Fails on any unclassified crossing |
 | `make sim-medium` | TODO(issue #17) |
 | `make sim-random` | TODO(issue #17) |
 | `make sim-stress` | TODO(issue #17) |

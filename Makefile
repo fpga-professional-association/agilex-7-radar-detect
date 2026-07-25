@@ -55,8 +55,10 @@
 # Status
 # ---------------------------------------------------------------------------
 # Implemented: `lint` and `sim-tiny` (issue #2, Verilator flow; extended by
-# issue #5 with the stream-primitive and negative-assertion tests) and the
-# quartus-* targets (issue #3).
+# issue #5 with the stream-primitive and negative-assertion tests, by issue #7
+# with the register/control plane, and by issue #6 with the FIFO and CDC
+# primitives plus the SPEC 8 CDC inventory report) and the quartus-* targets
+# (issue #3).
 #
 # Everything else is still a scaffold stub from issue #1. Stubs fail loudly:
 # they print `TODO(issue #N)` and the stub command exits 1. GNU make then
@@ -134,6 +136,41 @@ VIOL_TOP     := stream_violator_top
 VIOL_FILES   := sim/verilator/files_violator.f
 VIOL_TEST    := test_stream_assertions
 VIOL_BIN      = sim/verilator/build/fast_tiny_$(VIOL_TOP)/V$(VIOL_TOP)_$(VIOL_TEST)
+
+# --- CDC and FIFO primitives (issue #6, SPEC 8 / 13.1 / 14) ----------------
+# Two further self-contained builds, for the same reason the stream primitives
+# have their own: a failure in either is then unambiguously a failure of the
+# thing it tests.
+#
+#   cdc_prims_top      rtl/common/sync_fifo.sv in two configurations plus every
+#                      rtl/cdc/ primitive, driven by three tests: the FIFO
+#                      cycle-accurate reference-model comparison, the
+#                      asynchronous-FIFO clock-ratio sweep, and the
+#                      pulse/handshake/status-bit sweep.
+#   cdc_violator_top   a deliberately broken crossing with the SPEC 14 CDC
+#                      checkers bound onto it. test_cdc_assertions requires each
+#                      expected assertion to fire BY NAME and the clean mode to
+#                      stay clean, which is what makes the Gray-transition and
+#                      handshake-stability properties provably load-bearing. Its
+#                      RTL is knowingly wrong and appears in no other file list.
+CDC_TOP      := cdc_prims_top
+CDC_FILES    := sim/verilator/files_cdc.f
+CDC_TESTS    := test_sync_fifo test_async_fifo test_cdc_synchronizers
+CDC_BIN_DIR   = sim/verilator/build/fast_tiny_$(CDC_TOP)
+
+CDCV_TOP     := cdc_violator_top
+CDCV_FILES   := sim/verilator/files_cdc_violator.f
+CDCV_TEST    := test_cdc_assertions
+CDCV_BIN      = sim/verilator/build/fast_tiny_$(CDCV_TOP)/V$(CDCV_TOP)_$(CDCV_TEST)
+
+# SPEC 8 "Generate an explicit CDC inventory report". `cdc-inventory` elaborates
+# the CDC file list with `verilator --xml-only` and joins the elaborated instance
+# tree against the (* cdc_primitive *) declarations in the RTL. --strict fails
+# the run when any crossing could not be classified, which is what stops an
+# untagged crossing from being added silently. Like numerics-check it is a
+# sub-target of sim-tiny, not a SPEC 16 entry point. The report is generated, so
+# it lands under results/ and is never committed (PLAN.md standing rule 3).
+CDC_INVENTORY_JSON ?= $(RESULTS_DIR)/cdc_inventory.json
 
 # --- register/control plane (issue #7, SPEC 9 / 13.1 / 14) -----------------
 # A fourth self-contained build, for the reason the others have one: a failure
@@ -213,6 +250,7 @@ endef
 LINT_RECIPE      = $(SIM_DISPATCH)
 SIM_TINY_RECIPE  = $(SIM_DISPATCH)
 NUMERICS_RECIPE  = $(SIM_DISPATCH)
+CDC_INVENTORY_RECIPE = $(SIM_DISPATCH)
 SIM_STUB_17      = $(SIM_DISPATCH)
 SIM_STUB_20      = $(SIM_DISPATCH)
 
@@ -224,20 +262,26 @@ define LINT_RECIPE
 	@printf '[lint] verilator --lint-only --Wall, config=%s, waivers=%s\n' \
 	    '$(CONFIG)' 'sim/verilator/lint_waivers.vlt'
 	$(REGMAP_CHECK_RECIPE)
-	@printf '[lint] 1/4 %s\n' 'benchmark_sim_top'
+	@printf '[lint] 1/6 %s\n' 'benchmark_sim_top'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) --test $(TEST)
-	@printf '[lint] 2/4 %s\n' '$(STREAM_TOP)'
+	@printf '[lint] 2/6 %s\n' '$(STREAM_TOP)'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
 	    --top $(STREAM_TOP) --files $(STREAM_FILES) --test $(STREAM_TEST)
-	@printf '[lint] 3/4 %s\n' '$(VIOL_TOP)'
+	@printf '[lint] 3/6 %s\n' '$(VIOL_TOP)'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
 	    --top $(VIOL_TOP) --files $(VIOL_FILES) --test $(VIOL_TEST)
-	@printf '[lint] 4/4 %s\n' '$(CONTROL_TOP)'
+	@printf '[lint] 4/6 %s\n' '$(CONTROL_TOP)'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
 	    --top $(CONTROL_TOP) --files $(CONTROL_FILES) --test $(CONTROL_TEST)
+	@printf '[lint] 5/6 %s\n' '$(CDC_TOP)'
+	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
+	    --top $(CDC_TOP) --files $(CDC_FILES) --test $(firstword $(CDC_TESTS))
+	@printf '[lint] 6/6 %s\n' '$(CDCV_TOP)'
+	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
+	    --top $(CDCV_TOP) --files $(CDCV_FILES) --test $(CDCV_TEST)
 endef
 
-# `sim-tiny`: SPEC 12.1 fast build of all three simulation tops, then every test
+# `sim-tiny`: SPEC 12.1 fast build of every simulation top, then every test
 # once per seed in SEEDS. Each run prints its own seed and RESULT: line; a single
 # failing seed fails the target, and the remaining seeds still run so one
 # invocation shows whether a failure is seed-specific.
@@ -251,6 +295,19 @@ endef
 #   test_stream_assertions   stream_violator_top — the negative test. Exits 0
 #                            when every expected assertion fired, so an
 #                            expected failure is a passing result for the suite.
+#   test_control_regs        control_top — the SPEC 9 register/control plane.
+#   test_sync_fifo           cdc_prims_top — rtl/common/sync_fifo.sv against the
+#                            cycle-accurate C++ reference model, every observable
+#                            on every cycle, in two configurations.
+#   test_async_fifo          cdc_prims_top — async_fifo and stream_cdc across the
+#                            seven-entry clock-ratio sweep, both directions,
+#                            scoreboarded for loss, duplication and reordering.
+#   test_cdc_synchronizers   cdc_prims_top — cdc_pulse, cdc_handshake and
+#                            cdc_sync2 across the same sweep, including the pulse
+#                            overrun case and back-to-back handshakes.
+#   test_cdc_assertions      cdc_violator_top — the CDC negative test. Requires
+#                            a_gray_one_bit and a_hs_data_stable (among others)
+#                            to fire by name, and the clean mode to stay clean.
 define SIM_TINY_RECIPE
 	$(REGMAP_CHECK_RECIPE)
 	$(BUILD_VERILATOR) --mode fast --config tiny --jobs $(JOBS) --test $(TEST)
@@ -260,9 +317,15 @@ define SIM_TINY_RECIPE
 	    --top $(VIOL_TOP) --files $(VIOL_FILES) --test $(VIOL_TEST)
 	$(BUILD_VERILATOR) --mode fast --config tiny --jobs $(JOBS) \
 	    --top $(CONTROL_TOP) --files $(CONTROL_FILES) --test $(CONTROL_TEST)
+	@for t in $(CDC_TESTS); do \
+	    $(BUILD_VERILATOR) --mode fast --config tiny --jobs $(JOBS) \
+	        --top $(CDC_TOP) --files $(CDC_FILES) --test $$t || exit 1; \
+	  done
+	$(BUILD_VERILATOR) --mode fast --config tiny --jobs $(JOBS) \
+	    --top $(CDCV_TOP) --files $(CDCV_FILES) --test $(CDCV_TEST)
 	@printf '[sim-tiny] seeds: %s\n' '$(SEEDS)'
-	@printf '[sim-tiny] tests: %s %s %s %s\n' '$(TEST)' '$(STREAM_TEST)' \
-	    '$(VIOL_TEST)' '$(CONTROL_TEST)'
+	@printf '[sim-tiny] tests: %s %s %s %s %s %s\n' '$(TEST)' '$(STREAM_TEST)' \
+	    '$(VIOL_TEST)' '$(CONTROL_TEST)' '$(CDC_TESTS)' '$(CDCV_TEST)'
 	@rc=0; for s in $(SEEDS); do \
 	    printf '\n[sim-tiny] ===== seed %s : %s =====\n' "$$s" '$(TEST)'; \
 	    ./$(SIM_TINY_BIN) +seed=$$s +results=$(RESULTS_DIR) || rc=1; \
@@ -273,6 +336,13 @@ define SIM_TINY_RECIPE
 	    ./$(VIOL_BIN) +seed=$$s +results=$(RESULTS_DIR) || rc=1; \
 	    printf '\n[sim-tiny] ===== seed %s : %s =====\n' "$$s" '$(CONTROL_TEST)'; \
 	    ./$(CONTROL_BIN) +seed=$$s +results=$(RESULTS_DIR) || rc=1; \
+	    for t in $(CDC_TESTS); do \
+	      printf '\n[sim-tiny] ===== seed %s : %s =====\n' "$$s" "$$t"; \
+	      ./$(CDC_BIN_DIR)/V$(CDC_TOP)_$$t +seed=$$s +results=$(RESULTS_DIR) || rc=1; \
+	    done; \
+	    printf '\n[sim-tiny] ===== seed %s : %s (expects assertions to fire) =====\n' \
+	        "$$s" '$(CDCV_TEST)'; \
+	    ./$(CDCV_BIN) +seed=$$s +results=$(RESULTS_DIR) || rc=1; \
 	  done; \
 	  if [ $$rc -ne 0 ]; then \
 	    printf '\n[sim-tiny] FAILED (seeds: %s)\n' '$(SEEDS)' 1>&2; exit 1; \
@@ -314,6 +384,30 @@ define NUMERICS_RECIPE
 	    --top $(FXP_TOP) --files $(FXP_FILES) --test $(FXP_TEST)
 	./$(FXP_BIN) +seed=$(SEED) +results=$(RESULTS_DIR) +vectors=$(VECTORS_DIR)
 	@printf '\n[numerics] PASS: RTL, C++ and NumPy agree bit-exactly\n'
+endef
+
+# `cdc-inventory` (issue #6): the SPEC 8 "explicit CDC inventory report".
+# A sub-target of sim-tiny, not a SPEC 16 entry point, for the same reason
+# numerics-check is one: the report must be regenerated and re-checked on every
+# regression without adding a top-level command the spec does not name.
+#
+# The lint pass first is not redundant. It is what regenerates
+# sim/verilator/generated/config_pkg.sv from config/<name>.json, so
+# `make cdc-inventory` works from a clean checkout without having built
+# anything else.
+#
+# --strict: a crossing the script cannot classify — including any instantiated
+# module with two or more clock ports that carries no (* cdc_primitive *)
+# attribute — fails the target. That is what keeps the inventory complete as the
+# design grows, rather than complete on the day it was written.
+define CDC_INVENTORY_RECIPE
+	@printf '[cdc-inventory] SPEC 8 crossing report for top=%s -> %s\n' \
+	    '$(CDC_TOP)' '$(CDC_INVENTORY_JSON)'
+	$(PYTHON_CHECK)
+	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
+	    --top $(CDC_TOP) --files $(CDC_FILES) --test $(firstword $(CDC_TESTS)) --quiet
+	$(PYTHON) scripts/cdc_inventory.py --top $(CDC_TOP) --files $(CDC_FILES) \
+	    --out $(CDC_INVENTORY_JSON) --print --strict
 endef
 
 # Remaining simulation entry points. The Verilator flow itself exists as of
@@ -421,7 +515,8 @@ help:
 	@printf '%-18s %-9s %s\n' 'lint'             'wsl'     'verilator --lint-only --Wall (zero unwaived warnings)'
 	@printf '%-18s %-9s %s\n' 'numerics-check'   'wsl'     'SPEC 6/12.4 fixed-point equivalence (sub-target of sim-tiny)'
 	@printf '%-18s %-9s %s\n' 'regmap-check'     'local'   'SPEC 9 register map: generated artefacts match control/regmap.json'
-	@printf '%-18s %-9s %s\n' 'sim-tiny'         'wsl'     'numerics-check + fast build + loopback test over SEEDS'
+	@printf '%-18s %-9s %s\n' 'cdc-inventory'    'wsl'     'SPEC 8 CDC crossing report (sub-target of sim-tiny)'
+	@printf '%-18s %-9s %s\n' 'sim-tiny'         'wsl'     'numerics + regmap + inventory + fast builds + every test'
 	@printf '%-18s %-9s %s\n' 'sim-medium'       'wsl'     'TODO(issue #17) medium-config regression'
 	@printf '%-18s %-9s %s\n' 'sim-random'       'wsl'     'TODO(issue #17) randomized regression'
 	@printf '%-18s %-9s %s\n' 'sim-stress'       'wsl'     'TODO(issue #17) long stress test'
@@ -438,10 +533,10 @@ help:
 	@printf '%-18s %-9s %s\n' 'compare-baseline' 'local'   'TODO(issue #21) compare current run to baseline'
 	@printf '%-18s %-9s %s\n' 'reproduce-final'  'both'    'TODO(issue #25) reproduce the final result'
 	@printf '\n'
-	@printf 'numerics-check is not a SPEC 16 entry point; it is the issue #4 numerics\n'
-	@printf 'gate, run automatically as a prerequisite of sim-tiny and listed here so it\n'
-	@printf 'can also be run on its own while working on rtl/packages/fxp_pkg.sv or\n'
-	@printf 'model/cpp/fxp/.\n'
+	@printf 'numerics-check and cdc-inventory are not SPEC 16 entry points; they are\n'
+	@printf 'the issue #4 numerics gate and the SPEC 8 CDC inventory report, run\n'
+	@printf 'automatically as prerequisites of sim-tiny and listed here so each can\n'
+	@printf 'also be run on its own while working on the code it covers.\n'
 	@printf '\n'
 	@printf 'lint and sim-tiny (issue #2), numerics-check (issue #4) and the quartus-*\n'
 	@printf 'targets (issue #3) are implemented. Targets marked TODO are still stubs:\n'
@@ -493,11 +588,14 @@ lint:
 # whole target into WSL, and the WSL-side make applies the dependency there, so
 # adding it here too would run the numerics gate twice.
 ifneq ($(HOST_KIND),windows)
-sim-tiny: numerics-check
+sim-tiny: numerics-check cdc-inventory
 endif
 
 numerics-check:
 	$(NUMERICS_RECIPE)
+
+cdc-inventory:
+	$(CDC_INVENTORY_RECIPE)
 
 # The register-map regeneration gate (issue #7). Also run inside lint and
 # sim-tiny; standalone here so it can be run while editing control/regmap.json.
@@ -581,7 +679,7 @@ reproduce-final:
 	$(call TODO,25,Evidence package and reproducibility)
 
 .PHONY: help env-check \
-        lint numerics-check regmap-check \
+        lint numerics-check regmap-check cdc-inventory \
         sim-tiny sim-medium sim-random sim-stress sim-coverage sim-full-smoke \
         quartus-map quartus-fit quartus-sta quartus-report quartus-compile \
         seed-sweep compare-baseline reproduce-final

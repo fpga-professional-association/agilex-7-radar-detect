@@ -26,10 +26,10 @@ make lint CONFIG=full_agmf039       # lint the largest elaboration
 
 ## The other tops
 
-`benchmark_sim_top` is the design (SPEC §4.1). Four further tops exist, each
+`benchmark_sim_top` is the design (SPEC §4.1). Six further tops exist, each
 self-contained with its own file list, for one reason: a failure in a
 self-contained build is unambiguously a failure of the thing that build tests,
-never a knock-on from unrelated RTL. All five are built by the same script with
+never a knock-on from unrelated RTL. All seven are built by the same script with
 `--top` / `--files` changed together, and a non-default top builds into
 `build/<mode>_<config>_<top>/` so they never share objects.
 
@@ -40,21 +40,30 @@ never a knock-on from unrelated RTL. All five are built by the same script with
 | `stream_prims_top` | `files_stream.f` | `test_stream_primitives` | the three stream primitives, per primitive: stalls, framing, occupancy, capacity, latency, throughput (SPEC §5, §13.1) |
 | `stream_violator_top` | `files_violator.f` | `test_stream_assertions` | that the SPEC §14 protocol assertions actually fire, by name, on injected violations — and stay silent on a correct stage |
 | `control_top` | `files_control.f` | `test_control_regs` | the SPEC §9 register plane: the map against the generated tables, every access type, every illegal address form, and the watchdog that keeps the fabric from hanging |
+| `cdc_prims_top` | `files_cdc.f` | `test_sync_fifo`, `test_async_fifo`, `test_cdc_synchronizers` | the SPEC §8 FIFO and CDC primitives: `sync_fifo` against a cycle-accurate C++ model, and every crossing across a seven-entry clock-ratio sweep |
+| `cdc_violator_top` | `files_cdc_violator.f` | `test_cdc_assertions` | that the SPEC §14 CDC assertions actually fire, by name, on injected violations — and stay silent on a correct crossing |
 
-`make lint` lints all four of `benchmark_sim_top`, `stream_prims_top`,
-`stream_violator_top` and `control_top`; `make sim-tiny` builds and runs those
-four tests once per seed, after `make numerics-check` has run the fifth.
+`make lint` lints all six of `benchmark_sim_top`, `stream_prims_top`,
+`stream_violator_top`, `control_top`, `cdc_prims_top` and `cdc_violator_top`;
+`make sim-tiny` builds and runs their seven tests once per seed, after
+`make numerics-check` has run the eighth against `fxp_probe_top` and
+`make cdc-inventory` has produced the SPEC §8 crossing report.
+
+`cdc_prims_top` is the only top with more than one test: the three tests share one
+verilated model (they differ only in which DUTs inside it they drive), so keeping
+them in one build costs one elaboration instead of three.
 
 `control_top` also holds a second fabric attached to `reg_block_dead.sv`, a block
 that never answers. Like the violator it is knowingly wrong, appears only in
 `files_control.f`, and exists so the fabric's watchdog escape is an exercised
 path rather than an untested comment.
 
-`stream_violator_top` contains deliberately incorrect RTL. It is in
-`files_violator.f` and nowhere else, so it cannot reach the design build. Its
-test clears `Verilated::fatalOnError`, which is the only place in the repository
-where a failing assertion is not fatal: there, an assertion failure is the
-expected result and the binary exits 0 when every expected failure was observed.
+`stream_violator_top` and `cdc_violator_top` contain deliberately incorrect RTL.
+Each is in its own file list and nowhere else, so neither can reach the design
+build. Their two tests clear `Verilated::fatalOnError` — the only places in the
+repository where a failing assertion is not fatal: there, an assertion failure is
+the expected result, and the binary exits 0 when every expected failure was
+observed by name.
 
 ## `fxp_probe_top` in detail (numerics cross-check)
 
@@ -172,6 +181,8 @@ sim/verilator/
 ├── files_stream.f       stream primitives + their unit-test top
 ├── files_violator.f     the deliberately broken stage + its top (negative test)
 ├── files_control.f      the SPEC 9 register plane + its unit-test top
+├── files_cdc.f          the SPEC 8 FIFO and CDC primitives + their unit-test top
+├── files_cdc_violator.f the deliberately broken crossing + its top (negative test)
 ├── lint_waivers.vlt     checked-in warning waivers, each justified
 ├── sim_main.cpp         main(): argument parsing, seed banner, coverage dump
 ├── harness/             the C++ simulation harness (see harness.h)
@@ -182,7 +193,10 @@ sim/verilator/
 │   ├── stream_violator.sv     deliberately broken stage (negative test only)
 │   ├── stream_violator_top.sv wrapper that binds the SPEC 14 checker onto it
 │   ├── control_top.sv         SPEC 9 register-plane unit-test top
-│   └── reg_block_dead.sv      a block that never answers (watchdog test only)
+│   ├── reg_block_dead.sv      a block that never answers (watchdog test only)
+│   ├── cdc_prims_top.sv       SPEC 8/13.1 FIFO and CDC unit-test top
+│   ├── cdc_violator.sv        deliberately broken crossing (negative test only)
+│   └── cdc_violator_top.sv    wrapper that binds the SPEC 14 CDC checkers onto it
 ├── generated/           config_pkg.sv + config_sim.h (generated, gitignored)
 └── build/<mode>_<config>[_<top>]/  verilated objects and binaries (gitignored)
 
@@ -192,6 +206,7 @@ sim/failures/            FST traces and failure artefacts (gitignored)
 results/simulation/      JSON run summaries, coverage data (gitignored)
 
 model/cpp/fxp/           bit-accurate C++ reference model, on every build's -I path
+model/cpp/cdc/           cycle-accurate FIFO reference model (issue #6)
 model/vectors/           committed golden vectors (see model/vectors/README.md)
 ```
 

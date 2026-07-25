@@ -741,3 +741,210 @@ response cycle, a bounded outstanding count); half check the *master* — that t
 bit-stable until answered — because a harness that violates the protocol it is testing for is
 otherwise invisible, and every result it produces is worthless. Verified load-bearing:
 perturbing the driver's address mid-transaction fires `a_request_stable` by name.
+
+---
+
+## 2026-07-26 — CDC: reset strategy, handshake phases, synchronizer attributes, inventory mechanism  (issue #6)
+
+Context: SPEC §8 requires asynchronous FIFOs with Gray-coded pointers for bulk crossings,
+proper synchronizers for single-bit status, toggle or handshake synchronizers for pulses, a
+prohibition on synchronizing a multibit bus bit by bit, CDC-specific assertions (SPEC §14),
+and "an explicit CDC inventory report". This issue builds the primitive library every later
+crossing in the design is made of, so the choices below are load-bearing for the whole
+benchmark rather than local to one block.
+
+**Decision 1 — the two-domain reset contract: asserted together, released per domain, and the
+FIFO bridges the skew itself.** A dual-clock FIFO has two resets and they are not
+independent. Reset one side alone and its pointer goes to zero while the other's does not:
+the FIFO then reports a fill level that corresponds to no data and the read side walks through
+stale storage. That is silent corruption, not loss, and it is the classic asynchronous-FIFO
+defect.
+
+The contract `rtl/cdc/async_fifo.sv` implements:
+
+* **assertion is common and simultaneous** — `wr_rst_n` and `rd_rst_n` are driven from one
+  system reset; asserting one alone is a design error;
+* **release is per domain and synchronous to that domain's own clock** — the standard
+  asynchronous-assert / synchronous-release arrangement, which is also exactly what the
+  SPEC §12.2 harness's `ResetSequencer` does, so the two domains leave reset at different
+  absolute times on every test pass;
+* **the FIFO absorbs the release skew** — each domain synchronizes a single "the other domain
+  is in reset" bit through `cdc_sync2` with `RST_VALUE = 1`, so the safe interpretation
+  survives its own reset, and refuses to move a pointer until the other side is out of reset.
+  Both pointers are therefore provably zero at the instant either side starts, whatever the
+  skew.
+
+Rejected: *fully synchronous reset in both domains with a common release* needs a globally
+synchronous release across asynchronous clocks, which is the thing that cannot be built.
+*Asynchronous reset inside the FIFO* is ruled out by SPEC §23 for performance-critical logic,
+and an asynchronous release into a Gray counter is precisely the recovery hazard this scheme
+removes. *No gating at all* relies on release skew being zero, which it is not, and fails
+silently rather than loudly when it is not.
+
+The one-sided-reset error is *detected*, not merely documented: `a_wr_reset_pointers_cleared`
+and `a_rd_reset_pointers_cleared` fire if a domain's pointer is non-zero at the instant the
+crossing leaves its hold state, which can only happen if the two resets were not asserted
+together. Reset scope elsewhere is unchanged from decision 6 of issue #5 — synchronous, active
+low, control state only; no storage array in `rtl/cdc/` or in `rtl/common/sync_fifo.sv` has a
+reset.
+
+**Decision 2 — the multibit handshake is four-phase, not two-phase.** Two-phase
+(non-return-to-zero) signalling halves the round trip: request and acknowledge are toggles,
+and a transfer is one edge each way rather than a full up-and-down on both. Rejected for three
+reasons, in order of weight:
+
+1. *Reset.* A two-phase crossing's idle condition is "the two toggles agree", which is a
+   relation **between two clock domains**. Under decision 1 the two domains leave reset at
+   different times, and any scheme whose idle state is a cross-domain relation can wake up
+   believing a transfer is in flight — delivering a phantom value, or wedging. Four-phase has
+   an absolute idle state (`req = 0`, `ack = 0`) that each domain reaches from its own reset
+   alone.
+2. *Checkability.* "The request is held until acknowledged, and the payload is stable
+   throughout" is a property with an explicit window, which is why `a_hs_req_held` and
+   `a_hs_data_stable` can be written directly. A two-phase crossing has no held request; its
+   stability window is implicit, and an assertion for it has to reconstruct the state
+   machine — which means the assertion can be wrong in the same way the design is.
+3. *Cost.* The extra latency is one more synchronizer round trip on a path that is by
+   construction not a throughput path: anything needing throughput uses `async_fifo`.
+
+**Decision 3 — two synchronizer stages by default, and multibit synchronization is refused
+unless the caller declares the value Gray-coded.** `cdc_pkg::cdc_sync_stages_default()` is 2.
+The MTBF of a two-stage synchronizer on Agilex 7 at the SPEC §8 clock rates is many orders of
+magnitude beyond the life of the benchmark, and every extra stage is a cycle of latency on
+every status bit and on **both** pointer paths of every asynchronous FIFO — latency that shows
+up directly as asynchronous-FIFO occupancy, because the pointer a domain sees is that many
+cycles stale. Three stages is available per instance (`STAGES` on `cdc_sync2`) for a bit whose
+corruption would be unrecoverable rather than merely lossy; nothing in this design is in that
+class today. Note for the Quartus phase: Hyperflex devices default
+`SYNCHRONIZATION_REGISTER_CHAIN_LENGTH` to three, so the Fitter's *reporting* threshold and
+this default differ by one — a reporting question, not a correctness one.
+
+SPEC §8's "do not synchronize a multibit bus by independently synchronizing every bit" is
+enforced rather than reviewed: `cdc_sync2` `$fatal`s at elaboration for `WIDTH > 1` unless the
+instantiator sets `GRAY_CODED`, which is the caller asserting that consecutive values differ
+in at most one bit. `async_fifo` is the only module in the design that sets it, and it
+instantiates a `cdc_gray_checker` on the same vector so the claim is checked every cycle
+rather than trusted. Anything else multibit goes through `cdc_handshake`.
+
+**Decision 4 — synchronizer attributes for Quartus Prime Pro 26.1: copy the vendor's own IP.**
+Researched against the Quartus Prime Pro Edition Settings File Reference (683296), the Pro
+User Guide chapter "Managing Metastability" (683082 §4), the Timing Analyzer guide (683243)
+and Altera's shipped `altera_std_synchronizer.v`. Every synchronizer register in the design
+carries:
+
+```systemverilog
+(* altera_attribute = {"-name ADV_NETLIST_OPT_ALLOWED NEVER_ALLOW; -name SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS; -name DONT_MERGE_REGISTER ON; -name PRESERVE_REGISTER ON"} *)
+(* preserve *) (* dont_merge *)
+```
+
+* `SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS`, not `FORCED`. Pro Edition still
+  honours the assignment — it is not Standard-only, and the Pro CDC Viewer complements it
+  rather than replacing it. `FORCED_IF_ASYNCHRONOUS` identifies the chain whenever an
+  asynchronous transfer is actually detected; a bare `FORCED` marks registers unconditionally,
+  is documented as the wrong tool for a chain the Compiler can see for itself, and is warned
+  against as a global assignment. The underscore spelling avoids nested quoting inside the
+  attribute string, which is what Altera's own IP does.
+* `PRESERVE_REGISTER ON` + `DONT_MERGE_REGISTER ON` + `ADV_NETLIST_OPT_ALLOWED NEVER_ALLOW`.
+  A synchronizer chain is a shift register whose stages have identical logic; without these,
+  synthesis may merge two stages, merge two instances that synchronize the same net, or retime
+  the chain apart — each of which silently removes the metastability margin the module exists
+  to provide. The short `(* preserve *)` / `(* dont_merge *)` forms are given as well because
+  those are the ones Quartus applies to a variable declaration directly.
+
+HyperFlex interaction (SPEC §23): the Hyper-Retimer already declines to retime registers it
+has identified as a synchronizer chain, so the preserve attributes are belt-and-braces rather
+than the primary mechanism — but they also make the chain a deliberate retiming **barrier**.
+The consequence worth writing down now, for the Fast Forward reviews in Phase 5: the fix for a
+synchronizer on a critical path is pipeline registers *feeding* it, never a relaxation of
+these attributes. SDC treatment (a false path onto the first stage; `set_max_skew` /
+`set_net_delay` on a handshake payload bus) belongs to the constraints issue. Two facts for
+whoever writes it: Quartus has no `-datapath_only` on `set_max_delay` — that is Vivado
+syntax — and `SDC_STATEMENT` can embed an entity-bound exception in the RTL if that turns out
+to be preferable to a central `.sdc`.
+
+Verilator tolerates all of it: `(* ... *)` is consumed by the lexer before the parser runs, so
+none of it reaches the AST and `--lint-only --Wall` is clean. Measured on 5.020.
+
+**Decision 5 — the CDC inventory is a source-scanned catalog joined to a Verilator-elaborated
+instance tree.** `scripts/cdc_inventory.py` has two halves, because neither is authoritative
+for both of the things it needs:
+
+* the **catalog** — what kind of crossing a module is, which of its ports carry the two
+  clocks, which parameters give the width and the stage count — is scanned from a
+  `(* cdc_primitive = "...", cdc_src_clk = "...", ... *)` attribute above each module
+  declaration in `rtl/`. It has to come from the source, because Verilator strips attributes
+  in the lexer and no tool output carries them. Keeping the declaration next to the RTL it
+  describes is also what stops it drifting the way a separate `cdc_registry.json` would.
+* the **instance tree** — every instance path, every resolved parameter value, and the net on
+  every port — comes from `verilator --xml-only` on the same file list the simulation builds
+  from. A regex over instantiations could not resolve a parameter overridden two levels up,
+  could not expand a generate block, and would list modules that are never instantiated. The
+  inventory has to describe the design that exists, not the text that produced it. Quartus's
+  netlist was rejected as the source because the report must be producible on the simulation
+  side of the split-toolchain rule, from a clean checkout, with no licence and no fit.
+
+The two halves join on Verilator's `origName`, the module's pre-parameterisation name.
+
+What makes it self-maintaining rather than a snapshot: the script also flags **untagged**
+crossings — any instantiated module with two or more clock-like ports that carries no
+`cdc_primitive` attribute — as `unknown`, and `--strict` (used by `make cdc-inventory`, a
+prerequisite of `sim-tiny`) fails the target on a non-empty `unknown` list. Verified by
+running the script against a catalog containing only `cdc_sync2`: it reported the seven
+composite crossings as unknown and exited non-zero.
+
+`cdc_src_clk = "@async"` is a **declared** value, not a missing one: a flip-flop synchronizer
+has no source-side logic and therefore no source clock port. Its source is an arbitrary
+asynchronous domain, constrained in SDC by a false path onto the first stage rather than by a
+named clock. The report still locates it by naming the nearest enclosing tagged primitive,
+whose own source clock is resolved to a top-level net.
+
+Current design: 24 crossings, 0 unknown — 3 `async_fifo_gray`, 2 `stream_cdc`, 1
+`handshake_4phase`, 1 `pulse_toggle`, 17 `sync_ff`.
+
+**Decision 6 — the Gray one-bit assertion watches the pointer in the domain that owns it, and
+nowhere else.** The first version of `async_fifo` also instantiated `cdc_gray_checker` on the
+two *synchronized* pointer copies, on the theory that a checker there would catch the wrong
+vector being routed into a synchronizer. It fires on correct RTL at every non-unity clock
+ratio, and did — measured at 2:1, on the first run of the ratio sweep. The reason is that the
+one-bit rule is a statement about consecutive values of the pointer **register**: that is what
+makes a sample taken mid-transition resolve to the old value or the new one. The synchronized
+copy is that register sampled by a different clock, and when the source is the faster of the
+two it legitimately advances several Gray steps between two destination samples. A property
+that holds only at one clock ratio is not the property SPEC §14 is asking for. What the
+crossing actually depends on is that the value *entering* each synchronizer is Gray-coded,
+which is what the two remaining instances check.
+
+**Decision 7 — `sync_fifo` and `async_fifo` are separate modules, and the storage style is a
+parameter from the start.** One module with a `SAME_CLOCK` parameter would be two designs
+sharing a file: the pointer comparison, the flag derivation and the reset contract are all
+different. The rule issue #5 set still holds — a boundary that needs only to break a ready
+path gets a skid or a shallow elastic buffer, never a FIFO.
+
+`STORAGE` in {`"regs"`, `"mlab"`, `"m20k"`} selects a **literal** `ramstyle` attribute through
+a generate block rather than substituting the parameter into one, for two measured reasons:
+Quartus wants a string literal there, and Verilator does not count a parameter read inside an
+attribute as a use of that parameter (it reports `UNUSEDPARAM`). `STORAGE = "m20k"` requires a
+registered read (`SHOW_AHEAD = 0` / `OUT_REG = 1`), checked at elaboration, because an M20K
+read port is registered; the registered-output path is written as `q <= mem[addr]` with an
+enable, which is the shape Quartus infers as an M20K with a registered read port. The
+parameter exists now rather than being retrofitted because the SPEC §11 full-scale M20K budget
+is a headline result, and the depth-versus-style split has to be tunable before that
+measurement rather than after it.
+
+`high_water` means the same thing in both FIFOs — the greatest occupancy held up to and
+including the **previous** cycle — so one reference model (`model/cpp/cdc/fifo_ref.h`) checks
+both. `sync_fifo` was changed to match `async_fifo`'s semantics rather than the other way
+round: on the asynchronous side the *next* occupancy is not available cheaply, and one rule
+that is slightly less responsive beats two rules that differ by a cycle.
+
+**Decision 8 — `sim-tiny` grows four more tests and one more sub-target, not new entry
+points.** SPEC §16 fixes the command list, so `test_sync_fifo`, `test_async_fifo`,
+`test_cdc_synchronizers` and `test_cdc_assertions` join `make sim-tiny`, and the SPEC §8
+inventory report becomes `make cdc-inventory` — a prerequisite of `sim-tiny` in the same way
+`numerics-check` (issue #4) and `regmap-check` (issue #7) are, and runnable alone while
+working on the primitives. Two new tops, each with its own file list, for the reason
+`fxp_probe_top` and `stream_prims_top` have one: a failure in a self-contained build is
+unambiguously a failure of the thing that build tests. `cdc_violator_top`'s RTL is knowingly
+wrong and appears in no other file list, so it can never reach the design build. Clean
+`make sim-tiny` on the merged tree: 52 s for six tops, seven tests and three seeds, inside the
+runtime budget.
