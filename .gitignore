@@ -40,3 +40,6 @@ __pycache__/
 *.swp
 .DS_Store
 Thumbs.db
+
+# Generated Verilator config package / headers (from config/*.json)
+sim/verilator/generated/
