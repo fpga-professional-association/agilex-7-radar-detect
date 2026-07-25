@@ -4,6 +4,13 @@
     scripts/build_verilator.py --mode lint|fast|coverage|debug
                                --config tiny|medium|large|full_agmf039
                                [--jobs N] [--seed N] [--test NAME] [--threads N]
+                               [--top MODULE] [--files LIST.f]
+
+``--top`` / ``--files`` select a different design to verilate; they are changed
+together, and a non-default top builds into its own directory so the two never
+share objects. The only secondary top today is ``fxp_probe_top``
+(``sim/verilator/files_fxp.f``), the SPEC 12.4 numerics cross-check that
+``make numerics-check`` runs.
 
 Modes (SPEC 12.1)
 -----------------
@@ -52,6 +59,12 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
+# Default design under test: the SPEC 4.1 simulation top, built from files.f.
+# `--top` / `--files` override both together for a self-contained secondary
+# build. The only one today is the SPEC 12.4 numerics cross-check
+# (`fxp_probe_top` + sim/verilator/files_fxp.f, driven by `make numerics-check`),
+# which is kept independent of the rest of the design on purpose: a failure
+# there is then always a numerics failure.
 TOP_MODULE = "benchmark_sim_top"
 FILES_F = Path("sim/verilator/files.f")
 WAIVERS = Path("sim/verilator/lint_waivers.vlt")
@@ -61,6 +74,10 @@ BUILD_ROOT = Path("sim/verilator/build")
 HARNESS_DIR = Path("sim/verilator/harness")
 SIM_MAIN = Path("sim/verilator/sim_main.cpp")
 TESTS_DIR = Path("sim/tests")
+
+# Bit-accurate C++ reference model (SPEC 12.4). On the include path for every
+# build so a test can compare RTL against the model in the same binary.
+MODEL_CPP_DIR = Path("model/cpp")
 
 MODES = ("lint", "fast", "coverage", "debug")
 
@@ -254,24 +271,27 @@ def cpp_sources(test: str) -> list[str]:
     return srcs
 
 
-def build_dir(mode: str, config: str) -> Path:
-    return BUILD_ROOT / f"{mode}_{config}"
+def build_dir(mode: str, config: str, top: str = TOP_MODULE) -> Path:
+    # A non-default top gets its own build directory so the two never share
+    # objects or a binary name.
+    stem = f"{mode}_{config}" if top == TOP_MODULE else f"{mode}_{config}_{top}"
+    return BUILD_ROOT / stem
 
 
-def binary_path(mode: str, config: str, test: str) -> Path:
-    return build_dir(mode, config) / f"V{TOP_MODULE}_{test}"
+def binary_path(mode: str, config: str, test: str, top: str = TOP_MODULE) -> Path:
+    return build_dir(mode, config, top) / f"V{top}_{test}"
 
 
 def verilator_command(args, cfg_name: str) -> list[str]:
-    mdir = build_dir(args.mode, cfg_name)
+    mdir = build_dir(args.mode, cfg_name, args.top)
     cmd = [
         args.verilator,
         "--top-module",
-        TOP_MODULE,
+        args.top,
         "--Mdir",
         str(mdir),
         "-f",
-        str(FILES_F),
+        str(args.files),
         str(WAIVERS),
     ]
 
@@ -280,12 +300,15 @@ def verilator_command(args, cfg_name: str) -> list[str]:
         cmd += ["--lint-only", "--Wall", "--assert"]
         return cmd
 
-    prefix = f"V{TOP_MODULE}"
-    exe_name = f"V{TOP_MODULE}_{args.test}"
+    prefix = f"V{args.top}"
+    exe_name = f"V{args.top}_{args.test}"
     cflags = [
         "-std=c++17",
         f"-I{REPO_ROOT / 'sim/verilator'}",
         f"-I{REPO_ROOT / GENERATED_DIR}",
+        # model/cpp is on the include path so a test can compare the RTL against
+        # the bit-accurate C++ reference model in one binary (SPEC 12.4).
+        f"-I{REPO_ROOT / MODEL_CPP_DIR}",
         f"-DSIM_BUILD_MODE_{args.mode.upper()}",
     ]
 
@@ -355,6 +378,19 @@ def main() -> int:
         help="test source stem under sim/tests/ (default: test_stream_loopback)",
     )
     p.add_argument(
+        "--top",
+        default=TOP_MODULE,
+        help=(
+            f"top module to verilate (default: {TOP_MODULE}). Change it together "
+            "with --files; a non-default top builds into its own directory."
+        ),
+    )
+    p.add_argument(
+        "--files",
+        default=str(FILES_F),
+        help=f"Verilator -f file list (default: {FILES_F})",
+    )
+    p.add_argument(
         "--jobs",
         type=int,
         default=int(os.environ.get("JOBS", os.cpu_count() or 4)),
@@ -409,7 +445,7 @@ def main() -> int:
     args = p.parse_args()
 
     if args.print_binary:
-        print(REPO_ROOT / binary_path(args.mode, args.config, args.test))
+        print(REPO_ROOT / binary_path(args.mode, args.config, args.test, args.top))
         return 0
 
     if shutil.which(args.verilator) is None:
@@ -419,19 +455,21 @@ def main() -> int:
         )
 
     if args.clean:
-        target = REPO_ROOT / build_dir(args.mode, args.config)
+        target = REPO_ROOT / build_dir(args.mode, args.config, args.top)
         if target.exists():
             shutil.rmtree(target)
 
     generate_config(args.config, args.quiet)
 
     # Verilator only creates the last component of --Mdir.
-    (REPO_ROOT / build_dir(args.mode, args.config)).mkdir(parents=True, exist_ok=True)
+    (REPO_ROOT / build_dir(args.mode, args.config, args.top)).mkdir(
+        parents=True, exist_ok=True
+    )
 
     cmd = verilator_command(args, args.config)
     if not args.quiet:
         print(f"[verilator] mode={args.mode} config={args.config} "
-              f"threads={args.threads} jobs={args.jobs}")
+              f"top={args.top} threads={args.threads} jobs={args.jobs}")
         print("[verilator] " + " ".join(cmd))
     rc = subprocess.call(cmd, cwd=REPO_ROOT)
     if rc != 0:
@@ -440,11 +478,11 @@ def main() -> int:
         return rc
 
     if args.mode == "lint":
-        print(f"[lint] clean: zero unwaived warnings for {TOP_MODULE} "
+        print(f"[lint] clean: zero unwaived warnings for {args.top} "
               f"(config {args.config})")
         return 0
 
-    binary = REPO_ROOT / binary_path(args.mode, args.config, args.test)
+    binary = REPO_ROOT / binary_path(args.mode, args.config, args.test, args.top)
     if not binary.is_file():
         print(f"ERROR: expected binary not produced: {binary}", file=sys.stderr)
         return 1

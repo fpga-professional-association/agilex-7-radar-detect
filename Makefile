@@ -109,6 +109,24 @@ RESULTS_DIR  ?= results/simulation
 BUILD_VERILATOR = $(PYTHON) scripts/build_verilator.py
 SIM_TINY_BIN    = sim/verilator/build/fast_tiny/Vbenchmark_sim_top_$(TEST)
 
+# --- numerics cross-check (issue #4, SPEC 6 / 12.4) ------------------------
+# `numerics-check` is NOT a SPEC 16 entry point; it is a sub-target that
+# `sim-tiny` depends on, so the fixed-point equivalence proof runs on every
+# regression without adding a top-level command the spec does not name.
+CXX           ?= g++
+NUMERICS_DIR  := model/cpp/build
+NUMERICS_BIN  := $(NUMERICS_DIR)/test_fxp_vectors
+NUMERICS_SRC  := model/cpp/test/test_fxp_vectors.cpp
+VECTORS_DIR   ?= model/vectors
+# The build contract from the issue #4 gate. -Werror is not decoration: the
+# reference model is compiled into the harness of every later test, and a
+# warning there is a numerics warning.
+NUMERICS_CXXFLAGS ?= -std=c++17 -O3 -Wall -Wextra -Werror -Imodel/cpp
+FXP_TOP       := fxp_probe_top
+FXP_TEST      := test_fxp_rtl
+FXP_FILES     := sim/verilator/files_fxp.f
+FXP_BIN        = sim/verilator/build/fast_tiny_$(FXP_TOP)/V$(FXP_TOP)_$(FXP_TEST)
+
 ifeq ($(HOST_KIND),windows)
   QUARTUS_SH ?= C:/altera_pro/26.1/quartus/bin64/quartus_sh.exe
 else
@@ -138,10 +156,11 @@ define SIM_DISPATCH
 	    TEST='$(TEST)' RESULTS_DIR='$(RESULTS_DIR)'
 endef
 
-LINT_RECIPE     = $(SIM_DISPATCH)
-SIM_TINY_RECIPE = $(SIM_DISPATCH)
-SIM_STUB_17     = $(SIM_DISPATCH)
-SIM_STUB_20     = $(SIM_DISPATCH)
+LINT_RECIPE      = $(SIM_DISPATCH)
+SIM_TINY_RECIPE  = $(SIM_DISPATCH)
+NUMERICS_RECIPE  = $(SIM_DISPATCH)
+SIM_STUB_17      = $(SIM_DISPATCH)
+SIM_STUB_20      = $(SIM_DISPATCH)
 
 else
 
@@ -168,6 +187,42 @@ define SIM_TINY_RECIPE
 	    printf '\n[sim-tiny] FAILED (seeds: %s)\n' '$(SEEDS)' 1>&2; exit 1; \
 	  fi; \
 	  printf '\n[sim-tiny] PASS for every seed: %s\n' '$(SEEDS)'
+endef
+
+# `numerics-check` (issue #4): the SPEC 6 / 12.4 fixed-point equivalence proof.
+# Two steps, both of which must pass before sim-tiny runs anything else:
+#
+#   1. Standalone C++: builds model/cpp/fxp with plain g++ under the gate's
+#      -O3 -Wall -Wextra -Werror contract and checks every vector in
+#      model/vectors/ bit-exactly. No Verilator involved, because the reference
+#      model has to stand on its own before it is trusted as the RTL oracle.
+#   2. Verilator: drives the same vectors through fxp_probe_top — which is
+#      nothing but calls into rtl/packages/fxp_pkg.sv — and compares against
+#      both the vectors and the C++ library.
+#
+# Steps 1 and 2 also re-verify that the committed vectors are exactly what
+# model/python/gen_fxp_vectors.py produces for its recorded seed, when a Python
+# interpreter is available; without one the vector files are still checked
+# against their own declared record counts by the loader.
+define NUMERICS_RECIPE
+	@printf '[numerics] 1/4 vectors: regenerate-and-compare (%s)\n' '$(VECTORS_DIR)'
+	@if [ -n '$(PYTHON)' ]; then \
+	    $(PYTHON) model/python/gen_fxp_vectors.py --out $(VECTORS_DIR) --check; \
+	  else \
+	    printf '[numerics] no Python found; skipping the vector regeneration check\n'; \
+	  fi
+	@printf '[numerics] 2/4 lint the probe build (%s is sim-only, not in files.f)\n' '$(FXP_TOP)'
+	$(BUILD_VERILATOR) --mode lint --config tiny --jobs $(JOBS) \
+	    --top $(FXP_TOP) --files $(FXP_FILES) --test $(FXP_TEST)
+	@printf '[numerics] 3/4 C++ reference model vs vectors (%s %s)\n' '$(CXX)' '$(NUMERICS_CXXFLAGS)'
+	@mkdir -p $(NUMERICS_DIR)
+	$(CXX) $(NUMERICS_CXXFLAGS) -o $(NUMERICS_BIN) $(NUMERICS_SRC)
+	./$(NUMERICS_BIN) --vectors $(VECTORS_DIR)
+	@printf '[numerics] 4/4 RTL fxp_pkg vs vectors vs C++ (Verilator, top=%s)\n' '$(FXP_TOP)'
+	$(BUILD_VERILATOR) --mode fast --config tiny --jobs $(JOBS) \
+	    --top $(FXP_TOP) --files $(FXP_FILES) --test $(FXP_TEST)
+	./$(FXP_BIN) +seed=$(SEED) +results=$(RESULTS_DIR) +vectors=$(VECTORS_DIR)
+	@printf '\n[numerics] PASS: RTL, C++ and NumPy agree bit-exactly\n'
 endef
 
 # Remaining simulation entry points. The Verilator flow itself exists as of
@@ -273,7 +328,8 @@ help:
 	@printf '%-18s %-9s %s\n' 'env-check'        'local'   'report detected toolchain locations'
 	@printf '\n'
 	@printf '%-18s %-9s %s\n' 'lint'             'wsl'     'verilator --lint-only --Wall (zero unwaived warnings)'
-	@printf '%-18s %-9s %s\n' 'sim-tiny'         'wsl'     'fast build + loopback test over SEEDS'
+	@printf '%-18s %-9s %s\n' 'numerics-check'   'wsl'     'SPEC 6/12.4 fixed-point equivalence (sub-target of sim-tiny)'
+	@printf '%-18s %-9s %s\n' 'sim-tiny'         'wsl'     'numerics-check + fast build + loopback test over SEEDS'
 	@printf '%-18s %-9s %s\n' 'sim-medium'       'wsl'     'TODO(issue #17) medium-config regression'
 	@printf '%-18s %-9s %s\n' 'sim-random'       'wsl'     'TODO(issue #17) randomized regression'
 	@printf '%-18s %-9s %s\n' 'sim-stress'       'wsl'     'TODO(issue #17) long stress test'
@@ -290,8 +346,14 @@ help:
 	@printf '%-18s %-9s %s\n' 'compare-baseline' 'local'   'TODO(issue #21) compare current run to baseline'
 	@printf '%-18s %-9s %s\n' 'reproduce-final'  'both'    'TODO(issue #25) reproduce the final result'
 	@printf '\n'
-	@printf 'lint, sim-tiny (issue #2) and the quartus-* targets (issue #3) are\n'
-	@printf 'implemented. Targets marked TODO are still stubs: they print TODO(issue #N)\n'
+	@printf 'numerics-check is not a SPEC 16 entry point; it is the issue #4 numerics\n'
+	@printf 'gate, run automatically as a prerequisite of sim-tiny and listed here so it\n'
+	@printf 'can also be run on its own while working on rtl/packages/fxp_pkg.sv or\n'
+	@printf 'model/cpp/fxp/.\n'
+	@printf '\n'
+	@printf 'lint and sim-tiny (issue #2), numerics-check (issue #4) and the quartus-*\n'
+	@printf 'targets (issue #3) are implemented. Targets marked TODO are still stubs:\n'
+	@printf 'they print TODO(issue #N)\n'
 	@printf 'and exit 1; GNU make then reports its own exit status 2 for the failed\n'
 	@printf 'recipe.\n'
 	@printf '\n'
@@ -333,6 +395,17 @@ env-check:
 
 lint:
 	$(LINT_RECIPE)
+
+# `numerics-check` is a sub-target of sim-tiny, not a SPEC 16 entry point. On
+# Windows the dependency is deliberately omitted: sim-tiny re-dispatches the
+# whole target into WSL, and the WSL-side make applies the dependency there, so
+# adding it here too would run the numerics gate twice.
+ifneq ($(HOST_KIND),windows)
+sim-tiny: numerics-check
+endif
+
+numerics-check:
+	$(NUMERICS_RECIPE)
 
 sim-tiny:
 	$(SIM_TINY_RECIPE)
@@ -411,6 +484,7 @@ reproduce-final:
 	$(call TODO,25,Evidence package and reproducibility)
 
 .PHONY: help env-check \
-        lint sim-tiny sim-medium sim-random sim-stress sim-coverage sim-full-smoke \
+        lint numerics-check \
+        sim-tiny sim-medium sim-random sim-stress sim-coverage sim-full-smoke \
         quartus-map quartus-fit quartus-sta quartus-report quartus-compile \
         seed-sweep compare-baseline reproduce-final

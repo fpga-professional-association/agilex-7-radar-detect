@@ -32,7 +32,18 @@ TODO — each implementing issue appends its own modules.
 
 ### 3.1 Packages (`rtl/packages/`)
 
-TODO — populated by issue #4 (fixed-point package) and issue #7 (register map types).
+| Path | Parameters | Issue | Function |
+|---|---|---|---|
+| `rtl/packages/fxp_pkg.sv` | none (localparams only) | #4 | The single shared fixed-point package (SPEC §6): Q1.15 / Q2.30 types and the complex type, signed saturation, round-to-nearest-even and round-half-up, truncation, the round-then-saturate composites, Q1.15 scalar and complex multiply, the accumulator-width growth rule, and `fxp_flags_t` saturation flags. Normative prose: [NUMERICS.md](NUMERICS.md). |
+
+Register-map types are added by issue #7.
+
+Two modules belong to the same contract although they live elsewhere:
+
+| Path | Parameters | Issue | Function |
+|---|---|---|---|
+| `rtl/common/fxp_sticky_flags.sv` | `COUNT_W` | #4 | The sanctioned saturation-flag collector: sticky `{sat_pos, sat_neg}` plus a saturating event counter, synchronous clear, clear wins over a simultaneous event. |
+| `sim/verilator/tops/fxp_probe_top.sv` | none | #4 | Simulation-only probe exposing every `fxp_pkg` function to the C++ numerics cross-check. Not design RTL; never instantiated by a design top. |
 
 ### 3.2 Common and stream infrastructure (`rtl/common/`, `rtl/stream/`)
 
