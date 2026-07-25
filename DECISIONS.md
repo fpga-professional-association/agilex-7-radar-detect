@@ -475,3 +475,160 @@ header-only plus one test translation unit, so the entire standalone build is
 is what `make numerics-check` runs and what the issue gate specifies. `CMakeLists.txt`
 keeps its loud placeholder, now pointing at `make numerics-check` rather than at this
 issue. Revisit if a component ever needs a build graph rather than a command.
+
+---
+
+## 2026-07-26 — Stream bundle transport, assertion mechanism and reset policy  (issue #5)
+
+**Context.** SPEC §5 mandates one canonical streaming interface at every module boundary,
+with elastic buffering so no combinational `ready` chain crosses more than one module, and
+SPEC §14 requires a reusable protocol assertion set that stays active in the fast
+simulation build. Issue #2's loopback used a provisional ad hoc bundle to unblock the
+Verilator flow. This issue replaces it with `rtl/packages/stream_pkg.sv` plus the three
+primitives in `rtl/stream/`, which everything from issue #6 onward builds on.
+
+**Decision 1 — the bundle travels as `valid` + `ready` + one packed payload vector, not as
+a SystemVerilog interface.** The issue #5 task list asks for a `stream_if` interface with
+`src`/`snk` modports. It was not built, and the reason is measured rather than stylistic.
+Verilator 5.020 cannot accept an interface on a top-level module port:
+
+```text
+%Error-UNSUPPORTED: iface.sv:8:50: Unsupported: Interfaced port on top level module
+%Error: Internal Error: iface.sv:2:11: ../V3LinkDot.cpp:422: Module/etc never assigned
+        a symbol entry?
+```
+
+(reproduced with a two-modport `stream_if` and a three-line pass-through top; note that
+`--lint-only` accepts the same file, so the limitation appears only when a model is
+actually built). The SPEC §12.2 C++ harness attaches to the DUT exactly at that boundary —
+it drives `valid`, samples `ready` and reads the payload through the Verilated model's
+ports — so an interface-typed top port would make the primary verification environment
+impossible, not merely awkward. Structs and flat vectors behave identically under
+Verilator and Quartus Pro and need no per-tool workaround.
+
+What replaced it: `stream_pkg` defines the field set, the normative field order
+(`data | sof | eof | stream_id | seq | user`, with `user` at bit 0), the offset functions,
+and `stream_pack()` / `stream_unpack()` between a `stream_fields_t` view and the packed
+vector. `stream_geom_t` carries the four field widths as a function argument — the same
+device, for the same IEEE 1800 reason (no parameterised functions), that `fxp_pkg` uses
+for its 64-bit working type. Primitives are parameterised on `PAYLOAD_W` alone and never
+decode the bundle, which is what makes them reusable for any stream in the design.
+
+*Consequences.* One `PAYLOAD_W` parameter and three ports per interface instead of one
+interface instance; port lists are longer than an interface's would be. In exchange the
+same RTL builds under both tools with no conditional code, the C++ harness binds to it
+directly, and a payload crosses a module boundary as one vector that neither tool can
+flatten differently on each side.
+*Alternative rejected:* interfaces for internal boundaries plus structs at the top level —
+two conventions, and the seam between them becomes where the bugs live.
+
+**Decision 2 — the SPEC §5 `sequence` field is spelled `seq` everywhere.** `sequence` is a
+SystemVerilog keyword, so it is illegal as a struct member, a variable or an unprefixed
+port; only a prefixed form (`in_sequence`, `s_sequence`) is legal, and only sometimes.
+`seq` is legal in every context, so one token names the field in the package, in module
+ports (`s_seq` / `m_seq`), in the C++ mirror (`StreamBeat::seq`) and in the generated
+configuration (`STREAM_SEQ_W`, `STREAM_SEQ_LSB`). Renamed this issue: the `stream_loopback`
+and `benchmark_sim_top` ports, and the C++ `StreamBeat` member.
+
+*Two deliberate exceptions.* `rtl/top/benchmark_fabric_top.sv` (issue #3) keeps
+`in_sequence` / `out_sequence`; it is out of scope here and is rebuilt on these primitives
+by a later issue, which retires the exception. `TransactionId::sequence` in the scoreboard
+keeps its name because it is SPEC §12.5's identity tuple — a different concept from the
+wire field, and never a SystemVerilog identifier.
+
+**Decision 3 — assertions are a bindable checker module built from macros, and what
+Verilator 5.020 actually enforces was measured, not assumed.**
+`sim/assertions/stream_sva.svh` holds the property text once;
+`sim/assertions/stream_protocol_checker.sv` wraps it in a module. Both attachment
+mechanisms are exercised: every primitive in `rtl/stream/` instantiates a checker on its
+master interface inside `` `ifndef SYNTHESIS ``, so a design built from the primitives is
+checked everywhere by construction and in the fast build (SPEC §14: "Assertions must
+remain active in fast simulation"); and `sim/verilator/tops/stream_violator_top.sv`
+attaches one by `bind` to a module that contains no assertions of its own.
+
+Measured on Verilator 5.020 (Debian 5.020-1) while writing this:
+
+| Construct | Result |
+|---|---|
+| `assert property` with `\|=>`, `\|->`, `$stable`, `$past`, `disable iff` | works |
+| immediate `assert` inside `always_ff` with an `else $error(...)` action | works |
+| `bind <module> <checker> #(...) u (...)` at file scope, concurrent properties included | works |
+| `cover property` | compiles; counted only in a `--coverage` build |
+| `##1` cycle-delay sequences | **not supported** — `%Error-UNSUPPORTED: ## (in sequence expression)`. Every property here is written with implication and `$past` instead |
+| `$isunknown` | compiles, but the tool is two-state, so the X checks are structurally dead under it and exist for four-state simulators |
+| macro arguments inside string literals | **substituted**, contrary to IEEE 1800. A message containing a word that is also a macro parameter name silently mutates at every use site; the macros therefore avoid such words |
+| bind parameter expressions | elaborated in the *target* module's scope, so a bind written inside a wrapper cannot see the wrapper's imports. Package-qualified names (`config_pkg::...`) are used instead |
+
+A failing assertion prints `%Error: <file>:<line>: Assertion failed in <hier>.<label>` and
+calls `vl_stop`, which by default routes to `vl_fatal` and aborts the process. That is kept
+for every test except the negative one, which calls `Verilated::fatalOnError(false)` so the
+failure becomes an observable event (`Verilated::gotError()`) rather than a SIGABRT. That is
+what lets `sim/tests/test_stream_assertions.cpp` require each expected assertion to fire *by
+name* and still exit 0 for the suite. It checks the name and not merely the fact of a
+failure, because a checker that fired the wrong property would otherwise look like a pass.
+*Alternative rejected:* overriding `vl_stop` through `VL_USER_STOP` — it needs a
+compile-time define on every build and yields the file and line but not the property name.
+
+**Decision 4 — one parameterised elastic buffer instead of a separate `reg_slice_2deep`.**
+The issue task list names `skid_buffer.sv` and `reg_slice_2deep.sv`. What is delivered is
+`stream_skid_buffer.sv` (two beats of storage, the minimum full-throughput decoupler) and
+`stream_elastic_buffer.sv` with `DEPTH >= 2`; the two-deep register slice is `DEPTH = 2`,
+and it is tested as its own DUT in `stream_prims_top`. A second module whose body would be
+"instantiate the general one at depth 2" is a second thing to keep correct for no
+behavioural difference, and depth is the only axis on which the two differ.
+
+*Skid versus full FIFO for Phase 1 elastic buffering.* Both primitives are distributed
+registers with a plain occupancy counter, deliberately not M20K: at the depths that break a
+ready path (2 to 8 beats) an M20K costs a block, two cycles of read latency and a
+read-during-write policy, to store fewer bits than the ALMs it saves. Memory-backed and
+clock-crossing FIFOs are issue #6 and are a different cost class. The rule this issue sets:
+a boundary that needs only decoupling gets a skid or a shallow elastic buffer, never a FIFO.
+
+**Decision 5 — `stream_pipe` inserts latency with credits, not with a shared enable.** The
+textbook N-stage pipeline shares one `advance = !m_valid || m_ready` enable across every
+stage. That puts `m_ready` on the enable of every register in the delay line — a fanout
+growing with both depth and payload width, feeding registers Quartus can then no longer
+retime freely — and makes `s_ready` a combinational function of `m_ready`. SPEC §23 warns
+against all three ("avoid one chip-wide clock enable", "pipeline enables before broad
+distribution", "break ready/valid feedback with elastic buffers").
+
+`stream_pipe` instead admits a beat only when a credit is available, a credit meaning that
+its output elastic buffer is guaranteed to have room by the time the beat arrives. The delay
+line then has **no enable and no stall condition at all** — every stage shifts every cycle —
+and `s_ready` is a flip-flop whose input depends only on the credit counter.
+`OUT_DEPTH >= STAGES + 2` sustains one beat per cycle; it is both the default and an
+elaboration-time check. The price is `OUT_DEPTH` entries of storage; the purchase is a delay
+line of pure forward registers, which is exactly what HyperFlex retiming wants.
+
+**Decision 6 — reset policy: synchronous, active low, validity only.** Applied identically
+in all three primitives, per SPEC §23 ("Reset validity, not every datapath bit") and SPEC §8
+("avoid resetting every datapath register"). Reset reaches the valid bits, the occupancy
+counter, the pointers, the credit counter and the registered `ready` flops — and nothing
+else. No payload register anywhere in `rtl/stream/` has a reset: correctness comes from the
+validity travelling beside the data, and a payload reset would add a `PAYLOAD_W`- or
+`DEPTH * PAYLOAD_W`-wide reset fanout that pins those exact registers out of Hyper-Register
+retiming for no functional gain. No asynchronous reset is used anywhere (SPEC §23).
+
+**Decision 7 — one payload layout, mirrored twice, checked twice.**
+`rtl/packages/stream_pkg.sv` is normative. `scripts/build_verilator.py` computes the same
+offsets in Python and emits them into the generated `config_pkg.sv` and `config_sim.h`,
+because the C++ harness cannot call a SystemVerilog function. Two independent checks stop
+the mirror drifting: an `initial` block in `benchmark_sim_top` compares every offset and the
+payload width against `stream_pkg`'s own functions at time 0 of every run and `$fatal`s by
+name on a mismatch; and `test_stream_loopback.cpp` compares its own `pack()`/`unpack()`
+against the RTL's exported `m_payload` on every transferred beat, and fails if the number of
+such comparisons is not equal to the number of beats observed. The first check covers the
+constants, the second covers the code that uses them.
+*Why not generate the SystemVerilog package from Python as well:* the package is source that
+engineers read and reason about, and a generated one could not carry the rationale the field
+order needs. *Why not hand-write the C++ constants:* they would be a third definition with
+nothing checking it.
+
+**Decision 8 — `sim-tiny` grows a test list rather than a new entry point.** SPEC §16 fixes
+the command list, so the two new tests join `make sim-tiny` — which already depends on
+`numerics-check` — instead of adding targets. Each has its own top and file list
+(`stream_prims_top` / `files_stream.f`, `stream_violator_top` / `files_violator.f`) for the
+reason `fxp_probe_top` has one: a failure in a self-contained build is unambiguously a
+failure of the thing that build tests. The violator's RTL is knowingly incorrect and appears
+in no other file list, so it can never reach the design build. `make lint` now lints all
+three tops.

@@ -1,193 +1,225 @@
 // -----------------------------------------------------------------------------
-// stream_loopback — provisional two-stage streaming pass-through.
+// stream_loopback — SPEC 5 pass-through built from the canonical primitives.
 //
-// Governing spec: SPEC.md 5 (Streaming Protocol), SPEC.md 19 (Phase 0:
-// "One trivial stream loopback test").
+// Governing spec: SPEC.md 5 (Streaming Protocol), SPEC.md 19 Phase 0 ("One
+// trivial stream loopback test").
 //
-// PROVISIONAL. This module exists only so that the Phase 0 Verilator harness
-// (clock scheduler, reset sequencer, stream driver/monitor, scoreboard) has a
-// protocol-correct DUT to exercise before any real datapath exists. The real
-// stream interface, elastic buffer and skid buffer, together with the full
-// protocol assertion set, are owned by issue #5 and will replace the storage
-// element implemented here. Do not build datapath logic on top of this module.
+// History: issue #2 needed a protocol-correct DUT before any real datapath
+// existed, and implemented one with an inline skid stage. Issue #5 replaced that
+// implementation with the canonical primitives; the module keeps its name, its
+// ports (except the `seq` rename below) and its behaviour, and contains no
+// storage element of its own.
 //
-// Structure
-// ---------
-// STAGES cascaded skid stages carrying the complete SPEC 5 bundle
-// (data / start_of_frame / end_of_frame / stream_id / sequence / user) as one
-// packed payload vector. Each stage is a full-throughput skid buffer:
+//     s_* fields --pack--> skid --> elastic(ELASTIC_DEPTH) --> skid --unpack--> m_* fields
 //
-//   * one output register + one skid register  -> two beats of storage,
-//   * s_ready is a register output, so there is no combinational path from any
-//     downstream ready to any upstream ready (SPEC 5: "No combinational ready
-//     loop may cross more than one module boundary" — here it crosses none),
-//   * a beat accepted into a stage is held bit-stable until it is transferred
-//     out (SPEC 5: "A source must hold payload and metadata stable while
-//     stalled"),
-//   * back-to-back transfers are sustained at one beat per cycle when neither
-//     side stalls.
+// Why that chain and not one primitive: it is the smallest arrangement that
+// exercises all three properties the harness needs to be able to trust — a
+// registered ready on both module faces (the two skids), a real fill level that
+// varies under backpressure (the elastic buffer), and a payload that crosses a
+// primitive boundary in packed form. It is also the shape every datapath block
+// in this design will have: decouple in, buffer, decouple out.
 //
-// Reset: synchronous, active low. SPEC 23 ("avoid asynchronous resets in
-// performance-critical pipelines") makes synchronous reset the default for
-// datapath logic; SPEC 8 ("avoid resetting every datapath register") means only
-// control state — the valid bits and the ready bit — is reset, and the payload
-// registers are flushed by validity tracking instead.
+// Field ports, not a packed port, are deliberate: this is where the SPEC 12.2
+// C++ harness attaches, and the packing is applied and removed here by
+// stream_pkg so that the harness sees named fields while everything inside the
+// design carries one vector. Verilator cannot pass an interface through a
+// top-level port at all (DECISIONS.md 2026-07-26, decision 1), which is the
+// measured reason the boundary looks like this.
+//
+// Field naming: `s_seq` / `m_seq`, not `s_sequence` / `m_sequence`. SPEC 5's
+// `sequence` is a SystemVerilog keyword; `seq` is the project-wide spelling
+// (DECISIONS.md 2026-07-26, decision 2).
+//
+// Latency with no backpressure is LATENCY_NO_STALL below — computed from the
+// primitives' own exported constants, never written as a number. Under
+// backpressure there is no fixed latency and SPEC 12.5 forbids assuming one.
+//
+// Reset: synchronous, active low, and entirely delegated to the primitives,
+// which reset validity and not payload (SPEC 23).
 // -----------------------------------------------------------------------------
 
 `default_nettype none
 
 module stream_loopback #(
-    parameter int unsigned DATA_W      = 32,
-    parameter int unsigned STREAM_ID_W = 4,
-    parameter int unsigned SEQ_W       = 16,
-    parameter int unsigned USER_W      = 4,
-    // Number of cascaded skid stages. Two is the Phase 0 configuration and the
-    // minimum that proves a multi-stage handshake; the parameter exists so the
-    // harness can be re-pointed at a deeper pipeline without editing the RTL.
-    parameter int unsigned STAGES      = 2
-) (
-    input  logic                   clk,
-    input  logic                   rst_n,
+    parameter int unsigned DATA_W        = 32,
+    parameter int unsigned STREAM_ID_W   = 4,
+    parameter int unsigned SEQ_W         = 16,
+    parameter int unsigned USER_W        = 4,
+    // Depth of the middle elastic buffer. 4 is the Phase 0 configuration: deep
+    // enough that a bursty sink fills it and the occupancy check has something
+    // to observe, small enough to stay in distributed registers.
+    parameter int unsigned ELASTIC_DEPTH = 4,
 
-    // Slave (input) side of the provisional SPEC 5 stream bundle.
-    input  logic                   s_valid,
-    output logic                   s_ready,
-    input  logic [DATA_W-1:0]      s_data,
-    input  logic                   s_start_of_frame,
-    input  logic                   s_end_of_frame,
-    input  logic [STREAM_ID_W-1:0] s_stream_id,
-    input  logic [SEQ_W-1:0]       s_sequence,
-    input  logic [USER_W-1:0]      s_user,
+    // DERIVED — do not override. Exists only because a port range cannot refer
+    // to a localparam declared in the module body, and writing the width
+    // arithmetic out by hand in the port list is exactly the duplicated
+    // concatenation stream_pkg exists to prevent.
+    parameter int unsigned PAYLOAD_W = int'(stream_pkg::stream_payload_w(
+        stream_pkg::stream_geom(DATA_W, STREAM_ID_W, SEQ_W, USER_W)))
+) (
+    input  wire                   clk,
+    input  wire                   rst_n,
+
+    // Slave (input) side of the SPEC 5 bundle.
+    input  wire                   s_valid,
+    output wire                   s_ready,
+    input  wire [DATA_W-1:0]      s_data,
+    input  wire                   s_start_of_frame,
+    input  wire                   s_end_of_frame,
+    input  wire [STREAM_ID_W-1:0] s_stream_id,
+    input  wire [SEQ_W-1:0]       s_seq,
+    input  wire [USER_W-1:0]      s_user,
 
     // Master (output) side.
-    output logic                   m_valid,
-    input  logic                   m_ready,
-    output logic [DATA_W-1:0]      m_data,
-    output logic                   m_start_of_frame,
-    output logic                   m_end_of_frame,
-    output logic [STREAM_ID_W-1:0] m_stream_id,
-    output logic [SEQ_W-1:0]       m_sequence,
-    output logic [USER_W-1:0]      m_user
+    output wire                   m_valid,
+    input  wire                   m_ready,
+    output wire [DATA_W-1:0]      m_data,
+    output wire                   m_start_of_frame,
+    output wire                   m_end_of_frame,
+    output wire [STREAM_ID_W-1:0] m_stream_id,
+    output wire [SEQ_W-1:0]       m_seq,
+    output wire [USER_W-1:0]      m_user,
+
+    // The packed payload presented on the master side, exported so the C++
+    // harness can check its own copy of the SPEC 5 packing against the RTL's on
+    // every beat. Not a datapath port: no other module reads it.
+    output wire [PAYLOAD_W-1:0]   m_payload
 );
 
-  // Packed payload: every field of the SPEC 5 bundle except valid/ready.
-  localparam int unsigned PAYLOAD_W = DATA_W + 1 + 1 + STREAM_ID_W + SEQ_W + USER_W;
+  localparam stream_pkg::stream_geom_t GEOM =
+      stream_pkg::stream_geom(DATA_W, STREAM_ID_W, SEQ_W, USER_W);
 
-  logic [PAYLOAD_W-1:0] stage_payload [STAGES+1];
-  logic                 stage_valid   [STAGES+1];
-  logic                 stage_ready   [STAGES+1];
+  // Structural no-backpressure latency, summed from the primitives rather than
+  // written as a number. benchmark_sim_top checks this against the value the
+  // C++ harness was generated with, so the two cannot drift.
+  localparam int unsigned LATENCY_NO_STALL = stream_pkg::stream_skid_latency() +
+                                             stream_pkg::stream_elastic_latency() +
+                                             stream_pkg::stream_skid_latency();
 
-  // Stage 0 input is the module's slave port.
-  assign stage_payload[0] = {s_data, s_start_of_frame, s_end_of_frame,
-                             s_stream_id, s_sequence, s_user};
-  assign stage_valid[0]   = s_valid;
-  assign s_ready          = stage_ready[0];
+  // ---------------------------------------------------------------------------
+  // Pack the slave-side fields into the canonical payload.
+  // ---------------------------------------------------------------------------
+  stream_pkg::stream_fields_t s_fields;
+  wire [PAYLOAD_W-1:0]        s_payload;
 
-  for (genvar g = 0; g < int'(STAGES); g++) begin : gen_stage
-    // ---------------------------------------------------------------------
-    // Full-throughput skid stage.
-    //
-    //   out_*  : the beat currently presented downstream
-    //   skid_* : the overflow beat captured while the output slot was stalled
-    //   rdy_q  : registered upstream ready; asserted iff the skid slot will be
-    //            free next cycle, which guarantees room for any beat accepted
-    //            while it is high.
-    // ---------------------------------------------------------------------
-    logic [PAYLOAD_W-1:0] out_payload_q,  out_payload_d;
-    logic                 out_valid_q,    out_valid_d;
-    logic [PAYLOAD_W-1:0] skid_payload_q, skid_payload_d;
-    logic                 skid_valid_q,   skid_valid_d;
-    logic                 rdy_q,          rdy_d;
+  always_comb begin
+    s_fields           = '0;
+    s_fields.data      = stream_pkg::STREAM_MAX_DATA_W'(s_data);
+    s_fields.sof       = s_start_of_frame;
+    s_fields.eof       = s_end_of_frame;
+    s_fields.stream_id = stream_pkg::STREAM_MAX_ID_W'(s_stream_id);
+    s_fields.seq       = stream_pkg::STREAM_MAX_SEQ_W'(s_seq);
+    s_fields.user      = stream_pkg::STREAM_MAX_USER_W'(s_user);
+  end
 
-    logic accept;     // an upstream beat transfers into this stage this cycle
-    logic emit;       // the output beat transfers downstream this cycle
-    logic slot_free;  // the output register is free (or frees) this cycle
-    logic taken;      // the accepted beat went straight into the output slot
+  assign s_payload = PAYLOAD_W'(stream_pkg::stream_pack(GEOM, s_fields));
 
-    always_comb begin
-      accept    = rdy_q && stage_valid[g];
-      emit      = out_valid_q && stage_ready[g+1];
-      slot_free = emit || !out_valid_q;
+  // ---------------------------------------------------------------------------
+  // skid -> elastic -> skid
+  // ---------------------------------------------------------------------------
+  wire                 a_valid, a_ready;
+  wire [PAYLOAD_W-1:0] a_payload;
+  wire                 b_valid, b_ready;
+  wire [PAYLOAD_W-1:0] b_payload;
+  wire [$clog2(ELASTIC_DEPTH+1)-1:0] elastic_occupancy;
 
-      out_payload_d  = out_payload_q;
-      out_valid_d    = out_valid_q && !emit;
-      skid_payload_d = skid_payload_q;
-      skid_valid_d   = skid_valid_q;
-      taken          = 1'b0;
+  stream_skid_buffer #(
+      .PAYLOAD_W   (PAYLOAD_W),
+      .DATA_W      (DATA_W),
+      .STREAM_ID_W (STREAM_ID_W),
+      .SEQ_W       (SEQ_W),
+      .USER_W      (USER_W)
+  ) u_in_skid (
+      .clk       (clk),
+      .rst_n     (rst_n),
+      .s_valid   (s_valid),
+      .s_ready   (s_ready),
+      .s_payload (s_payload),
+      .m_valid   (a_valid),
+      .m_ready   (a_ready),
+      .m_payload (a_payload)
+  );
 
-      if (slot_free) begin
-        if (skid_valid_q) begin
-          // Drain the skid slot first to preserve ordering. accept is
-          // necessarily 0 here because rdy_q == !skid_valid_q.
-          out_payload_d = skid_payload_q;
-          out_valid_d   = 1'b1;
-          skid_valid_d  = 1'b0;
-        end else if (accept) begin
-          out_payload_d = stage_payload[g];
-          out_valid_d   = 1'b1;
-          taken         = 1'b1;
-        end
-      end
+  stream_elastic_buffer #(
+      .PAYLOAD_W   (PAYLOAD_W),
+      .DEPTH       (ELASTIC_DEPTH),
+      .DATA_W      (DATA_W),
+      .STREAM_ID_W (STREAM_ID_W),
+      .SEQ_W       (SEQ_W),
+      .USER_W      (USER_W)
+  ) u_elastic (
+      .clk       (clk),
+      .rst_n     (rst_n),
+      .s_valid   (a_valid),
+      .s_ready   (a_ready),
+      .s_payload (a_payload),
+      .m_valid   (b_valid),
+      .m_ready   (b_ready),
+      .m_payload (b_payload),
+      .occupancy (elastic_occupancy)
+  );
 
-      if (accept && !taken) begin
-        // Output slot busy and stalled: the accepted beat skids.
-        skid_payload_d = stage_payload[g];
-        skid_valid_d   = 1'b1;
-      end
+  stream_skid_buffer #(
+      .PAYLOAD_W   (PAYLOAD_W),
+      .DATA_W      (DATA_W),
+      .STREAM_ID_W (STREAM_ID_W),
+      .SEQ_W       (SEQ_W),
+      .USER_W      (USER_W)
+  ) u_out_skid (
+      .clk       (clk),
+      .rst_n     (rst_n),
+      .s_valid   (b_valid),
+      .s_ready   (b_ready),
+      .s_payload (b_payload),
+      .m_valid   (m_valid),
+      .m_ready   (m_ready),
+      .m_payload (m_payload)
+  );
 
-      // Room exists next cycle exactly when the skid slot will be empty.
-      rdy_d = !skid_valid_d;
+  // ---------------------------------------------------------------------------
+  // Unpack the master-side payload back into fields.
+  // ---------------------------------------------------------------------------
+  stream_pkg::stream_fields_t m_fields;
+
+  assign m_fields = stream_pkg::stream_unpack(
+                        GEOM, stream_pkg::stream_payload_t'(m_payload));
+
+  assign m_data           = DATA_W'(m_fields.data);
+  assign m_start_of_frame = m_fields.sof;
+  assign m_end_of_frame   = m_fields.eof;
+  assign m_stream_id      = STREAM_ID_W'(m_fields.stream_id);
+  assign m_seq            = SEQ_W'(m_fields.seq);
+  assign m_user           = USER_W'(m_fields.user);
+
+  // ---------------------------------------------------------------------------
+  // A pack/unpack round trip must be the identity. This is the RTL half of the
+  // single-packing-definition guarantee; the C++ half is checked beat by beat in
+  // sim/tests/test_stream_loopback.cpp against the exported m_payload.
+  // ---------------------------------------------------------------------------
+`ifndef SYNTHESIS
+  initial begin
+    if (int'(LATENCY_NO_STALL) < 1) begin
+      $fatal(1, "stream_loopback: structural latency must be positive");
     end
-
-    always_ff @(posedge clk) begin
-      if (!rst_n) begin
-        out_valid_q  <= 1'b0;
-        skid_valid_q <= 1'b0;
-        rdy_q        <= 1'b0;
-      end else begin
-        out_valid_q  <= out_valid_d;
-        skid_valid_q <= skid_valid_d;
-        rdy_q        <= rdy_d;
-      end
+    if (int'(PAYLOAD_W) != int'(stream_pkg::stream_payload_w(GEOM))) begin
+      $fatal(1, "stream_loopback: PAYLOAD_W was overridden (%0d) and no longer matches the geometry (%0d)",
+             PAYLOAD_W, int'(stream_pkg::stream_payload_w(GEOM)));
     end
+  end
 
-    // Payload registers carry no reset; they are qualified by the valid bits.
-    always_ff @(posedge clk) begin
-      out_payload_q  <= out_payload_d;
-      skid_payload_q <= skid_payload_d;
+  always_ff @(posedge clk) begin
+    if (rst_n && s_valid && s_ready) begin
+      a_pack_roundtrip : assert (stream_pkg::stream_unpack(GEOM,
+                                     stream_pkg::stream_payload_t'(s_payload)) == s_fields)
+        else $error("stream_loopback: stream_pack/stream_unpack round trip is not the identity");
     end
-
-    assign stage_payload[g+1] = out_payload_q;
-    assign stage_valid[g+1]   = out_valid_q;
-    assign stage_ready[g]     = rdy_q;
-  end : gen_stage
-
-  // Final stage output is the module's master port.
-  assign m_valid             = stage_valid[STAGES];
-  assign stage_ready[STAGES] = m_ready;
-  assign {m_data, m_start_of_frame, m_end_of_frame,
-          m_stream_id, m_sequence, m_user} = stage_payload[STAGES];
-
-  // ---------------------------------------------------------------------
-  // Provisional protocol assertions (SPEC 14). Compiled only when Verilator
-  // is invoked with --assert. The complete stream assertion set is issue #5;
-  // these two cover exactly what this module and its driver promise.
-  // ---------------------------------------------------------------------
-
-  // DUT promise: a stalled master holds valid and the whole payload stable.
-  property p_master_stable;
-    @(posedge clk) disable iff (!rst_n)
-      (m_valid && !m_ready) |=> (m_valid && $stable(stage_payload[STAGES]));
-  endproperty
-  a_master_stable : assert property (p_master_stable);
-
-  // Driver promise (checks the C++ stream driver, not the RTL): a stalled
-  // source holds valid and the whole payload stable.
-  property p_slave_stable;
-    @(posedge clk) disable iff (!rst_n)
-      (s_valid && !s_ready) |=> (s_valid && $stable(stage_payload[0]));
-  endproperty
-  a_slave_stable : assert property (p_slave_stable);
+    if (rst_n) begin
+      a_elastic_occupancy : assert (int'(elastic_occupancy) <= int'(ELASTIC_DEPTH))
+        else $error("stream_loopback: elastic occupancy %0d exceeds depth %0d",
+                    elastic_occupancy, ELASTIC_DEPTH);
+    end
+  end
+`endif
 
 endmodule : stream_loopback
 

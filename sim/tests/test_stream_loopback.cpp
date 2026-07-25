@@ -83,11 +83,34 @@ constexpr std::uint32_t kMinFrameLen = 1;
 constexpr std::uint32_t kMaxFrameLen = 16;
 constexpr std::uint64_t kDefaultFramesPerPass = 48;
 
-// Latency, in core cycles, of the provisional loopback with no backpressure:
-// one cycle per skid stage. The directed pass enforces this exactly; the
+// Latency, in core cycles, of the loopback with no backpressure: one cycle for
+// each of skid -> elastic -> skid. The number comes from the generated
+// configuration, and benchmark_sim_top $fatals at time 0 if it disagrees with
+// the sum stream_pkg computes for the instantiated structure — so this constant
+// cannot drift away from the RTL. The directed pass enforces it exactly; the
 // randomized passes cannot, because latency there is a function of how long the
 // sink stalls (SPEC 12.5: do not assume a fixed end-to-end latency).
-constexpr std::uint64_t kNoStallLatency = sim_config::STREAM_LOOPBACK_STAGES;
+constexpr std::uint64_t kNoStallLatency = sim_config::STREAM_LOOPBACK_LATENCY;
+
+// The C++ view of the SPEC 5 packed payload, built entirely from the generated
+// layout constants. Used to check the RTL's exported `m_payload` against this
+// harness's own packing on every observed beat: benchmark_sim_top proves the
+// offsets agree, and this proves the code that uses them does.
+harness::StreamLayout payload_layout() {
+  harness::StreamLayout l;
+  l.data_w = sim_config::STREAM_DATA_W;
+  l.id_w = sim_config::STREAM_ID_W;
+  l.seq_w = sim_config::STREAM_SEQ_W;
+  l.user_w = sim_config::STREAM_USER_W;
+  l.user_lsb = sim_config::STREAM_USER_LSB;
+  l.seq_lsb = sim_config::STREAM_SEQ_LSB;
+  l.id_lsb = sim_config::STREAM_ID_LSB;
+  l.eof_lsb = sim_config::STREAM_EOF_LSB;
+  l.sof_lsb = sim_config::STREAM_SOF_LSB;
+  l.data_lsb = sim_config::STREAM_DATA_LSB;
+  l.payload_w = sim_config::STREAM_PAYLOAD_W;
+  return l;
+}
 
 // Number of concurrent logical streams driven through the loopback: one per
 // antenna, capped by what stream_id can encode.
@@ -115,7 +138,7 @@ class LoopbackSource : public StreamSourcePort {
     put(top_->s_start_of_frame, b.start_of_frame ? 1u : 0u);
     put(top_->s_end_of_frame, b.end_of_frame ? 1u : 0u);
     put(top_->s_stream_id, b.stream_id & kIdMask);
-    put(top_->s_sequence, b.sequence & kSeqMask);
+    put(top_->s_seq, b.seq & kSeqMask);
     put(top_->s_user, b.user & kUserMask);
   }
 
@@ -140,7 +163,7 @@ class LoopbackSink : public StreamSinkPort {
     b.start_of_frame = top_->m_start_of_frame != 0;
     b.end_of_frame = top_->m_end_of_frame != 0;
     b.stream_id = static_cast<std::uint32_t>(top_->m_stream_id) & kIdMask;
-    b.sequence = static_cast<std::uint32_t>(top_->m_sequence) & kSeqMask;
+    b.seq = static_cast<std::uint32_t>(top_->m_seq) & kSeqMask;
     b.user = static_cast<std::uint32_t>(top_->m_user) & kUserMask;
     return b;
   }
@@ -162,7 +185,7 @@ TransactionId identity_of(const StreamBeat& b) {
   TransactionId id;
   id.stream_id = b.stream_id;
   id.frame_id = b.user;
-  id.sequence = b.sequence;
+  id.sequence = b.seq;
   return id;
 }
 
@@ -232,7 +255,7 @@ struct Generator {
       b.start_of_frame = (i == 0);
       b.end_of_frame = (i + 1 == length);
       b.stream_id = stream_id;
-      b.sequence = next_seq[stream_id] & kSeqMask;
+      b.seq = next_seq[stream_id] & kSeqMask;
       b.user = tag;
       next_seq[stream_id] = (next_seq[stream_id] + 1u) & kSeqMask;
       frame.push_back(b);
@@ -308,6 +331,21 @@ int harness::sim_test_main(const SimArgs& args) {
   LoopbackSource src_port(top.get());
   LoopbackSink snk_port(top.get());
   Scoreboard scoreboard("loopback", errors);
+
+  // SPEC 5 packed layout, from the generated constants only.
+  const harness::StreamLayout layout = payload_layout();
+  std::uint64_t packing_checks = 0;
+  {
+    const std::string bad = layout.self_check();
+    if (!bad.empty()) {
+      std::fprintf(stderr, "ERROR: generated stream layout is inconsistent: %s\n",
+                   bad.c_str());
+      std::printf("RESULT: FAIL seed=%llu test=%s reason=layout_inconsistent\n",
+                  static_cast<unsigned long long>(args.seed), kTestName);
+      return 2;
+    }
+    if (!args.quiet) std::printf("  layout     : %s\n", layout.to_string().c_str());
+  }
 
   // Rebuilt per pass so each pass gets its own stall generator. The callbacks
   // below hold the owning pointers, not the objects.
@@ -404,6 +442,31 @@ int harness::sim_test_main(const SimArgs& args) {
       scoreboard.expect(identity_of(b), b, cyc);
     });
     monitor->set_observe_hook([&](const StreamBeat& b, std::uint64_t cyc) {
+      // SPEC 5 packing cross-check, on every transferred beat: the DUT exports
+      // the same beat in canonical packed form, and this harness's own
+      // pack/unpack must reproduce it exactly in both directions. Together with
+      // the time-0 offset comparison in benchmark_sim_top that is the whole
+      // "one packing definition" guarantee — the offsets, and the code using
+      // them.
+      const std::uint64_t rtl_packed =
+          static_cast<std::uint64_t>(top->m_payload);
+      const StreamBeat from_rtl = layout.unpack(rtl_packed);
+      if (from_rtl != b) {
+        errors.error("packing",
+                     "unpacking the RTL payload disagrees with the field "
+                     "ports: packed=" +
+                         from_rtl.to_string() + " fields=" + b.to_string());
+      }
+      if (layout.pack(b) != rtl_packed) {
+        char buf[96];
+        std::snprintf(buf, sizeof(buf), "harness 0x%llx, RTL 0x%llx",
+                      static_cast<unsigned long long>(layout.pack(b)),
+                      static_cast<unsigned long long>(rtl_packed));
+        errors.error("packing",
+                     "harness packing disagrees with the RTL payload (" +
+                         std::string(buf) + ")");
+      }
+      ++packing_checks;
       scoreboard.observe(identity_of(b), b, cyc);
     });
 
@@ -510,6 +573,18 @@ int harness::sim_test_main(const SimArgs& args) {
     }
   }
 
+  // Every observed beat must have been packing-checked. A zero here would mean
+  // the cross-check silently never ran, which is the failure mode a check of
+  // this kind is most likely to have.
+  if (packing_checks != total_beats_observed) {
+    errors.error("packing",
+                 "packing checks (" + std::to_string(packing_checks) +
+                     ") do not cover every observed beat (" +
+                     std::to_string(total_beats_observed) + ")");
+    failed = true;
+    if (first_failure.empty()) first_failure = "packing cross-check coverage";
+  }
+
   const bool passed = !failed && errors.ok();
 
   // Evidence that the second clock domain really ran: the only Phase 0 proof
@@ -561,6 +636,8 @@ int harness::sim_test_main(const SimArgs& args) {
   std::printf("  frames         : driven=%llu observed=%llu\n",
               static_cast<unsigned long long>(total_frames_driven),
               static_cast<unsigned long long>(total_frames_observed));
+  std::printf("  packing checks : %llu (RTL m_payload vs harness pack/unpack)\n",
+              static_cast<unsigned long long>(packing_checks));
   std::printf("  errors         : %zu\n", errors.count());
   if (!written.empty()) std::printf("  summary json   : %s\n", written.c_str());
 

@@ -8,8 +8,9 @@ built, not what was proposed; every entry must correspond to committed RTL. Rati
 for choices lives in [DECISIONS.md](DECISIONS.md), numerical formats in
 [NUMERICS.md](NUMERICS.md).
 
-> **Status: skeleton (issue #1).** Headings only. Nothing below is invented ahead of
-> the RTL that justifies it; each section is filled by the issue named in its pointer.
+> **Status: filling in.** Nothing below is invented ahead of the RTL that justifies it;
+> each section is filled by the issue named in its pointer. Filled so far: §3.1 packages
+> (#4, #5), §3.2 stream infrastructure (#5), §6.1 streaming protocol (#5).
 
 ## 1. System block diagram
 
@@ -35,6 +36,7 @@ TODO — each implementing issue appends its own modules.
 | Path | Parameters | Issue | Function |
 |---|---|---|---|
 | `rtl/packages/fxp_pkg.sv` | none (localparams only) | #4 | The single shared fixed-point package (SPEC §6): Q1.15 / Q2.30 types and the complex type, signed saturation, round-to-nearest-even and round-half-up, truncation, the round-then-saturate composites, Q1.15 scalar and complex multiply, the accumulator-width growth rule, and `fxp_flags_t` saturation flags. Normative prose: [NUMERICS.md](NUMERICS.md). |
+| `rtl/packages/stream_pkg.sv` | none (localparams and functions only) | #5 | The single shared stream package (SPEC §5): the bundle's field set, the normative field order and offsets, `stream_geom_t` / `stream_fields_t` / `stream_payload_t`, `stream_pack()` / `stream_unpack()`, and the primitives' structural latencies. Prose: §6.1 below. |
 
 Register-map types are added by issue #7.
 
@@ -47,7 +49,22 @@ Two modules belong to the same contract although they live elsewhere:
 
 ### 3.2 Common and stream infrastructure (`rtl/common/`, `rtl/stream/`)
 
-TODO — populated by issue #5.
+| Path | Parameters | Issue | Function |
+|---|---|---|---|
+| `rtl/stream/stream_skid_buffer.sv` | `PAYLOAD_W`, optional field geometry | #5 | Single-stage fully-decoupling register slice: two beats of storage, one beat per cycle, registered `valid`/payload forward AND registered `ready` backward, so a ready path through it crosses zero module boundaries. Latency 1. |
+| `rtl/stream/stream_elastic_buffer.sv` | `PAYLOAD_W`, `DEPTH >= 2`, optional field geometry | #5 | Parameterised-depth elastic buffer in distributed registers with an exported occupancy. Registered `ready` asserted exactly when a slot will be free next cycle. `DEPTH = 2` is the two-deep register slice. Latency 1, full throughput at any depth. |
+| `rtl/stream/stream_pipe.sv` | `PAYLOAD_W`, `STAGES`, `OUT_DEPTH` (default `STAGES+2`), optional field geometry | #5 | Latency insertion with no clock enable and no ready chain: a credit gate feeds `STAGES` free-running register stages into an output elastic buffer, so the delay line never stalls and Quartus is free to retime it. Latency `STAGES+1`. |
+| `rtl/common/stream_loopback.sv` | `DATA_W`, `STREAM_ID_W`, `SEQ_W`, `USER_W`, `ELASTIC_DEPTH` | #2, rebuilt by #5 | SPEC §19 Phase 0 pass-through, now `skid -> elastic -> skid` over the canonical primitives with no storage of its own. Packs and unpacks the SPEC §5 bundle at the harness boundary and exports the packed payload for the C++ packing cross-check. Latency 3. |
+| `rtl/common/fxp_sticky_flags.sv` | `COUNT_W` | #4 | Saturation-flag collector; see §3.1. |
+
+Simulation-only companions, listed here because they belong to the same contract:
+
+| Path | Issue | Function |
+|---|---|---|
+| `sim/assertions/stream_sva.svh` | #5 | The SPEC §5 / §14 property text, once: handshake stability, valid-held, reset-clears-valid, no-X, and per-`stream_id` framing and sequence continuity. |
+| `sim/assertions/stream_protocol_checker.sv` | #5 | The property set as an instantiable and bindable module. Instantiated by every primitive under `` `ifndef SYNTHESIS ``. |
+| `sim/verilator/tops/stream_prims_top.sv` | #5 | Unit-test top: the three primitives in four configurations as four independent streams. |
+| `sim/verilator/tops/stream_violator.sv`, `stream_violator_top.sv` | #5 | Deliberately protocol-violating stage with the checker bound onto it, for the negative test. Never in a design file list. |
 
 ### 3.3 CDC primitives (`rtl/cdc/`)
 
@@ -92,9 +109,56 @@ TODO — populated by issue #6; regenerated as an inventory report by later issu
 
 ### 6.1 Streaming protocol
 
-Ready/valid streaming interface per SPEC §5.
+Ready/valid streaming interface per SPEC §5. Defined by
+[`rtl/packages/stream_pkg.sv`](rtl/packages/stream_pkg.sv) (issue #5); rationale and the
+alternatives rejected are in [DECISIONS.md](DECISIONS.md) 2026-07-26.
 
-TODO — populated by issue #5.
+**The bundle.** Three ports per interface: `valid`, `ready`, and one packed payload
+vector carrying every SPEC §5 field except the handshake.
+
+```text
+MSB                                                          LSB
++--------+-----+-----+-----------+---------+--------+
+|  data  | sof | eof | stream_id |   seq   |  user  |
++--------+-----+-----+-----------+---------+--------+
+```
+
+`user` sits at bit 0 and `data` at the top, so widening `data` — the field most likely to
+change between size configurations — moves no other field's offset and a payload captured
+in a waveform stays readable across a resize. The field order in this diagram is
+normative; `stream_pkg`'s offset functions are its executable form, and nothing anywhere
+recomputes an offset by hand.
+
+**Transport.** Packed vector, not a SystemVerilog interface: Verilator 5.020 cannot pass
+an interface through a top-level module port, and that port is exactly where the C++
+harness attaches. `stream_geom_t` carries the four field widths into `stream_pack()` /
+`stream_unpack()`, which are the only sanctioned way to move between the packed vector and
+the named-field view.
+
+**Field naming.** The SPEC §5 `sequence` field is spelled `seq` everywhere — it is the
+only spelling legal as a struct member, a variable and a port. `benchmark_fabric_top`
+(issue #3) still uses `in_sequence` / `out_sequence` and is the one documented exception.
+
+**Elastic-buffer placement rule.** SPEC §5 forbids a combinational `ready` chain crossing
+more than one module boundary, and SPEC §23 asks for ready/valid feedback to be broken
+with elastic buffers. Both primitives that store beats — `stream_skid_buffer` and
+`stream_elastic_buffer` — drive `ready` from a flip-flop whose input depends only on their
+own state, so a ready path through either crosses **zero** boundaries. The rule for the
+design:
+
+* every block boundary in the datapath gets a decoupler on the way in and on the way out
+  (`skid -> work -> skid`, or a shallow elastic buffer where stall tolerance is wanted);
+* a boundary that needs only decoupling never gets a FIFO — memory-backed and
+  clock-crossing FIFOs are issue #6 and a different cost class;
+* latency inserted for floorplan or retiming reasons goes through `stream_pipe`, which
+  adds registers without adding an enable or a ready path.
+
+**Assertion coverage.** Every primitive instantiates `stream_protocol_checker` on its
+master interface inside `` `ifndef SYNTHESIS ``, so any design built from them is checked
+at every stage boundary in the fast simulation build (SPEC §14). The checker also attaches
+by `bind` for modules that carry no assertions of their own. The property list, what
+Verilator actually enforces, and the negative test that proves each assertion fires are in
+[VERIFICATION_PLAN.md](VERIFICATION_PLAN.md) §5.
 
 ### 6.2 Register/control interface
 

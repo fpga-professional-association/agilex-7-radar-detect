@@ -113,27 +113,73 @@ def load_config(name: str) -> dict:
 
 
 def derive_stream_params(params: dict) -> dict:
-    """Provisional SPEC 5 stream bundle widths for the Phase 0 loopback.
+    """SPEC 5 stream bundle geometry and the derived payload layout.
 
-    PROVISIONAL. Issue #5 owns the real stream interface and will replace these.
-    They are derived rather than hard-coded so that the loopback and the harness
-    resize with the configuration instead of silently staying tiny.
+    MIRROR, NOT SOURCE. The normative definition of the SPEC 5 payload layout is
+    ``rtl/packages/stream_pkg.sv`` — its field order and its offset functions.
+    What is computed here is a second implementation of the same arithmetic, so
+    that the C++ harness (which cannot call a SystemVerilog function) and the
+    generated configuration package can be built from plain constants.
+
+    The two are compared at time 0 of every simulation by the ``initial`` block
+    at the bottom of ``sim/verilator/tops/benchmark_sim_top.sv``, which $fatals
+    by name on any disagreement. Change the field order in stream_pkg.sv without
+    changing this function and the next run fails immediately; that is the point.
+
+    Canonical field order (stream_pkg.sv, NORMATIVE)::
+
+        MSB                                                     LSB
+        +--------+-----+-----+-----------+---------+--------+
+        |  data  | sof | eof | stream_id |   seq   |  user  |
+        +--------+-----+-----+-----------+---------+--------+
     """
     sample_w = int(params["SAMPLE_W"])
     n_antennas = int(params["N_ANTENNAS"])
+
+    # One complex sample per beat: {I, Q}, each SAMPLE_W wide.
+    data_w = 2 * sample_w
+    # Wide enough for one stream per antenna, floored at 2 bits so the smallest
+    # configuration still exercises multi-stream scoreboarding.
+    id_w = max(2, clog2(n_antennas))
+    # 16 bits of sequence: long enough that no unit test wraps it, which keeps
+    # the scoreboard's transaction identity unique within a run.
+    seq_w = 16
+    # Carries the frame tag (see sim/tests/test_stream_loopback.cpp).
+    user_w = 4
+
+    # Field offsets, in the order stream_pkg.sv defines them.
+    user_lsb = 0
+    seq_lsb = user_w
+    id_lsb = user_w + seq_w
+    eof_lsb = user_w + seq_w + id_w
+    sof_lsb = eof_lsb + 1
+    data_lsb = sof_lsb + 1
+    payload_w = data_lsb + data_w
+
     return {
-        # One complex sample per beat: {I, Q}, each SAMPLE_W wide.
-        "STREAM_DATA_W": 2 * sample_w,
-        # Wide enough for one stream per antenna, floored at 2 bits so the
-        # smallest configuration still exercises multi-stream scoreboarding.
-        "STREAM_ID_W": max(2, clog2(n_antennas)),
-        # 16 bits of sequence: long enough that no Phase 0 test wraps, which
-        # keeps the scoreboard's transaction identity unique within a run.
-        "STREAM_SEQ_W": 16,
-        # Carries the frame tag at Phase 0 (see sim/tests/test_stream_loopback.cpp).
-        "STREAM_USER_W": 4,
-        # Register stages in the provisional loopback DUT.
-        "STREAM_LOOPBACK_STAGES": 2,
+        "STREAM_DATA_W": data_w,
+        "STREAM_ID_W": id_w,
+        "STREAM_SEQ_W": seq_w,
+        "STREAM_USER_W": user_w,
+        "STREAM_PAYLOAD_W": payload_w,
+        "STREAM_USER_LSB": user_lsb,
+        "STREAM_SEQ_LSB": seq_lsb,
+        "STREAM_ID_LSB": id_lsb,
+        "STREAM_EOF_LSB": eof_lsb,
+        "STREAM_SOF_LSB": sof_lsb,
+        "STREAM_DATA_LSB": data_lsb,
+        # stream_loopback is skid -> elastic -> skid; each contributes one cycle
+        # of latency with no backpressure. benchmark_sim_top checks this number
+        # against the sum the RTL computes from stream_pkg's own constants.
+        "STREAM_LOOPBACK_ELASTIC_DEPTH": 4,
+        "STREAM_LOOPBACK_LATENCY": 3,
+        # Geometry of the four DUTs in sim/verilator/tops/stream_prims_top.sv,
+        # so the per-primitive test and that top agree on depth and stage count
+        # without either hard-coding the other's numbers.
+        "STREAM_PRIM_EB_SHALLOW_DEPTH": 2,
+        "STREAM_PRIM_EB_DEEP_DEPTH": 8,
+        "STREAM_PRIM_PIPE_STAGES": 4,
+        "STREAM_PRIM_PIPE_OUT_DEPTH": 6,
     }
 
 
@@ -169,7 +215,9 @@ def render_config_pkg(cfg: dict, stream: dict) -> str:
             lines.append(f"  localparam int unsigned {key} = {int(params[key])};")
     lines += [
         "",
-        "  // ---- provisional SPEC 5 stream bundle (issue #2; replaced by issue #5) ----",
+        "  // ---- SPEC 5 stream bundle geometry and payload layout (issue #5) ----",
+        "  // Mirror of rtl/packages/stream_pkg.sv; checked against it at time 0 by",
+        "  // benchmark_sim_top. See scripts/build_verilator.py:derive_stream_params.",
     ]
     for key, value in stream.items():
         lines.append(f"  localparam int unsigned {key} = {value};")
@@ -200,7 +248,9 @@ def render_config_header(cfg: dict, stream: dict) -> str:
     for key in sorted(params):
         lines.append(f"inline constexpr unsigned {key} = {int(params[key])};")
     lines.append("")
-    lines.append("// Provisional SPEC 5 stream bundle (issue #2; replaced by issue #5).")
+    lines.append("// SPEC 5 stream bundle geometry and payload layout (issue #5).")
+    lines.append("// Mirror of rtl/packages/stream_pkg.sv, checked against it at time 0 by")
+    lines.append("// benchmark_sim_top; the C++ harness packs and unpacks with these.")
     for key, value in stream.items():
         lines.append(f"inline constexpr unsigned {key} = {value};")
     lines += [
