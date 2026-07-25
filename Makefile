@@ -55,8 +55,10 @@
 # Status
 # ---------------------------------------------------------------------------
 # Implemented: `lint` and `sim-tiny` (issue #2, Verilator flow; extended by
-# issue #5 with the stream-primitive and negative-assertion tests) and the
-# quartus-* targets (issue #3).
+# issue #5 with the stream-primitive and negative-assertion tests, by issue #7
+# with the register/control plane, and by issue #6 with the FIFO and CDC
+# primitives plus the SPEC 8 CDC inventory report) and the quartus-* targets
+# (issue #3).
 #
 # Everything else is still a scaffold stub from issue #1. Stubs fail loudly:
 # they print `TODO(issue #N)` and the stub command exits 1. GNU make then
@@ -170,6 +172,33 @@ CDCV_BIN      = sim/verilator/build/fast_tiny_$(CDCV_TOP)/V$(CDCV_TOP)_$(CDCV_TE
 # it lands under results/ and is never committed (PLAN.md standing rule 3).
 CDC_INVENTORY_JSON ?= $(RESULTS_DIR)/cdc_inventory.json
 
+# --- register/control plane (issue #7, SPEC 9 / 13.1 / 14) -----------------
+# A fourth self-contained build, for the reason the others have one: a failure
+# in it is unambiguously a control-plane failure. control_top holds the whole of
+# rtl/control/ plus a second fabric attached to a block that never answers, so
+# the watchdog escape is an exercised path rather than an untested comment.
+CONTROL_TOP   := control_top
+CONTROL_FILES := sim/verilator/files_control.f
+CONTROL_TEST  := test_control_regs
+CONTROL_BIN    = sim/verilator/build/fast_tiny_$(CONTROL_TOP)/V$(CONTROL_TOP)_$(CONTROL_TEST)
+
+# The register map is generated from control/regmap.json by scripts/gen_regmap.py.
+# The SystemVerilog package, the C++ header and docs/regmap.md are committed — a
+# clean checkout must lint and simulate without running a generator first — and
+# `--check` regenerates them in memory and fails if what is on disk differs. So
+# neither a hand edit of a generated file nor a source-of-truth change that was
+# never regenerated survives `make lint` or `make sim-tiny`.
+GEN_REGMAP = $(PYTHON) scripts/gen_regmap.py
+
+# `regmap-check` is host-independent: it is Python reading two text files, so it
+# runs wherever make runs and is never dispatched into WSL. Not a SPEC 16 entry
+# point; it is a prerequisite of both lint and sim-tiny, and is runnable on its
+# own while editing the register map.
+define REGMAP_CHECK_RECIPE
+	$(PYTHON_CHECK)
+	@printf '[regmap] checking generated artefacts against %s\n' 'control/regmap.json'
+	$(GEN_REGMAP) --check
+endef
 
 # --- numerics cross-check (issue #4, SPEC 6 / 12.4) ------------------------
 # `numerics-check` is NOT a SPEC 16 entry point; it is a sub-target that
@@ -232,23 +261,27 @@ else
 define LINT_RECIPE
 	@printf '[lint] verilator --lint-only --Wall, config=%s, waivers=%s\n' \
 	    '$(CONFIG)' 'sim/verilator/lint_waivers.vlt'
-	@printf '[lint] 1/5 %s\n' 'benchmark_sim_top'
+	$(REGMAP_CHECK_RECIPE)
+	@printf '[lint] 1/6 %s\n' 'benchmark_sim_top'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) --test $(TEST)
-	@printf '[lint] 2/5 %s\n' '$(STREAM_TOP)'
+	@printf '[lint] 2/6 %s\n' '$(STREAM_TOP)'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
 	    --top $(STREAM_TOP) --files $(STREAM_FILES) --test $(STREAM_TEST)
-	@printf '[lint] 3/5 %s\n' '$(VIOL_TOP)'
+	@printf '[lint] 3/6 %s\n' '$(VIOL_TOP)'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
 	    --top $(VIOL_TOP) --files $(VIOL_FILES) --test $(VIOL_TEST)
-	@printf '[lint] 4/5 %s\n' '$(CDC_TOP)'
+	@printf '[lint] 4/6 %s\n' '$(CONTROL_TOP)'
+	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
+	    --top $(CONTROL_TOP) --files $(CONTROL_FILES) --test $(CONTROL_TEST)
+	@printf '[lint] 5/6 %s\n' '$(CDC_TOP)'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
 	    --top $(CDC_TOP) --files $(CDC_FILES) --test $(firstword $(CDC_TESTS))
-	@printf '[lint] 5/5 %s\n' '$(CDCV_TOP)'
+	@printf '[lint] 6/6 %s\n' '$(CDCV_TOP)'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
 	    --top $(CDCV_TOP) --files $(CDCV_FILES) --test $(CDCV_TEST)
 endef
 
-# `sim-tiny`: SPEC 12.1 fast build of all three simulation tops, then every test
+# `sim-tiny`: SPEC 12.1 fast build of every simulation top, then every test
 # once per seed in SEEDS. Each run prints its own seed and RESULT: line; a single
 # failing seed fails the target, and the remaining seeds still run so one
 # invocation shows whether a failure is seed-specific.
@@ -262,6 +295,7 @@ endef
 #   test_stream_assertions   stream_violator_top — the negative test. Exits 0
 #                            when every expected assertion fired, so an
 #                            expected failure is a passing result for the suite.
+#   test_control_regs        control_top — the SPEC 9 register/control plane.
 #   test_sync_fifo           cdc_prims_top — rtl/common/sync_fifo.sv against the
 #                            cycle-accurate C++ reference model, every observable
 #                            on every cycle, in two configurations.
@@ -275,11 +309,14 @@ endef
 #                            a_gray_one_bit and a_hs_data_stable (among others)
 #                            to fire by name, and the clean mode to stay clean.
 define SIM_TINY_RECIPE
+	$(REGMAP_CHECK_RECIPE)
 	$(BUILD_VERILATOR) --mode fast --config tiny --jobs $(JOBS) --test $(TEST)
 	$(BUILD_VERILATOR) --mode fast --config tiny --jobs $(JOBS) \
 	    --top $(STREAM_TOP) --files $(STREAM_FILES) --test $(STREAM_TEST)
 	$(BUILD_VERILATOR) --mode fast --config tiny --jobs $(JOBS) \
 	    --top $(VIOL_TOP) --files $(VIOL_FILES) --test $(VIOL_TEST)
+	$(BUILD_VERILATOR) --mode fast --config tiny --jobs $(JOBS) \
+	    --top $(CONTROL_TOP) --files $(CONTROL_FILES) --test $(CONTROL_TEST)
 	@for t in $(CDC_TESTS); do \
 	    $(BUILD_VERILATOR) --mode fast --config tiny --jobs $(JOBS) \
 	        --top $(CDC_TOP) --files $(CDC_FILES) --test $$t || exit 1; \
@@ -287,8 +324,8 @@ define SIM_TINY_RECIPE
 	$(BUILD_VERILATOR) --mode fast --config tiny --jobs $(JOBS) \
 	    --top $(CDCV_TOP) --files $(CDCV_FILES) --test $(CDCV_TEST)
 	@printf '[sim-tiny] seeds: %s\n' '$(SEEDS)'
-	@printf '[sim-tiny] tests: %s %s %s %s %s\n' '$(TEST)' '$(STREAM_TEST)' \
-	    '$(VIOL_TEST)' '$(CDC_TESTS)' '$(CDCV_TEST)'
+	@printf '[sim-tiny] tests: %s %s %s %s %s %s\n' '$(TEST)' '$(STREAM_TEST)' \
+	    '$(VIOL_TEST)' '$(CONTROL_TEST)' '$(CDC_TESTS)' '$(CDCV_TEST)'
 	@rc=0; for s in $(SEEDS); do \
 	    printf '\n[sim-tiny] ===== seed %s : %s =====\n' "$$s" '$(TEST)'; \
 	    ./$(SIM_TINY_BIN) +seed=$$s +results=$(RESULTS_DIR) || rc=1; \
@@ -297,6 +334,8 @@ define SIM_TINY_RECIPE
 	    printf '\n[sim-tiny] ===== seed %s : %s (expects assertions to fire) =====\n' \
 	        "$$s" '$(VIOL_TEST)'; \
 	    ./$(VIOL_BIN) +seed=$$s +results=$(RESULTS_DIR) || rc=1; \
+	    printf '\n[sim-tiny] ===== seed %s : %s =====\n' "$$s" '$(CONTROL_TEST)'; \
+	    ./$(CONTROL_BIN) +seed=$$s +results=$(RESULTS_DIR) || rc=1; \
 	    for t in $(CDC_TESTS); do \
 	      printf '\n[sim-tiny] ===== seed %s : %s =====\n' "$$s" "$$t"; \
 	      ./$(CDC_BIN_DIR)/V$(CDC_TOP)_$$t +seed=$$s +results=$(RESULTS_DIR) || rc=1; \
@@ -475,8 +514,9 @@ help:
 	@printf '\n'
 	@printf '%-18s %-9s %s\n' 'lint'             'wsl'     'verilator --lint-only --Wall (zero unwaived warnings)'
 	@printf '%-18s %-9s %s\n' 'numerics-check'   'wsl'     'SPEC 6/12.4 fixed-point equivalence (sub-target of sim-tiny)'
+	@printf '%-18s %-9s %s\n' 'regmap-check'     'local'   'SPEC 9 register map: generated artefacts match control/regmap.json'
 	@printf '%-18s %-9s %s\n' 'cdc-inventory'    'wsl'     'SPEC 8 CDC crossing report (sub-target of sim-tiny)'
-	@printf '%-18s %-9s %s\n' 'sim-tiny'         'wsl'     'numerics + inventory + fast builds + every test over SEEDS'
+	@printf '%-18s %-9s %s\n' 'sim-tiny'         'wsl'     'numerics + regmap + inventory + fast builds + every test'
 	@printf '%-18s %-9s %s\n' 'sim-medium'       'wsl'     'TODO(issue #17) medium-config regression'
 	@printf '%-18s %-9s %s\n' 'sim-random'       'wsl'     'TODO(issue #17) randomized regression'
 	@printf '%-18s %-9s %s\n' 'sim-stress'       'wsl'     'TODO(issue #17) long stress test'
@@ -557,6 +597,11 @@ numerics-check:
 cdc-inventory:
 	$(CDC_INVENTORY_RECIPE)
 
+# The register-map regeneration gate (issue #7). Also run inside lint and
+# sim-tiny; standalone here so it can be run while editing control/regmap.json.
+regmap-check:
+	$(REGMAP_CHECK_RECIPE)
+
 sim-tiny:
 	$(SIM_TINY_RECIPE)
 
@@ -634,7 +679,7 @@ reproduce-final:
 	$(call TODO,25,Evidence package and reproducibility)
 
 .PHONY: help env-check \
-        lint numerics-check cdc-inventory \
+        lint numerics-check regmap-check cdc-inventory \
         sim-tiny sim-medium sim-random sim-stress sim-coverage sim-full-smoke \
         quartus-map quartus-fit quartus-sta quartus-report quartus-compile \
         seed-sweep compare-baseline reproduce-final

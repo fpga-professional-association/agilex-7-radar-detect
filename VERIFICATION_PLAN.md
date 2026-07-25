@@ -19,7 +19,7 @@ Each gate must pass from a clean checkout before the next phase begins.
 | Phase | Gate | Status | Owning issue |
 |---|---|---|---|
 | 0 Infrastructure | `make lint`, `make sim-tiny`, `make quartus-map` pass | `lint` and `sim-tiny` pass (#2); `quartus-map` TODO | #1, #2, #3 |
-| 1 Common infrastructure | unit tests, random stalls, CDC tests, assertions pass | numerics (#4) and stream primitives + protocol assertions (#5) pass; CDC TODO | #4–#8 |
+| 1 Common infrastructure | unit tests, random stalls, CDC tests, assertions pass | numerics (#4), stream primitives + protocol assertions (#5) and the register/control plane (#7) pass; CDC TODO | #4–#8 |
 | 2 DSP kernels | bit-accurate vs C++ model; directed, random, boundary coverage | TODO | #9–#14 |
 | 3 Medium pipeline | continuous frames, random backpressure, config changes, stress, coverage | TODO | #15–#17 |
 | 4 Packet/control fabric | no loss or duplication; random destination/stall; priority and fairness; counters | TODO | #18, #19 |
@@ -47,8 +47,9 @@ issue #17. Lint runs `--Wall` *without* `--Wno-fatal`, so any warning not justif
 launches builds and aggregates results and is never in the per-cycle path. Present today:
 multi-clock generation and event scheduling, per-domain reset sequencing, stream drivers
 and monitors, randomized backpressure, scoreboards, timeout detection, error collection,
-deterministic seeding and optional FST tracing. Still owned elsewhere: register read/write
-(issue #7), memory model (issues #15, #24), reference-model invocation (issue #4).
+deterministic seeding, register read/write (`reg_driver.h`, issue #7) and optional FST
+tracing. Still owned elsewhere: memory model (issues #15, #24), reference-model invocation
+(issue #4).
 
 **Clock scheduler.** Integer picosecond time; each clock is stored as a half period, so a
 rounded half can never accumulate into period drift. Each edge is processed in two phases
@@ -96,6 +97,7 @@ expected numerical values.
 | `stream_elastic_buffer` DEPTH=8 (issue #5) | `sim/tests/test_stream_primitives.cpp`, dut2 | exact latency 1 and one beat per cycle | occupancy swept 0..8 and held at 8 | 4 randomized stall passes | reset re-run before every pass | as above | as above |
 | `stream_pipe` STAGES=4 OUT_DEPTH=6 (issue #5) | `sim/tests/test_stream_primitives.cpp`, dut3 | exact latency 5 and one beat per cycle | credits exhausted and refilled | 4 randomized stall passes | reset re-run before every pass | as above | shared checker plus buffer-has-room, credits-bounded and credit-conservation |
 | stream protocol assertion set (issue #5) | `sim/tests/test_stream_assertions.cpp` | one clean mode, four violating modes | first stall, first frame boundary | n/a (deterministic injection) | reset before every mode | stalls forced to provoke modes 1 and 2 | the set under test; each mode names the assertion it must provoke |
+| register/control plane (issue #7) | `sim/tests/test_control_regs.cpp` | identification, build parameters, reset defaults, W1C and pulse semantics, hardware-computed status | walking ones and zeros on every scratch bit; all 15 non-zero byte-enable patterns; the half-writable register; every malformed and unmapped address form | 600 seeded transactions against a C++ model of the map (~30% illegal), then a full register dump | reset re-run before three of the nine passes; every reset default re-read | n/a (no handshake to stall); the watchdog covers a block that never answers | `reg_if_checker` inside `reg_fabric`: master stability, one ready per request, error and read-data confinement, bounded response |
 | `fxp_pkg` + `fxp_sticky_flags` (issue #4) | `model/cpp/test/test_fxp_vectors.cpp` (C++ vs NumPy) and `sim/tests/test_fxp_rtl.cpp` (RTL vs NumPy vs C++) | 927 directed vectors | max pos/neg and one/two past, at 8 widths; all four rounding tie classes; ±1.0 wrap; round-then-saturate across the endpoints; every Q1.15 boundary multiply pair | 530 seeded vectors + 6 seeded accumulator walks | accumulator cleared at every sequence start; DUT reset before the first | n/a (no handshake) | property sweeps: shift-0 identity, saturation idempotence, measured rounding bias, accumulator non-overflow |
 
 One row per module, added by the issue that implements it. `stream_loopback` was rebuilt
@@ -256,6 +258,54 @@ reports as an expected failure and the binary exits 0. The run is failed by a vi
 mode in which nothing fired, by the wrong property firing, or by the clean mode asserting.
 This test runs in `make sim-tiny` on every seed.
 
+### 5.3 Register-interface assertion set (issue #7)
+
+`sim/assertions/reg_if_checker.sv` is instantiated inside `reg_fabric` under
+`ifndef SYNTHESIS`, so the SPEC §9 protocol is checked wherever the fabric is used, in the
+fast build, with no test-side wiring — the arrangement `rtl/stream/` already uses.
+
+| Property | Obligation of | What it forbids |
+|---|---|---|
+| `a_request_stable` | the master | changing address, write data, byte enables or either enable before `ready` is observed |
+| `a_ready_only_when_busy` | the fabric | a response with no transaction outstanding |
+| `a_ready_single_cycle` | the fabric | one request answered twice |
+| `a_error_needs_ready` | the fabric | `error` asserted outside a response cycle |
+| `a_read_data_needs_ready` | the fabric | non-zero `read_data` outside a response cycle |
+| `a_ready_follows_request` | the fabric | a response to a request that was never presented |
+| `a_bounded_response` | the fabric | any access outstanding longer than `REG_ACCESS_LATENCY + REG_WATCHDOG_CYCLES + 1` — the machine-checked form of "the register plane never hangs" |
+
+Covers (`c_write`, `c_read`, `c_error`), counted only in the coverage build, record that
+successful writes, successful reads and error responses were all actually reached.
+
+Half the set watches the *master*, which is the C++ `RegDriver`, not the RTL. That is
+deliberate: a harness that violates the protocol it is testing for is otherwise invisible,
+and every result it produces is worthless.
+
+**Proof that the set fires (issue #7).** `RegDriver::apply_pins` was perturbed to toggle one
+address bit while a transaction was outstanding, and the run stopped at
+`control_top.u_fabric.u_checker.a_request_stable` by name; the perturbation was reverted and
+the suite passes. Two further properties of the fabric are proven by construction in the
+test rather than by injection: the watchdog escape is exercised every run against a
+deliberately dead block (`sim/verilator/tops/reg_block_dead.sv`, pass 8), and every one of
+the ~1200 transactions in a run is checked for the exact two-cycle response latency, so an
+access that silently varies in length fails the suite.
+
+### 5.4 Register-map drift (issue #7)
+
+`control/regmap.json` is the single source of truth for the register plane; the generated
+SystemVerilog package, the C++ harness header and `docs/regmap.md` are committed, and
+`make regmap-check` (`python3 scripts/gen_regmap.py --check`) regenerates all three in
+memory and fails on any difference. It is a prerequisite of both `make lint` and
+`make sim-tiny`, so neither a hand-edited generated file nor a source-of-truth change that
+was never regenerated can reach a green gate. Verified by editing `REGMAP_BLOCK_MASK` in the
+generated package: `make lint` exited non-zero and quoted the offending line.
+
+The generator is also a static checker of the map itself. It refuses to emit anything if a
+window is misaligned or overlaps, if register offsets are not dense within a block, if two
+fields overlap, if a reset value does not fit its field, if a hardware-driven or sticky field
+carries a non-zero reset, or if the blocks do not between them claim all sixteen SPEC §9
+register groups.
+
 ## 6. Coverage strategy
 
 Coverage build, metrics collected, targets per phase, and how coverage reports are
@@ -294,8 +344,9 @@ error messages — the failure-minimisation metadata SPEC §12.2 asks for.
 
 | Target | Status |
 |---|---|
-| `make lint` | implemented (issue #2, extended by issue #5) — `--lint-only --Wall` on `benchmark_sim_top`, `stream_prims_top` and `stream_violator_top`; zero unwaived warnings |
-| `make sim-tiny` | implemented (issue #2, extended by issue #5) — `numerics-check`, then the fast build of three tops, then `test_stream_loopback`, `test_stream_primitives` and `test_stream_assertions` once per seed in `SEEDS` (default `1 2 3`) |
+| `make lint` | implemented (issue #2, extended by #5 and #7) — `regmap-check`, then `--lint-only --Wall` on `benchmark_sim_top`, `stream_prims_top`, `stream_violator_top` and `control_top`; zero unwaived warnings |
+| `make sim-tiny` | implemented (issue #2, extended by #5 and #7) — `numerics-check` and `regmap-check`, then the fast build of four tops, then `test_stream_loopback`, `test_stream_primitives`, `test_stream_assertions` and `test_control_regs` once per seed in `SEEDS` (default `1 2 3`) |
+| `make regmap-check` | implemented (issue #7) — not a SPEC §16 entry point; a prerequisite of `lint` and `sim-tiny`, runnable alone while editing `control/regmap.json` |
 | `make sim-medium` | TODO(issue #17) |
 | `make sim-random` | TODO(issue #17) |
 | `make sim-stress` | TODO(issue #17) |
