@@ -1564,6 +1564,106 @@ condition does not help, because the body is still elaborated.
 
 ### Measured calibration data (SPEC §18 items 2 and 3, seed 1)
 
-_Pending: the sweep is running as this entry is written and the table lands with the
-calibration commit. Records in `results/synthesis/calibration_fir.json` and
-`calibration_pfb8.json` (generated, not committed)._
+Seed 1, AGMF039R47B1E1VC, Quartus Prime Pro 26.1.0 Build 110, probe constraint 600.24 MHz —
+the same device, the same tool and the same deliberately-unreachable probe the issue #9 sweep
+used, so the two sets of numbers are comparable. Five points, all successful. Full records in
+`results/synthesis/calibration_fir.json` and `calibration_pfb8.json` (generated, not
+committed); per-point evidence, including the verbatim DSP and retiming panels, under
+`results/synthesis/calibration/`.
+
+| point | DSP | DSP mode | M20K | MLAB | ALM (total / kernel) | ALUTs | regs (total / kernel) | Hyper | Fmax MHz | depth | fit s |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| `fir_t16_tree_p4` | 32 | 32× sum of two 18×18 | 0 | 0 | 1311 / 772.5 | 1799 | 2963 / 1756 | 75 | 620.7* | 2 | 500 |
+| `fir_t16_sys_p4` | 32 | 32× sum of two 18×18 | 0 | 0 | 1469 / 932.0 | 1859 | 3580 / 2371 | 87 | 621.1* | 4 | 462 |
+| `fir_t16_tree_p3` | 32 | 32× sum of two 18×18 | 0 | 0 | 1311 / 773.2 | 1797 | 2980 / 1773 | 82 | 623.1*† | 2 | 485 |
+| `pfb8_t16_tree` | 256 | 256× sum of two 18×18 | 7 | 2 | 10514 / 10066.8 | 15701 | 22833 / 22469 | 758 | **537.1**† | 4 | 699 |
+| `pfb8_t16_sys` | 256 | 256× sum of two 18×18 | 7 | 2 | 11664 / 11237.0 | 15828 | 27289 / 26925 | 133 | **449.6** | 4 | 692 |
+
+`*` the register-to-register paths MET the 600 MHz probe, so that Fmax is a lower bound rather
+than a measured limit. `†` the worst register-to-register path does not touch the kernel
+instance, so the number bounds the wrapper as well as the kernel. Both caveats are recorded per
+point by `scripts/run_calibration.py` rather than left for a reader to notice; the two
+**bold** figures are genuine measured limits.
+
+**The systolic cascade buys no DSP cascade at all.** Both structures map to exactly 32 blocks
+for a 16-tap lane and 256 for the eight-lane bank — 2 blocks per complex multiply, 64
+multipliers per lane, all in `Sum of Two 18x18` mode. That is the same mapping issue #9
+measured for a bare complex multiply, scaled linearly, and it is the whole answer: the block's
+adder is **already consumed** by the complex multiply's own post-add, so there is no chainout
+left for the tap accumulation to ride. The textbook argument for a systolic FIR — that the
+accumulator disappears into the DSP chain — assumes a real multiply per block. A complex
+multiply does not leave that room.
+
+**So the cascade pays for a delay line and gets nothing back.** Per lane it costs 21% more
+kernel ALMs (932.0 vs 772.5) and 35% more kernel registers (2371 vs 1756) — the doubled delay
+line (two stages per tap) plus 37-bit accumulator registers where the tree has 33-bit adders.
+At eight lanes the gap is 11.6% of ALMs and 20% of registers.
+
+**And at scale it is 19% slower.** The lane points both cleared the probe, so they say only
+"≥620 MHz" and cannot separate the two. The eight-lane points are where the structures
+actually differ: **537.1 MHz for the tree against 449.6 MHz for the cascade**, with the tree
+also retiming far better — 758 Hyper-Registers against 133. Against the SPEC §2 benchmark
+target of 450 MHz the tree has 19% margin and the cascade has none.
+
+**`ACC_STYLE = "TREE"` is therefore the default on measurement, not on taste**: fewer ALMs,
+fewer registers, better retiming, higher Fmax, identical DSP count — and, from decision 3, the
+only one of the two that can swap coefficient sets cleanly at a frame boundary.
+
+**No M20K appears at the lane, and the two that appear at the bank are not the delay line.**
+Both FIR points report M20K = 0 and MLAB = 0: the 16-tap history and the 2×16×32-bit
+coefficient store are ALM registers, exactly as `pfb_pkg`'s threshold predicts and as decision
+7 argues they must be. The 7 M20K and 2 MLAB at the eight-lane point are the **output elastic
+buffer** — a 280-bit payload at depth 11 (tree) or 22 (cascade) is 3–6 Kb of storage, and
+Quartus infers memory for it despite `stream_elastic_buffer`'s header claiming distributed
+registers "by construction". That claim is now wrong at wide payloads and is worth revisiting
+when the medium integration (issue #17) sizes the real interfaces.
+
+**The multiplier pipeline depth does not move the lane.** `fir_t16_tree_p3` is
+indistinguishable from `fir_t16_tree_p4` in ALMs (773.2 vs 772.5) and in Fmax (both above the
+probe), so the issue #9 calibrated default of `PIPE_STAGES = 4` carries into a lane at no cost.
+Its critical path did move out of the kernel and into the coefficient bank's write path, which
+is the first sign that the boundary rather than the arithmetic is what limits a shallow lane.
+
+**The frame-boundary swap logic is on the critical path, and it was found rather than
+assumed.** `fir_t16_tree_p4`'s worst register-to-register path runs
+`u_coeff|pending_q → g_mult[9].u_mult|add_1` — the two-gate `bank_sel` cone from decision 4,
+straight into a multiplier operand. At the lane it still clears 620 MHz. If the eight-lane
+number ever needs to go past 537 MHz, that cone — not the adder tree — is the first thing to
+pipeline, and the record says so.
+
+**Full-scale projection.** At the SPEC §11 `full_agmf039` size the polyphase bank alone is
+256 DSP × 16 antennas = **4096 of 12 300 DSP blocks (33%)** and roughly 168 k of 1 305 600 ALMs
+(13%), before the FFT, the beamformer or anything else. That is the number SPEC §18 exists to
+produce, and it says the DSP budget — not the fabric — is what the full-scale parameter freeze
+(issue #17/#20) has to be planned around.
+
+**Decision 13 — two defects that only a Quartus compile could find, and what they say about
+the gate.** Neither of these was reachable through `make lint` or `make sim-tiny`; both fell
+out of the first calibration compiles, which is an argument for running SPEC §18 early rather
+than at the end.
+
+* `rtl/packages/pfb_pkg.sv` originally declared its own `uint_t`, colliding with `fxp_pkg`'s
+  and `stream_pkg`'s. Quartus rejected it with thirteen `visible via multiple package imports`
+  errors; Verilator had accepted it silently. See decision 9.
+* `rtl/common/fxp_sticky_flags.sv` declared `input logic` ports under `default_nettype none`.
+  Quartus rejects that ("net type must be explicitly specified"); every other module in the
+  repository already declared `wire`, and this one had simply never been through a synthesis
+  tool because the polyphase bank is the first block to instantiate it in one.
+
+The lesson is recorded because it changes how a later kernel should be developed: **lint clean
+is not the same as synthesizable**, and a kernel that has never been compiled by Quartus has an
+unknown number of these waiting. The calibration project is the cheapest way to find them, and
+it should be stood up alongside the RTL rather than after the tests pass.
+
+**Decision 14 — the delay line's memory form is exercised by a same-run equivalence probe.**
+`pfb_pkg`'s AUTO threshold correctly resolves every delay line in the datapath to a shift
+register, so the M20K branch was reachable only by an explicit override that nothing used —
+code no test ran, which is the same thing as code that does not work.
+
+`sim/verilator/tops/pfb_top.sv` therefore instantiates two lines of identical geometry, one
+forced to each style, off the live stream, and compares them on every enabled cycle once both
+have filled (`a_dl_styles_agree`). A pure delay is a pure delay: if the memory form's pointer
+arithmetic or its read-before-write ordering were wrong, this says so. The test additionally
+fails if the probe never filled, so it cannot pass vacuously. The geometry — 40 deep, 32 bits
+— is past `PFB_MEM_MIN_DEPTH` but only 1280 bits, so AUTO would still choose SRL; the MEM
+instance is therefore also a test that an explicit override is honoured.
