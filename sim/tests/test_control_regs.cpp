@@ -802,6 +802,19 @@ int harness::sim_test_main(const SimArgs& args) {
       std::uint8_t be;
       const char* what;
     };
+
+    // The first address above every DECLARED window, derived from the generated
+    // block table rather than written down. It has moved three times — 0x9000
+    // until issue #13's covariance window, 0xA000 until issue #15's history
+    // window, 0xB000 until issue #18's packet window — and each move turned a
+    // hand-written literal into a read of a real register that answered
+    // error=0. Three hand edits in three issues is the argument for deriving it.
+    std::uint32_t gap_above_all = 0;
+    for (std::size_t i = 0; i < regmap::kBlockTableSize; ++i) {
+      const std::uint32_t top = regmap::kBlocks[i].base + regmap::kBlocks[i].size;
+      if (top > gap_above_all) gap_above_all = top;
+    }
+
     const Illegal cases[] = {
         // Declared but unimplemented windows: every planned block.
         // The coefficient window became implemented with issue #10, so what is
@@ -819,16 +832,24 @@ int harness::sim_test_main(const SimArgs& args) {
         // Outside every declared window.
         {0xF000u, false, true, 0xF, "address above every window"},
         {0xF004u, true, false, 0xF, "address above every window, write"},
-        // The gap above the last declared window has moved twice: 0x9000 was it
-        // until the SPEC 9 integration-settings window landed there with issue
-        // #13, and 0xA000 was it until the SPEC 7.3 history window landed there
-        // with issue #15. It is now 0xB000, and what is illegal inside each of
-        // those two windows is an address past its last register.
-        {0xB000u, false, true, 0xF, "gap above the last declared window"},
+        // The gap above the last declared window has moved three times: 0x9000
+        // was it until the SPEC 9 integration-settings window landed there with
+        // issue #13, 0xA000 until the SPEC 7.3 history window landed there with
+        // issue #15, and 0xB000 until the SPEC 7.8 packet window landed there
+        // with issue #18. It is now 0xC000, and what is illegal inside each of
+        // those three windows is an address past its last register.
+        //
+        // Written as PACKET_BASE + PACKET_SIZE rather than as a literal, so the
+        // next window to land moves this probe with it instead of turning it
+        // into a read of a real register that happens to answer. Three hand
+        // edits in three issues is the argument for deriving it.
+        {gap_above_all, false, true, 0xF, "gap above the last declared window"},
         {regmap::COVAR_BASE + 0x100u, false, true, 0xF,
          "covar window, no register"},
         {regmap::HISTORY_BASE + 0x100u, false, true, 0xF,
          "history window, no register"},
+        {regmap::PACKET_BASE + 0x100u, false, true, 0xF,
+         "packet window, no register"},
         // Inside an implemented window, past the block's last register.
         {regmap::ID_BASE + 0x100u, false, true, 0xF, "id window, no register"},
         {regmap::SCRATCH_BASE + 0x0F0u, true, false, 0xF, "scratch window, no register"},
