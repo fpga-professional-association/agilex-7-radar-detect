@@ -80,6 +80,15 @@ sim/assertions/covar_assertions.sv
 // is used.
 sim/assertions/cfar_assertions.sv
 
+// And again for the beamforming matrix (issue #12): rtl/beamformer/beamformer.sv
+// instantiates its checker under `ifndef SYNTHESIS`, so the SPEC 7.5
+// time-multiplex contract — a beat may not be admitted while a held beat still
+// has beam groups outstanding — is checked wherever the module is used. The
+// weight bank's frame-boundary rule needs no entry of its own: it is checked by
+// coeff_bank_checker above, because rtl/beamformer/weight_bank.sv reuses the
+// store issue #10 built rather than reimplementing it.
+sim/assertions/beamformer_assertions.sv
+
 // ---- stream primitives (SPEC 5) ----------------------------------------
 rtl/stream/stream_skid_buffer.sv
 rtl/stream/stream_elastic_buffer.sv
@@ -163,6 +172,26 @@ rtl/fft/fft_dit_merge.sv
 rtl/fft/fft_reorder.sv
 rtl/fft/fft_core.sv
 rtl/fft/streaming_fft.sv
+
+// ---- the beamforming matrix (SPEC 7.5, issue #12) ----------------------
+// Design RTL, listed here for the reason the FFT is: this list is the single
+// definition of what "the design" is. Not yet instantiated by
+// benchmark_sim_top — the pipeline that consumes it arrives with issue #17 —
+// so until then `make lint` covers it here and
+// sim/verilator/tops/beamformer_top.sv verifies it.
+//
+// beamformer_pkg.sv lives with the block rather than in rtl/packages/,
+// following rtl/fft/fft_pkg.sv: a package used by exactly one block belongs with
+// the block, and rtl/packages/ holds the packages more than one block shares.
+//
+// rtl/beamformer/weight_bank.sv instantiates rtl/pfb/coeff_bank.sv (listed
+// above) rather than containing a second copy of a dual-bank store with a
+// clock-domain seam and a frame-aligned swap. See that file's section 1 for the
+// reasoning and for the refactor that was deliberately not done.
+rtl/beamformer/beamformer_pkg.sv
+rtl/beamformer/bf_dot.sv
+rtl/beamformer/weight_bank.sv
+rtl/beamformer/beamformer.sv
 
 // ---- power and covariance engine (SPEC 7.6, issue #13) -----------------
 // power_calc and integrator first: covar_engine is built out of the second one

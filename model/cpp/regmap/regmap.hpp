@@ -26,10 +26,10 @@ inline constexpr std::uint32_t kWindowBytes = 0x1000u;
 inline constexpr std::uint32_t kAddrMask = 0xFFFFu;
 inline constexpr unsigned kBlockCount = 10;
 inline constexpr unsigned kBlockCountImplemented = 9;
-inline constexpr unsigned kRegisterCount = 69;
+inline constexpr unsigned kRegisterCount = 75;
 inline constexpr std::uint32_t kBlockMask = 0x000002FFu;
 inline constexpr unsigned kVersionMajor = 1;
-inline constexpr unsigned kVersionMinor = 4;
+inline constexpr unsigned kVersionMinor = 5;
 inline constexpr unsigned kVersionPatch = 0;
 
 // Per-bit access classification, matching rtl/control/reg_csr_block.sv.
@@ -78,7 +78,7 @@ inline constexpr unsigned ID_MAGIC_MAGIC_LSB = 0;
 inline constexpr unsigned ID_MAGIC_MAGIC_WIDTH = 32;
 inline constexpr std::uint32_t ID_MAGIC_MAGIC_MASK = 0xFFFFFFFFu;
 inline constexpr std::uint32_t ID_VERSION_ADDR = 0x0004u;
-inline constexpr std::uint32_t ID_VERSION_RESET = 0x01040001u;
+inline constexpr std::uint32_t ID_VERSION_RESET = 0x01050001u;
 inline constexpr unsigned ID_VERSION_MAJOR_LSB = 24;
 inline constexpr unsigned ID_VERSION_MAJOR_WIDTH = 8;
 inline constexpr std::uint32_t ID_VERSION_MAJOR_MASK = 0xFF000000u;
@@ -92,7 +92,7 @@ inline constexpr unsigned ID_VERSION_SCHEMA_LSB = 0;
 inline constexpr unsigned ID_VERSION_SCHEMA_WIDTH = 8;
 inline constexpr std::uint32_t ID_VERSION_SCHEMA_MASK = 0x000000FFu;
 inline constexpr std::uint32_t ID_GEOMETRY_ADDR = 0x0008u;
-inline constexpr std::uint32_t ID_GEOMETRY_RESET = 0x1020450Au;
+inline constexpr std::uint32_t ID_GEOMETRY_RESET = 0x10204B0Au;
 inline constexpr unsigned ID_GEOMETRY_N_BLOCKS_LSB = 0;
 inline constexpr unsigned ID_GEOMETRY_N_BLOCKS_WIDTH = 8;
 inline constexpr std::uint32_t ID_GEOMETRY_N_BLOCKS_MASK = 0x000000FFu;
@@ -394,6 +394,78 @@ inline constexpr std::uint32_t COEFF_COEFF_STATUS_SWAP_OVERRUN_MASK = 0x00000200
 inline constexpr unsigned COEFF_COEFF_STATUS_N_COEFF_LSB = 16;
 inline constexpr unsigned COEFF_COEFF_STATUS_N_COEFF_WIDTH = 16;
 inline constexpr std::uint32_t COEFF_COEFF_STATUS_N_COEFF_MASK = 0xFFFF0000u;
+inline constexpr std::uint32_t COEFF_WEIGHT_CTRL_ADDR = 0x5010u;
+inline constexpr std::uint32_t COEFF_WEIGHT_CTRL_RESET = 0x00000001u;
+inline constexpr unsigned COEFF_WEIGHT_CTRL_BANK_SEL_LSB = 0;
+inline constexpr unsigned COEFF_WEIGHT_CTRL_BANK_SEL_WIDTH = 1;
+inline constexpr std::uint32_t COEFF_WEIGHT_CTRL_BANK_SEL_MASK = 0x00000001u;
+inline constexpr unsigned COEFF_WEIGHT_CTRL_SWAP_REQ_LSB = 8;
+inline constexpr unsigned COEFF_WEIGHT_CTRL_SWAP_REQ_WIDTH = 1;
+inline constexpr std::uint32_t COEFF_WEIGHT_CTRL_SWAP_REQ_MASK = 0x00000100u;
+inline constexpr unsigned COEFF_WEIGHT_CTRL_STATUS_CLEAR_LSB = 9;
+inline constexpr unsigned COEFF_WEIGHT_CTRL_STATUS_CLEAR_WIDTH = 1;
+inline constexpr std::uint32_t COEFF_WEIGHT_CTRL_STATUS_CLEAR_MASK = 0x00000200u;
+inline constexpr std::uint32_t COEFF_WEIGHT_ADDR_ADDR = 0x5014u;
+inline constexpr std::uint32_t COEFF_WEIGHT_ADDR_RESET = 0x80000000u;
+inline constexpr unsigned COEFF_WEIGHT_ADDR_INDEX_LSB = 0;
+inline constexpr unsigned COEFF_WEIGHT_ADDR_INDEX_WIDTH = 16;
+inline constexpr std::uint32_t COEFF_WEIGHT_ADDR_INDEX_MASK = 0x0000FFFFu;
+inline constexpr unsigned COEFF_WEIGHT_ADDR_AUTO_INC_LSB = 31;
+inline constexpr unsigned COEFF_WEIGHT_ADDR_AUTO_INC_WIDTH = 1;
+inline constexpr std::uint32_t COEFF_WEIGHT_ADDR_AUTO_INC_MASK = 0x80000000u;
+inline constexpr std::uint32_t COEFF_WEIGHT_DATA_ADDR = 0x5018u;
+inline constexpr std::uint32_t COEFF_WEIGHT_DATA_RESET = 0x00000000u;
+inline constexpr unsigned COEFF_WEIGHT_DATA_RE_LSB = 0;
+inline constexpr unsigned COEFF_WEIGHT_DATA_RE_WIDTH = 16;
+inline constexpr std::uint32_t COEFF_WEIGHT_DATA_RE_MASK = 0x0000FFFFu;
+inline constexpr unsigned COEFF_WEIGHT_DATA_IM_LSB = 16;
+inline constexpr unsigned COEFF_WEIGHT_DATA_IM_WIDTH = 16;
+inline constexpr std::uint32_t COEFF_WEIGHT_DATA_IM_MASK = 0xFFFF0000u;
+inline constexpr std::uint32_t COEFF_WEIGHT_STATUS_ADDR = 0x501Cu;
+inline constexpr std::uint32_t COEFF_WEIGHT_STATUS_RESET = 0x00000000u;
+inline constexpr unsigned COEFF_WEIGHT_STATUS_ACTIVE_BANK_LSB = 0;
+inline constexpr unsigned COEFF_WEIGHT_STATUS_ACTIVE_BANK_WIDTH = 1;
+inline constexpr std::uint32_t COEFF_WEIGHT_STATUS_ACTIVE_BANK_MASK = 0x00000001u;
+inline constexpr unsigned COEFF_WEIGHT_STATUS_SWAP_PENDING_LSB = 1;
+inline constexpr unsigned COEFF_WEIGHT_STATUS_SWAP_PENDING_WIDTH = 1;
+inline constexpr std::uint32_t COEFF_WEIGHT_STATUS_SWAP_PENDING_MASK = 0x00000002u;
+inline constexpr unsigned COEFF_WEIGHT_STATUS_WR_BUSY_LSB = 2;
+inline constexpr unsigned COEFF_WEIGHT_STATUS_WR_BUSY_WIDTH = 1;
+inline constexpr std::uint32_t COEFF_WEIGHT_STATUS_WR_BUSY_MASK = 0x00000004u;
+inline constexpr unsigned COEFF_WEIGHT_STATUS_SWAP_BUSY_LSB = 3;
+inline constexpr unsigned COEFF_WEIGHT_STATUS_SWAP_BUSY_WIDTH = 1;
+inline constexpr std::uint32_t COEFF_WEIGHT_STATUS_SWAP_BUSY_MASK = 0x00000008u;
+inline constexpr unsigned COEFF_WEIGHT_STATUS_WR_REJECT_LSB = 8;
+inline constexpr unsigned COEFF_WEIGHT_STATUS_WR_REJECT_WIDTH = 1;
+inline constexpr std::uint32_t COEFF_WEIGHT_STATUS_WR_REJECT_MASK = 0x00000100u;
+inline constexpr unsigned COEFF_WEIGHT_STATUS_SWAP_OVERRUN_LSB = 9;
+inline constexpr unsigned COEFF_WEIGHT_STATUS_SWAP_OVERRUN_WIDTH = 1;
+inline constexpr std::uint32_t COEFF_WEIGHT_STATUS_SWAP_OVERRUN_MASK = 0x00000200u;
+inline constexpr unsigned COEFF_WEIGHT_STATUS_N_WEIGHTS_LSB = 16;
+inline constexpr unsigned COEFF_WEIGHT_STATUS_N_WEIGHTS_WIDTH = 16;
+inline constexpr std::uint32_t COEFF_WEIGHT_STATUS_N_WEIGHTS_MASK = 0xFFFF0000u;
+inline constexpr std::uint32_t COEFF_WEIGHT_PARALLELISM_ADDR = 0x5020u;
+inline constexpr std::uint32_t COEFF_WEIGHT_PARALLELISM_RESET = 0x00000000u;
+inline constexpr unsigned COEFF_WEIGHT_PARALLELISM_N_ANTENNAS_LSB = 0;
+inline constexpr unsigned COEFF_WEIGHT_PARALLELISM_N_ANTENNAS_WIDTH = 8;
+inline constexpr std::uint32_t COEFF_WEIGHT_PARALLELISM_N_ANTENNAS_MASK = 0x000000FFu;
+inline constexpr unsigned COEFF_WEIGHT_PARALLELISM_N_BEAMS_LSB = 8;
+inline constexpr unsigned COEFF_WEIGHT_PARALLELISM_N_BEAMS_WIDTH = 8;
+inline constexpr std::uint32_t COEFF_WEIGHT_PARALLELISM_N_BEAMS_MASK = 0x0000FF00u;
+inline constexpr unsigned COEFF_WEIGHT_PARALLELISM_BIN_PAR_LSB = 16;
+inline constexpr unsigned COEFF_WEIGHT_PARALLELISM_BIN_PAR_WIDTH = 8;
+inline constexpr std::uint32_t COEFF_WEIGHT_PARALLELISM_BIN_PAR_MASK = 0x00FF0000u;
+inline constexpr unsigned COEFF_WEIGHT_PARALLELISM_BEAM_PAR_LSB = 24;
+inline constexpr unsigned COEFF_WEIGHT_PARALLELISM_BEAM_PAR_WIDTH = 8;
+inline constexpr std::uint32_t COEFF_WEIGHT_PARALLELISM_BEAM_PAR_MASK = 0xFF000000u;
+inline constexpr std::uint32_t COEFF_WEIGHT_THROUGHPUT_ADDR = 0x5024u;
+inline constexpr std::uint32_t COEFF_WEIGHT_THROUGHPUT_RESET = 0x00000000u;
+inline constexpr unsigned COEFF_WEIGHT_THROUGHPUT_BEAM_MUX_LSB = 0;
+inline constexpr unsigned COEFF_WEIGHT_THROUGHPUT_BEAM_MUX_WIDTH = 8;
+inline constexpr std::uint32_t COEFF_WEIGHT_THROUGHPUT_BEAM_MUX_MASK = 0x000000FFu;
+inline constexpr unsigned COEFF_WEIGHT_THROUGHPUT_BEAM_BINS_PER_CYCLE_LSB = 8;
+inline constexpr unsigned COEFF_WEIGHT_THROUGHPUT_BEAM_BINS_PER_CYCLE_WIDTH = 16;
+inline constexpr std::uint32_t COEFF_WEIGHT_THROUGHPUT_BEAM_BINS_PER_CYCLE_MASK = 0x00FFFF00u;
 
 // cfar: Settings for the SPEC 7.
 inline constexpr std::uint32_t CFAR_BASE = 0x6000u;
@@ -756,17 +828,17 @@ inline constexpr BlockInfo kBlocks[10] = {
     {"ctrl", 0x2000u, 0x1000u, true, 4},
     {"fault", 0x3000u, 0x1000u, true, 4},
     {"scratch", 0x4000u, 0x1000u, true, 4},
-    {"coeff", 0x5000u, 0x1000u, true, 4},
+    {"coeff", 0x5000u, 0x1000u, true, 10},
     {"cfar", 0x6000u, 0x1000u, true, 9},
     {"counters", 0x7000u, 0x1000u, true, 21},
     {"debug", 0x8000u, 0x1000u, false, 0},
     {"covar", 0x9000u, 0x1000u, true, 7},
 };
 
-inline constexpr RegInfo kRegisters[69] = {
+inline constexpr RegInfo kRegisters[75] = {
     {"id", "MAGIC", 0x0000u, 0, 0, Access::kRo, 0x52414441u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u},
-    {"id", "VERSION", 0x0004u, 0, 1, Access::kRo, 0x01040001u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u},
-    {"id", "GEOMETRY", 0x0008u, 0, 2, Access::kRo, 0x1020450Au, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u},
+    {"id", "VERSION", 0x0004u, 0, 1, Access::kRo, 0x01050001u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u},
+    {"id", "GEOMETRY", 0x0008u, 0, 2, Access::kRo, 0x10204B0Au, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u},
     {"id", "CAPABILITY", 0x000Cu, 0, 3, Access::kRo, 0x000002FFu, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u},
     {"build_params", "N_ANTENNAS", 0x1000u, 1, 0, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
     {"build_params", "SAMPLES_PER_CYCLE", 0x1004u, 1, 1, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
@@ -796,6 +868,12 @@ inline constexpr RegInfo kRegisters[69] = {
     {"coeff", "COEFF_ADDR", 0x5004u, 5, 1, Access::kRw, 0x80000000u, 0x8000FFFFu, 0x00000000u, 0x00000000u, 0x00000000u, 0x8000FFFFu},
     {"coeff", "COEFF_DATA", 0x5008u, 5, 2, Access::kRw, 0x00000000u, 0xFFFFFFFFu, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu},
     {"coeff", "COEFF_STATUS", 0x500Cu, 5, 3, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFF030Fu, 0x00000000u},
+    {"coeff", "WEIGHT_CTRL", 0x5010u, 5, 4, Access::kMixed, 0x00000001u, 0x00000001u, 0x00000000u, 0x00000300u, 0x00000000u, 0x00000301u},
+    {"coeff", "WEIGHT_ADDR", 0x5014u, 5, 5, Access::kRw, 0x80000000u, 0x8000FFFFu, 0x00000000u, 0x00000000u, 0x00000000u, 0x8000FFFFu},
+    {"coeff", "WEIGHT_DATA", 0x5018u, 5, 6, Access::kRw, 0x00000000u, 0xFFFFFFFFu, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu},
+    {"coeff", "WEIGHT_STATUS", 0x501Cu, 5, 7, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFF030Fu, 0x00000000u},
+    {"coeff", "WEIGHT_PARALLELISM", 0x5020u, 5, 8, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"coeff", "WEIGHT_THROUGHPUT", 0x5024u, 5, 9, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00FFFFFFu, 0x00000000u},
     {"cfar", "CFAR_CTRL", 0x6000u, 6, 0, Access::kMixed, 0x00000000u, 0x00000131u, 0x00000000u, 0x00010000u, 0x00000000u, 0x00010131u},
     {"cfar", "CFAR_WINDOW", 0x6004u, 6, 1, Access::kRw, 0x08080202u, 0x3F3F1F1Fu, 0x00000000u, 0x00000000u, 0x00000000u, 0x3F3F1F1Fu},
     {"cfar", "CFAR_THRESHOLD", 0x6008u, 6, 2, Access::kRw, 0x00001400u, 0x0000FFFFu, 0x00000000u, 0x00000000u, 0x00000000u, 0x0000FFFFu},
@@ -835,14 +913,14 @@ inline constexpr RegInfo kRegisters[69] = {
     {"covar", "COVAR_SAT_COUNT", 0x9018u, 8, 6, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
 };
 
-inline constexpr FieldInfo kFields[170] = {
+inline constexpr FieldInfo kFields[190] = {
     {"id", "MAGIC", "MAGIC", 0, 32, 0xFFFFFFFFu, Access::kRo, 0x52414441u},
     {"id", "VERSION", "MAJOR", 24, 8, 0xFF000000u, Access::kRo, 0x00000001u},
-    {"id", "VERSION", "MINOR", 16, 8, 0x00FF0000u, Access::kRo, 0x00000004u},
+    {"id", "VERSION", "MINOR", 16, 8, 0x00FF0000u, Access::kRo, 0x00000005u},
     {"id", "VERSION", "PATCH", 8, 8, 0x0000FF00u, Access::kRo, 0x00000000u},
     {"id", "VERSION", "SCHEMA", 0, 8, 0x000000FFu, Access::kRo, 0x00000001u},
     {"id", "GEOMETRY", "N_BLOCKS", 0, 8, 0x000000FFu, Access::kRo, 0x0000000Au},
-    {"id", "GEOMETRY", "N_REGS", 8, 8, 0x0000FF00u, Access::kRo, 0x00000045u},
+    {"id", "GEOMETRY", "N_REGS", 8, 8, 0x0000FF00u, Access::kRo, 0x0000004Bu},
     {"id", "GEOMETRY", "DATA_W", 16, 8, 0x00FF0000u, Access::kRo, 0x00000020u},
     {"id", "GEOMETRY", "ADDR_W", 24, 8, 0xFF000000u, Access::kRo, 0x00000010u},
     {"id", "CAPABILITY", "BLOCK_MASK", 0, 32, 0xFFFFFFFFu, Access::kRo, 0x000002FFu},
@@ -917,6 +995,26 @@ inline constexpr FieldInfo kFields[170] = {
     {"coeff", "COEFF_STATUS", "WR_REJECT", 8, 1, 0x00000100u, Access::kRoHw, 0x00000000u},
     {"coeff", "COEFF_STATUS", "SWAP_OVERRUN", 9, 1, 0x00000200u, Access::kRoHw, 0x00000000u},
     {"coeff", "COEFF_STATUS", "N_COEFF", 16, 16, 0xFFFF0000u, Access::kRoHw, 0x00000000u},
+    {"coeff", "WEIGHT_CTRL", "BANK_SEL", 0, 1, 0x00000001u, Access::kRw, 0x00000001u},
+    {"coeff", "WEIGHT_CTRL", "SWAP_REQ", 8, 1, 0x00000100u, Access::kRwp, 0x00000000u},
+    {"coeff", "WEIGHT_CTRL", "STATUS_CLEAR", 9, 1, 0x00000200u, Access::kRwp, 0x00000000u},
+    {"coeff", "WEIGHT_ADDR", "INDEX", 0, 16, 0x0000FFFFu, Access::kRw, 0x00000000u},
+    {"coeff", "WEIGHT_ADDR", "AUTO_INC", 31, 1, 0x80000000u, Access::kRw, 0x00000001u},
+    {"coeff", "WEIGHT_DATA", "RE", 0, 16, 0x0000FFFFu, Access::kRw, 0x00000000u},
+    {"coeff", "WEIGHT_DATA", "IM", 16, 16, 0xFFFF0000u, Access::kRw, 0x00000000u},
+    {"coeff", "WEIGHT_STATUS", "ACTIVE_BANK", 0, 1, 0x00000001u, Access::kRoHw, 0x00000000u},
+    {"coeff", "WEIGHT_STATUS", "SWAP_PENDING", 1, 1, 0x00000002u, Access::kRoHw, 0x00000000u},
+    {"coeff", "WEIGHT_STATUS", "WR_BUSY", 2, 1, 0x00000004u, Access::kRoHw, 0x00000000u},
+    {"coeff", "WEIGHT_STATUS", "SWAP_BUSY", 3, 1, 0x00000008u, Access::kRoHw, 0x00000000u},
+    {"coeff", "WEIGHT_STATUS", "WR_REJECT", 8, 1, 0x00000100u, Access::kRoHw, 0x00000000u},
+    {"coeff", "WEIGHT_STATUS", "SWAP_OVERRUN", 9, 1, 0x00000200u, Access::kRoHw, 0x00000000u},
+    {"coeff", "WEIGHT_STATUS", "N_WEIGHTS", 16, 16, 0xFFFF0000u, Access::kRoHw, 0x00000000u},
+    {"coeff", "WEIGHT_PARALLELISM", "N_ANTENNAS", 0, 8, 0x000000FFu, Access::kRoHw, 0x00000000u},
+    {"coeff", "WEIGHT_PARALLELISM", "N_BEAMS", 8, 8, 0x0000FF00u, Access::kRoHw, 0x00000000u},
+    {"coeff", "WEIGHT_PARALLELISM", "BIN_PAR", 16, 8, 0x00FF0000u, Access::kRoHw, 0x00000000u},
+    {"coeff", "WEIGHT_PARALLELISM", "BEAM_PAR", 24, 8, 0xFF000000u, Access::kRoHw, 0x00000000u},
+    {"coeff", "WEIGHT_THROUGHPUT", "BEAM_MUX", 0, 8, 0x000000FFu, Access::kRoHw, 0x00000000u},
+    {"coeff", "WEIGHT_THROUGHPUT", "BEAM_BINS_PER_CYCLE", 8, 16, 0x00FFFF00u, Access::kRoHw, 0x00000000u},
     {"cfar", "CFAR_CTRL", "ENABLE", 0, 1, 0x00000001u, Access::kRw, 0x00000000u},
     {"cfar", "CFAR_CTRL", "MODE", 4, 2, 0x00000030u, Access::kRw, 0x00000000u},
     {"cfar", "CFAR_CTRL", "OUT_MODE", 8, 1, 0x00000100u, Access::kRw, 0x00000000u},

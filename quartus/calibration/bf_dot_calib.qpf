@@ -1,0 +1,20 @@
+# ---------------------------------------------------------------------------
+# bf_dot_calib.qpf — SPEC 18 resource-calibration project: one beamforming dot
+# product (issue #12, SPEC 18 item 6).
+#
+# One revision. The sweep varies ELABORATION PARAMETERS, not revision settings,
+# so a revision per point would create near-identical settings files whose only
+# difference is a few integers, and would put the sweep's state in tracked files
+# instead of in the exported JSON record. scripts/run_calibration.py recompiles
+# this single revision once per point and exports one record per point; the
+# parameters that produced each record are IN the record. Same arrangement, for
+# the same reason, as quartus/calibration/cmult_calib.qpf (issue #9).
+#
+# Hand-maintained: do not let the GUI rewrite this file with tool metadata.
+# ---------------------------------------------------------------------------
+
+QUARTUS_VERSION = "26.1"
+
+# Revisions
+
+PROJECT_REVISION = "bf_dot_calib"
