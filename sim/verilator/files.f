@@ -118,5 +118,35 @@ rtl/pfb/coeff_bank.sv
 rtl/pfb/fir_lane.sv
 rtl/pfb/pfb_bank.sv
 
+// The single-clock FIFO (SPEC 8, issue #6). Listed here as of issue #11: the
+// streaming FFT instantiates it for its metadata and output buffers, so it is
+// no longer only a CDC-build module. Its asynchronous sibling stays in
+// files_cdc.f — nothing in files.f crosses a clock domain yet.
+rtl/common/sync_fifo.sv
+
+// ---- the streaming FFT (SPEC 7.2, issue #11) ---------------------------
+// Design RTL, listed here for the reason complex_multiplier is: this list is the
+// single definition of what "the design" is. Not yet instantiated by
+// benchmark_sim_top — the pipeline that consumes it arrives with issues #15/#19
+// — so until then `make lint` covers it here and sim/verilator/tops/fft_top.sv
+// verifies it.
+//
+// fft_twiddle_pkg.sv is GENERATED AND COMMITTED, exactly like the register map:
+// model/python/gen_fft_twiddles.py produces it, `make fft-check` (a prerequisite
+// of both lint and sim-tiny) fails if it has drifted, and .gitignore
+// deliberately does not ignore it. See that script's header for why the table is
+// not computed at elaboration time.
+rtl/fft/generated/fft_twiddle_pkg.sv
+rtl/fft/fft_pkg.sv
+rtl/fft/fft_delay_line.sv
+rtl/fft/fft_bf2.sv
+rtl/fft/fft_twiddle_rom.sv
+rtl/fft/fft_radix22_stage.sv
+rtl/fft/fft_sdf_path.sv
+rtl/fft/fft_dit_merge.sv
+rtl/fft/fft_reorder.sv
+rtl/fft/fft_core.sv
+rtl/fft/streaming_fft.sv
+
 // ---- simulation top (SPEC 4.1) -----------------------------------------
 sim/verilator/tops/benchmark_sim_top.sv

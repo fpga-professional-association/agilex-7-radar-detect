@@ -65,6 +65,21 @@ sim/verilator/generated/
 # results/regmap/regmap.json IS generated output and is covered by the
 # results/*/* rule above. See DECISIONS.md (issue #7, decision 2).
 
+# NOTE (issue #11): the generated FFT twiddle table is deliberately NOT ignored.
+# rtl/fft/generated/fft_twiddle_pkg.sv and model/cpp/fft/fft_twiddle_table.hpp
+# are produced by model/python/gen_fft_twiddles.py and are committed, for the two
+# reasons the register map is — a clean checkout must lint and simulate without
+# running a generator first, and a coefficient change has to be reviewable as a
+# diff — plus one that is specific to them: they hold the only numbers in this
+# design that come from transcendental functions, and computing those at
+# elaboration time would mean Verilator's libm, Quartus's libm and Python's each
+# producing their own table with nothing in the flow able to notice a
+# disagreement. `make fft-check` — a prerequisite of both `make lint` and
+# `make sim-tiny` — fails if either artefact differs from what the generator
+# produces, so they cannot drift. model/vectors/fft64.vec is committed for the
+# reason the other golden vectors are; see model/vectors/README.md and
+# DECISIONS.md (issue #11).
+
 # SPEC 18 calibration sweep working copies (scripts/run_calibration.py).
 #
 # Each point compiles in its own copy of quartus/calibration/, placed two levels

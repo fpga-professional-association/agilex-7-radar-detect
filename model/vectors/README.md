@@ -113,6 +113,45 @@ same integers as the four-real-multiply form, and that the exact product is repr
 `prod_w` bits. The statistical argument is made at run time instead — `sim/tests/test_cmult.cpp`
 draws at least 24 000 fresh pairs per seed — so this file stays a reviewable size.
 
+### `fft64.vec` — streaming FFT (issue #11)
+
+Produced by [`model/python/gen_fft_vectors.py`](../python/gen_fft_vectors.py) with seed
+`20260726`. Multi-line records: one `vec` line naming the configuration, then one `s` line
+per sample.
+
+```text
+vec tone_5 ffffffff 1 00000
+s 0 30000 0 512 0
+```
+
+| Field | Meaning |
+|---|---|
+| `vec <id>` | unique label, used in failure messages |
+| `<scale_sched>` | the per-sub-stage scaling schedule, hex; bit *g* set means sub-stage *g* shifts right one place |
+| `<reorder>` | `1` natural bin order, `0` bit-reversed beat order |
+| `<stage_flags>` | hex; one `sat_pos << 1 \| sat_neg` field per butterfly sub-stage, sub-stage *g* at bits `[2g+1:2g]` — the frame's saturation, per stage |
+| `s <i> …` | sample `i` in **beat order** (beat `i/spc`, slot `i%spc`), with the input pair and the expected output pair |
+
+Extra header keys: `fft_size`, `spc`, `stages`, and `twiddle_digest` — the digest of the
+table in [`rtl/fft/generated/fft_twiddle_pkg.sv`](../../rtl/fft/generated/fft_twiddle_pkg.sv).
+A build whose digest differs **refuses to run** against this file rather than reporting
+thousands of wrong samples: a coefficient change invalidates every expected output here,
+and the digest turns that into one line.
+
+Families: `imp_*` is an impulse at each position class, including one on the imaginary axis
+and one at the `-1.0` sample whose negation saturates; `dc_*` is constant input at three
+amplitudes; `tone_*` and `negtone_*` are single-bin tones including Nyquist and its
+neighbours; `two_*` are two-tone combinations; `rand_*` are seeded random frames; `sat_*`
+are maximum-amplitude inputs run with shifts REMOVED from the schedule, so they saturate
+and their `stage_flags` are non-zero; `bitrev_*` are three inputs repeated with
+`reorder = 0`, which pins the output permutation by data.
+
+The generator additionally compares every non-saturating record against `numpy.fft.fft`
+scaled by the schedule's gain, and fails above **16 LSB**; the committed set's worst is
+3.0 LSB. That produces no expected value — the point is bit-exact fixed point — but it
+catches the one class of error a self-consistent bit-exact model cannot: a transform that
+agrees with itself and is not a DFT.
+
 ## Changing these files
 
 A diff here is a change to the numerics. It must be accompanied by a NUMERICS.md change

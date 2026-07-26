@@ -167,7 +167,71 @@ cannot overflow — and the result is rounded and saturated exactly once, at the
 There is no intermediate saturation anywhere in a lane, which is also why the adder tree and
 the cascade are bit-identical rather than merely close.
 
-Issues #11–#14 populate the remaining block directories and consume the same multiplier.
+#### Streaming FFT (`rtl/fft/`, issue #11)
+
+SPEC §7.2. A parameterised radix-2² single-path delay-feedback FFT, verified at
+`FFT_SIZE = 64`, `SAMPLES_PER_CYCLE = 2` and elaborated in the same build at 256 points.
+
+Parallelism is a **decimation-in-time lane split**, not a wider SDF path. The beat already
+carries its samples in time order, so lane *p* is exactly the subsequence `x[P*n + p]`; each
+lane runs an ordinary `M = N/P` point radix-2² SDF core, and log2(P) radix-2 DIT merge
+levels reassemble them. The split costs nothing and the merge is one complex multiply plus
+one butterfly per beat. DECISIONS.md (issue #11, decision 1) records the alternatives and
+why they were rejected.
+
+```text
+beat t = x[2t], x[2t+1]
+      |                +--------------------------+
+      +-- lane 0 ----->| 32-point radix-2^2 SDF   |--> E[bitrev(j)] --+
+      |   (evens)      +--------------------------+                  |  DIT merge
+      |                +--------------------------+                  +-> X[m], X[m+N/2]
+      +-- lane 1 ----->| 32-point radix-2^2 SDF   |--> O[bitrev(j)] --+   (x W_N^m)
+          (odds)       +--------------------------+
+```
+
+| Path | Parameters | Issue | Function |
+|---|---|---|---|
+| `rtl/fft/generated/fft_twiddle_pkg.sv` | none | #11 | **Generated and committed.** The master twiddle table, `W_1024^e` in Q1.15, and its digest. Produced by `model/python/gen_fft_twiddles.py`; `make fft-check` fails if it drifts. Deliberately not computed at elaboration time — DECISIONS.md (issue #11, decision 5). |
+| `rtl/fft/fft_pkg.sv` | none (functions only) | #11 | The single definition of the FFT's structure: delay-line lengths, butterfly types, which sub-stages carry a multiplier, the twiddle exponent of every position, bit reversal, the scaling schedule and the latency accounting. `model/cpp/fft/fft_ref.hpp` is its line-for-line C++ mirror. |
+| `rtl/fft/fft_delay_line.sv` | `WIDTH`, `DEPTH`, `STYLE` | #11 | The delay feedback: `q` is `d` delayed by exactly `DEPTH` **enabled** cycles. Circular memory read one entry ahead of the write pointer, so read and write addresses are never equal. `STYLE` forces M20K/MLAB/logic for the SPEC §18 memory-geometry axis; the design default is `"DEFAULT"`, the **measured** rule in `fft_pkg` — a small feedback goes to LUT-RAM, because the sweep found the tool's own choice puts it in an M20K whose internal path then caps the whole block at 330 MHz. A simulation-only shadow shift register checks the pointer arithmetic every cycle. |
+| `rtl/fft/fft_bf2.sv` | `IDX_W`, `DELAY`, `IS_BF2II`, `SHIFT`, `MEM_STYLE` | #11 | One BF2I / BF2II sub-stage: a radix-2 butterfly around a delay feedback, with BF2II's trivial `-j`. One `fxp_round_sat` per output. Emits `idx_out = idx_in - DELAY` and a warmth bit that qualifies its saturation flags. |
+| `rtl/fft/fft_twiddle_rom.sv` | `KIND` (`"R22"`/`"DIT"`), `ADDR_W`, `L2L`/`N_LANE`/`LEVEL`, `OUT_REG`, `STYLE` | #11 | The coefficient memory, addressed by the sample **position**: every exponent and every bit reversal is resolved at elaboration, so the hardware is an address register and a memory. Latency `1 + OUT_REG`. |
+| `rtl/fft/fft_radix22_stage.sv` | `IDX_W`, `N_LANE`, `S`, `SHIFT_A`, `SHIFT_B`, `HAS_TWIDDLE`, `TW_VARIANT`, `TW_PIPE`, `TW_ROM_OUT_REG`, `MEM_STYLE`, `TW_STYLE` | #11 | One complete radix-2² stage: BF2I, BF2II and the `complex_multiplier` that closes the group, with a beat-enabled alignment chain to the ROM and a free-running chain matching the multiplier. The SPEC §18 item 4 calibration unit. |
+| `rtl/fft/fft_sdf_path.sv` | `N_LANE`, `SCALE_SCHED`, twiddle/memory options | #11 | One lane's whole `2^N_LANE` point transform: `N_LANE/2` radix-2² groups plus, when `N_LANE` is odd, the trailing lone BF2I with delay 1. Asserts its multiplier count against `fft_lane_mults()`. |
+| `rtl/fft/fft_dit_merge.sv` | `N_LANE`, `LEVEL`, `SHIFT`, twiddle options | #11 | One radix-2 decimation-in-time merge level: `W*O`, then `E ± W*O` with one quantisation. No memory. `LEVEL = 0` is the only level issue #11 verifies. |
+| `rtl/fft/fft_reorder.sv` | `N_LANE`, `WIDTH`, `STYLE` | #11 | Bit-reversed to natural **beat** order, double buffered. Permutes beats only — both slots move together and no sample changes lane. Costs one frame of latency and two banks. |
+| `rtl/fft/fft_core.sv` | `FFT_SIZE`, `SAMPLES_PER_CYCLE`, `SCALE_SCHED`, twiddle/memory options, `FLAG_COUNT_W` | #11 | The transform with no stream protocol attached: the lanes, the merge, and one `fxp_sticky_flags` per butterfly sub-stage of the whole transform. |
+| `rtl/fft/streaming_fft.sv` | `FFT_SIZE`, `SAMPLES_PER_CYCLE`, `SCALE_SCHED`, `REORDER`, SPEC §5 field widths, twiddle/memory options, `IN_DEPTH`, `OUT_SLACK` | #11 | The SPEC §5 block: elastic input boundary, frame tracking and the position tag, the core, the optional reorder, the metadata FIFO and the credit-backed output FIFO. |
+
+Simulation-only and synthesis-only companions:
+
+| Path | Parameters | Issue | Function |
+|---|---|---|---|
+| `sim/verilator/tops/fft_top.sv` | none | #11 | Verification top holding five elaborations at once: the 64-point reference, the same with the output left bit-reversed, two saturating schedules, and a 256-point instance. Packs and unpacks the SPEC §5 bundle so the C++ side sees plain fields. |
+| `quartus/calibration/fft_stage_wrap.sv` | `N_LANE`, `S`, `SHIFT_A/B`, `HAS_TWIDDLE`, `VARIANT_SEL`, `TW_PIPE`, `TW_ROM_OUT_REG`, `MEM_SEL`, `TW_SEL` | #11 | SPEC §18 item 4 wrapper: one radix-2² stage between boundary registers. |
+| `quartus/calibration/fft_core_wrap.sv` | `FFT_SIZE`, `SAMPLES_PER_CYCLE`, `SCALE_SCHED`, `REORDER`, `VARIANT_SEL`, `TW_PIPE`, `TW_ROM_OUT_REG`, `MEM_SEL`, `TW_SEL`, `REORDER_SEL`, `FIFO_SEL` | #11 | SPEC §18 item 5 wrapper: the whole `streaming_fft` block between boundary registers. |
+
+**Beat layout (normative).** Input beat *t* slot *p* is `x[SPC*t + p]` — samples in time
+order. Output beat *j* carries `X[m]` and `X[m + N/2]`, with `m = bitrev(j)` when
+`REORDER = 0` and `m = j` when `REORDER = 1`. Pairing bins half a spectrum apart is what
+makes the reorder a pure beat permutation; see DECISIONS.md (issue #11, decision 9).
+
+**Flow control, and why the core has no stall.** The core is a valid-tagged, gap-tolerant
+pipeline: each stage advances on a local, pipelined beat-valid, and a cycle with no beat
+does not advance the delay feedback. Nothing downstream can stop a beat once it is in.
+Backpressure is applied at the **input**, by a credit counter that reserves an output slot
+for every beat admitted, so (FIFO occupancy + beats in flight) is bounded by the FIFO depth
+— and that depth is `fft_pkg::fft_total_latency() + OUT_SLACK`, derived from the pipeline
+rather than chosen. The reasons (SPEC §23, and `complex_multiplier`'s deliberately
+enable-free datapath) and the cost are in DECISIONS.md (issue #11, decision 7).
+
+A consequence worth knowing at the block boundary: the pipeline is indexed by sample
+position, not by time, so a frame's output requires `fft_total_latency()` **further beats**
+to be admitted before it emerges. In continuous operation that is invisible; a finite test
+must flush, and `sim/tests/test_fft.cpp` does.
+
+Issues #12–#14 populate the remaining block directories; issue #15 consumes this one and
+decides whether `REORDER` is worth its frame of latency.
 
 ### 3.6 Packet fabric (`rtl/packet/`)
 
@@ -369,6 +433,20 @@ TODO — populated by issue #2 (config plumbing into the build) and issue #20.
 | `fir_lane` (`TREE`) | `MULT_PIPE + ceil(log2 TAPS) + 1` cycles, 0 beats | 1 sample/cycle, no backpressure | #10 |
 | `fir_lane` (`SYSTOLIC`) | `MULT_PIPE + 2` cycles **and** `TAPS-1` beats | 1 sample/cycle, no backpressure | #10 |
 | `pfb_bank` | the lane's, plus 1 cycle for the output elastic buffer | 1 beat/cycle sustained | #10 |
+| `fft_bf2` | 1 register + `DELAY` **positions** | 1 beat/enabled cycle | #11 |
+| `fft_radix22_stage` | 2 registers + `D_A + D_B` positions, plus `ROM_LAT + TW_PIPE` when it carries a multiplier | 1 beat/enabled cycle | #11 |
+| `fft_dit_merge` | `ROM_LAT + TW_PIPE + 1` | 1 beat/enabled cycle | #11 |
+| `fft_reorder` | `M + 1` beats (`M = FFT_SIZE/SAMPLES_PER_CYCLE`) | 1 beat/enabled cycle | #11 |
+| `streaming_fft` | `fft_pkg::fft_total_latency()` beats — **88** at 64 points / 2 SPC with `REORDER = 1`, **55** without | 1 beat/cycle while credits allow | #11 |
+
+The FFT's latency is counted in **beats**, not cycles, and the distinction is load-bearing:
+its delay feedbacks advance on beats while its multipliers free-run, so a gap on the input
+does not translate into a fixed cycle offset. The two contributions are kept apart in
+`fft_pkg` — a *position* offset from the delay lines (`M-1` per lane) and a *time* latency
+from the pipeline registers — and their sum is what sizes the metadata FIFO and the output
+FIFO. `streaming_fft` asserts on every delivered beat that the popped `start_of_frame`
+coincides with position 0 out of the core, so the number is checked rather than assumed, and
+`sim/tests/test_fft.cpp` reads it back from the RTL's own `cfg_latency` echo.
 
 `complex_multiplier`'s latency is exactly its parameter, by construction and for both
 variants — the register-location priority order is chosen so that the enables sum to

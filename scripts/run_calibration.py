@@ -18,6 +18,8 @@ a script.
     python scripts/run_calibration.py --kernel cmult --points mult4_p3_round
     python scripts/run_calibration.py --kernel cmult --resume
     python scripts/run_calibration.py --kernel cmult --summary-only
+    python scripts/run_calibration.py --kernel fft_stage      # SPEC 18 item 4
+    python scripts/run_calibration.py --kernel fft_core       # SPEC 18 item 5
 
 Windows side only, like every other Quartus entry point in this repository: this
 host's WSL has Windows interop disabled, so quartus_sh.exe cannot be launched
@@ -216,6 +218,52 @@ MATRICES: dict[str, dict] = {
     },
 
     # -----------------------------------------------------------------------
+    # SPEC 18 item 4: "One FFT stage" (issue #11).
+    #
+    # One rtl/fft/fft_radix22_stage.sv — two delay-feedback butterflies, a
+    # twiddle ROM and a complex_multiplier — at the geometry of the FIRST group
+    # of the shipped 64-point / 2-samples-per-cycle lane: N_LANE = 5, S = 0, so
+    # the delay lines are 16 and 8 words and the ROM has 32 entries. That is the
+    # group with the largest memories in the shipped configuration, which is the
+    # one whose mapping the calibration has to answer.
+    #
+    # Two axes, three points:
+    #   * the twiddle multiplier's pipeline depth, 3 against 4. Issue #9
+    #     measured 4 as the depth at which the multiplier alone clears the
+    #     600 MHz probe; whether that still holds with a memory feeding it is a
+    #     different question and is the reason this axis is swept here again.
+    #   * the delay-feedback memory geometry, AUTO against forced MLAB. A 16-word
+    #     by 32-bit line is exactly the size where the choice is not obvious, and
+    #     SPEC 18 names "memory geometry" as a thing to sweep rather than assume.
+    # -----------------------------------------------------------------------
+    "fft_stage": {
+        "description": "SPEC 7.2 radix-2^2 SDF stage: butterflies, delay "
+                       "feedback, twiddle ROM and complex multiplier",
+        "top": "fft_stage_wrap",
+        "axes": {
+            "tw_pipe": [3, 4],
+            "mem_sel": {"0": "AUTO", "2": "MLAB"},
+        },
+        "points": [
+            {
+                "id": "stage_p3_auto",
+                "label": "stage TW_PIPE=3 mem=AUTO",
+                "params": {"TW_PIPE": 3, "MEM_SEL": 0, "TW_SEL": 0},
+            },
+            {
+                "id": "stage_p4_auto",
+                "label": "stage TW_PIPE=4 mem=AUTO",
+                "params": {"TW_PIPE": 4, "MEM_SEL": 0, "TW_SEL": 0},
+            },
+            {
+                "id": "stage_p4_mlab",
+                "label": "stage TW_PIPE=4 mem=MLAB",
+                "params": {"TW_PIPE": 4, "MEM_SEL": 2, "TW_SEL": 2},
+            },
+        ],
+    },
+
+    # -----------------------------------------------------------------------
     # SPEC 18 item 3: one eight-lane polyphase FIR bank (issue #10)
     # -----------------------------------------------------------------------
     # What this point prices that the lane point cannot:
@@ -256,6 +304,103 @@ MATRICES: dict[str, dict] = {
             },
         ],
     },
+
+    # -----------------------------------------------------------------------
+    # SPEC 18 item 5: "One full FFT" (issue #11).
+    #
+    # rtl/fft/streaming_fft.sv at the shipped 64-point / 2-samples-per-cycle
+    # configuration: the transform, the elastic boundary, the frame tracking,
+    # the bit-reversal reorder and the credit-backed output FIFO.
+    #
+    # Three points, chosen so that each answers one question the design took a
+    # position on and has to be able to defend:
+    #   * TW_PIPE 3 against 4, the same axis as the stage sweep, now with six
+    #     multipliers and the whole control network around them;
+    #   * REORDER on against off, which prices the bit-reversal buffer and the
+    #     one frame of latency it costs. Issue #15's corner turn can absorb the
+    #     permutation for nothing, and this is the number that decides whether it
+    #     should.
+    # -----------------------------------------------------------------------
+    "fft_core": {
+        "description": "SPEC 7.2 full 64-point / 2-SPC streaming FFT block",
+        "top": "fft_core_wrap",
+        "axes": {
+            "tw_pipe": [3, 4],
+            "reorder": [0, 1],
+        },
+        "points": [
+            {
+                "id": "core64_p4_reorder",
+                "label": "64-pt TW_PIPE=4 reorder",
+                "params": {"TW_PIPE": 4, "REORDER": 1, "MEM_SEL": 0},
+            },
+            {
+                "id": "core64_p3_reorder",
+                "label": "64-pt TW_PIPE=3 reorder",
+                "params": {"TW_PIPE": 3, "REORDER": 1, "MEM_SEL": 0},
+            },
+            {
+                "id": "core64_p4_bitrev",
+                "label": "64-pt TW_PIPE=4 no reorder",
+                "params": {"TW_PIPE": 4, "REORDER": 0, "MEM_SEL": 0},
+            },
+            # The seventh point, and the only one added AFTER the other six had
+            # been measured: the stage sweep found that the tool places a 16-word
+            # delay feedback in an M20K and that the M20K's own internal path is
+            # then the critical path of the whole block. fft_pkg's "DEFAULT"
+            # placement rule is the answer to that, and this point measures the
+            # answer at block level rather than inferring it from the stage.
+            {
+                "id": "core64_p4_default",
+                "label": "64-pt TW_PIPE=4 reorder DEFAULT mem",
+                "params": {"TW_PIPE": 4, "REORDER": 1, "MEM_SEL": 4},
+            },
+        ],
+    },
+}
+
+# Per-kernel note recorded in the exported JSON, explaining what was left out of
+# the matrix and why. A point that is pruned is pruned in the open.
+PRUNING_NOTES: dict[str, str] = {
+    "cmult": (
+        "Full matrix is 2 variants x 4 pipeline depths x 2 output formats = 16 "
+        "compiles; one compile measures at about nine minutes on this host. "
+        "Pruned to 10: the pipeline axis is swept fully for both variants at "
+        "ROUND_OUT=1, and the output-format axis is measured at PIPE_STAGES=4 "
+        "only, because the rounding network is a fixed combinational block on "
+        "the post-adder register and does not interact with the number of "
+        "stages ahead of it. See scripts/run_calibration.py."),
+    "fir": (
+        "Three points. The accumulation structure is swept at full width at the "
+        "calibrated multiplier depth, because that is the comparison the kernel "
+        "exists to make; the pipeline-depth axis contributes ONE point (TREE at "
+        "MULT_PIPE_STAGES=3), because the multiplier's own depth axis was swept "
+        "exhaustively by the cmult sweep and what is unknown is only whether a "
+        "shallower multiplier still clears the probe with an adder tree hanging "
+        "off it. MULT3 is not swept: issue #9 measured it in isolation, and in a "
+        "lane it would be sixteen copies of an answered question. The delay-line "
+        "storage axis is not swept because a tapped delay line cannot be an M20K "
+        "at any depth. See scripts/run_calibration.py."),
+    "pfb8": (
+        "Two points: the two accumulation structures at the calibrated "
+        "multiplier depth. The pipeline-depth axis is not repeated here — it was "
+        "answered at the lane, and an eight-lane compile is the most expensive "
+        "thing in this sweep. See scripts/run_calibration.py."),
+    "fft_stage": (
+        "Three points of a 2 x 4 (pipeline depth x memory style) matrix. The "
+        "memory axis is measured at one pipeline depth only: the delay-feedback "
+        "placement is a property of the memory's shape, not of how many "
+        "registers follow the multiplier. M20K and LOGIC are not swept because "
+        "a 16-word by 32-bit line is far below an M20K's useful geometry and "
+        "far above what should be spent on ALM registers; AUTO against MLAB is "
+        "the question that is actually open. See scripts/run_calibration.py."),
+    "fft_core": (
+        "Three points. The scaling schedule is deliberately NOT an axis: it "
+        "changes which quantisations saturate, not what they cost, and the "
+        "shifts are wires. SAMPLES_PER_CYCLE is not an axis either — issue #11 "
+        "verifies 2 and the 8-lane configuration belongs to issue #20, and "
+        "calibrating an unverified geometry would be measuring something the "
+        "design does not yet claim. See scripts/run_calibration.py."),
 }
 
 
@@ -674,14 +819,25 @@ def fmt(v, spec="{}"):
 
 
 def print_table(records: list[dict]) -> str:
-    cols = ("variant", "stages", "out", "DSP", "18x18", "ALM", "ALM(kern)",
+    """One row per point, in a shape that serves every kernel.
+
+    The first column is the point's own LABEL rather than a fixed set of
+    parameter columns: the complex multiplier's axes (variant, depth, output
+    format) and the FFT's (depth, memory style, reorder) have nothing in common,
+    and a table with a column per axis of every kernel would be mostly empty. The
+    label is defined in the matrix beside the parameters it names, and the
+    parameters themselves are in the JSON record.
+
+    M20K and MLAB are columns because SPEC 18 asks for "M20K mapping" and the FFT
+    is the first kernel in this database with memories at all.
+    """
+    cols = ("point", "DSP", "18x18", "M20K", "MLAB", "ALM", "ALM(kern)",
             "regs", "hyper", "Fmax MHz", "depth", "fit s")
-    widths = (7, 6, 6, 4, 6, 6, 9, 5, 6, 9, 5, 6)
+    widths = (26, 4, 6, 5, 5, 7, 9, 6, 6, 9, 5, 6)
     lines = []
     lines.append("  ".join(c.ljust(w) for c, w in zip(cols, widths)).rstrip())
     lines.append("  ".join("-" * w for w in widths))
     for r in sorted(records, key=lambda x: x["point_id"]):
-        p = r.get("parameters", {})
         u = r.get("utilization", {})
         k = r.get("kernel_entity", {})
         t = r.get("timing", {})
@@ -694,11 +850,11 @@ def print_table(records: list[dict]) -> str:
                 sum2 = value
                 break
         row = (
-            "MULT3" if p.get("VARIANT_SEL") == 1 else "MULT4",
-            fmt(p.get("PIPE_STAGES")),
-            "round" if p.get("ROUND_OUT") == 1 else "full",
+            r.get("label") or r.get("point_id"),
             fmt(u.get("dsp_used")),
             fmt(sum2),
+            fmt(u.get("m20k_used")),
+            fmt(u.get("mlab_used")),
             fmt(u.get("alm_used")),
             fmt(k.get("alm_used")),
             fmt(u.get("alm_reg_used")),
@@ -763,14 +919,8 @@ def main() -> int:
                   file=sys.stderr)
             return 2
 
-    pruned_note = (
-        "Full matrix is 2 variants x 4 pipeline depths x 2 output formats = 16 "
-        "compiles; one compile measures at about nine minutes on this host. "
-        "Pruned to 10: the pipeline axis is swept fully for both variants at "
-        "ROUND_OUT=1, and the output-format axis is measured at PIPE_STAGES=4 "
-        "only, because the rounding network is a fixed combinational block on "
-        "the post-adder register and does not interact with the number of "
-        "stages ahead of it. See scripts/run_calibration.py.")
+    pruned_note = PRUNING_NOTES.get(
+        args.kernel, "See scripts/run_calibration.py for this kernel's matrix.")
 
     existing = load_summary(args.kernel)
     records: dict[str, dict] = {r["point_id"]: r

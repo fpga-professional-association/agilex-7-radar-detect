@@ -1667,3 +1667,337 @@ arithmetic or its read-before-write ordering were wrong, this says so. The test 
 fails if the probe never filled, so it cannot pass vacuously. The geometry — 40 deep, 32 bits
 — is past `PFB_MEM_MIN_DEPTH` but only 1280 bits, so AUTO would still choose SRL; the MEM
 instance is therefore also a test that an explicit override is honoured.
+
+## 2026-07-26 — Streaming FFT: parallelism by decimation in time, committed twiddles, non-stallable core, per-stage scaling  (issue #11)
+
+Context: SPEC §7.2 asks for a parameterised streaming FFT — radix-2² single-path delay
+feedback preferred, `SAMPLES_PER_CYCLE` complex samples per cycle, a fixed-point scaling
+schedule, frame-continuous operation, twiddles in memory and twiddle multipliers in DSPs —
+beginning at `FFT_SIZE=64`, `SAMPLES_PER_CYCLE=2`. SPEC §18 items 4 and 5 require one FFT
+stage and one full FFT to be synthesized and measured before full-scale parameters are
+chosen. This is the second Phase 2 kernel and the first block in the design with memories,
+a frame structure and a multi-stage numerical schedule, so several things settled here are
+settled for the PFB, the corner turn and the beamformer as well.
+
+**Decision 1 — parallelism comes from a decimation-in-time lane split, not from widening
+the SDF path.** A radix-2² SDF path is inherently one sample per cycle: one datapath, one
+delay-feedback memory, one control counter. `SAMPLES_PER_CYCLE = P` is obtained instead by
+observing that the beat already carries the samples in time order, so
+
+```text
+beat t carries x[P*t + 0] .. x[P*t + P-1]   ->   lane p IS the subsequence x[P*n + p]
+```
+
+Each lane runs an ordinary `M = N/P` point radix-2² SDF core, and the lanes are reassembled
+by log2(P) levels of radix-2 decimation-in-time merge:
+
+```text
+X[m]       = E[m] + W_N^m O[m]
+X[m + N/2] = E[m] - W_N^m O[m]        m = bitrev(j), j the output beat index
+```
+
+The split costs **nothing** — it is how the samples arrive — and the merge is one complex
+multiply and one butterfly per beat, with no memory at all. Every lane keeps the property
+that makes radix-2² SDF worth choosing in the first place: one delay-feedback word per
+sample of transform state, and `log4(M) - 1` non-trivial multipliers.
+
+*Alternatives rejected.* A **P-parallel multi-path delay commutator (MDC)** carries the same
+total delay memory but adds a commutator network between every pair of stages and makes
+every stage's control a function of P; the RTL then has a P-dependent structure inside each
+stage rather than P identical stages. A **2-parallel radix-2² with the delay lines split
+across the two paths** keeps one control network but doubles the butterfly count per stage
+and needs cross-path wiring at every stage, and its stage module is no longer the same
+module a 1-sample-per-cycle configuration would use. Both were rejected for the same
+reason: they make P an *internal* parameter of every stage, where this decomposition makes
+it the *number of identical cores*, and issue #20 has to reach `P = 8` on RTL that has been
+verified at `P = 2`.
+
+*What is verified.* `P ∈ {1, 2}`. `fft_pkg::fft_spc_supported()` says so and elaboration
+fails otherwise. The merge module takes its level as a parameter and `fft_dit_tw()` takes
+the level in its twiddle arithmetic, so `P = 8` is a generate loop over three levels rather
+than a rewrite — but it is unverified, and an unverified geometry that elaborates silently
+is worse than one that refuses to.
+
+**Decision 2 — the trailing radix-2 stage is the normal case, and it falls out of the rule
+rather than being bolted on.** `N` a power of four with `P = 2` gives `M = N/2` and
+therefore an **odd** `log2(M)` for every size this design uses: 64/2 → M=32, n=5; 256/2 →
+M=128, n=7; 1024/2 → M=512, n=9. The general rule in `fft_pkg` is
+
+```text
+sub-stage s: delay 2^(n-1-s); BF2I when s is even, BF2II when s is odd;
+             a twiddle multiplier follows s when s is odd and s < n-1
+```
+
+For odd `n` this produces a lone BF2I with delay 1 as the last sub-stage — exactly the
+"final radix-2 stage" a non-power-of-four transform needs — with no special case anywhere.
+`fft_sdf_path` asserts at elaboration that the chain it generated has the multiplier count
+`fft_lane_mults(n)` predicts, so a miscount is a build failure rather than a wrong
+transform. Both parities are exercised: the shipped sizes are odd, and
+`model/cpp/test/test_fft_ref.cpp` sweeps the geometry helpers over 8…1024 at P ∈ {1,2}.
+
+**Decision 3 — control is data: the sample's position travels with it.** Every SDF
+sub-stage needs the phase bit, the trivial-twiddle bit and the twiddle ROM address, and all
+three are fields of the sample's position in the frame. A counter per stage would have to be
+*aligned* to that stage's stream, and the alignment is a function of every delay and every
+pipeline register ahead of it — the arithmetic that is right in the comment and wrong in the
+RTL. So the position is an n-bit tag that travels with the sample, and a sub-stage emits
+`idx_out = idx_in - D(s)` because its output stream is its input stream delayed by `D`
+positions. The tag is n bits and M is 2ⁿ, so the modulo is free.
+
+The only place cumulative latency appears is `fft_pkg::fft_total_latency()`, which sizes the
+metadata path, and `streaming_fft` asserts on every delivered beat that the metadata's
+`start_of_frame` coincides with position 0 out of the core. If the latency arithmetic were
+off by one beat, that fires on the second frame.
+
+**Decision 4 — the scaling schedule is a compile-time bit per sub-stage, and its headroom
+claim is stated precisely because the comfortable version is false.** The datapath is Q1.15
+complex at every sub-stage boundary. A butterfly sums two Q1.15 values, which by `fxp_pkg`'s
+own growth rule needs `fxp_acc_w(FXP_SAMPLE_W, 2) = 17` bits; `SCALE_SCHED` bit *g* decides
+whether that 17th bit is discarded by a one-place right shift (round-to-nearest-even, then
+saturate) or kept by letting the value saturate and setting the stage's flags.
+
+The obvious claim — "one place of right shift cannot overflow" — is **wrong**, and the
+assertion written to check it is what found that out:
+
+```text
+a + b in [-2^16, 2^16 - 2]         rne(-2^16 / 2) = -2^15         fits
+a - b in [-(2^16 - 1), 2^16 - 1]   rne(65535 / 2) = rne(32767.5) = 32768   does NOT fit
+```
+
+The difference reaches `2^16 - 1` at `a = +0.99997, b = -1.0`, and ties-to-even rounds it
+one LSB past the top of Q1.15. So a fully scaled butterfly *can* saturate, on exactly one
+operand pair, by exactly one LSB, upward only. `fft_bf2` now asserts that precise statement
+— never negative, never more than one LSB over — on every beat, and both models reproduce
+the event. It is the asymmetric two's-complement range showing through, the same way it does
+in `-(-1.0)`; the trivial twiddle is the second, independent instance, since `-j` negates a
+component and a sample of exactly `-1.0` saturates there whatever the schedule says.
+
+*Compile-time, not a register.* A programmable schedule would put a per-stage shift
+multiplexer in the datapath and make the bit-exact reference model a function of run-time
+state, so a vector would no longer be a statement about the design. The same coverage is
+obtained by elaborating a second instance, which is what `sim/verilator/tops/fft_top.sv`
+does: two saturating schedules, one shifting nowhere and one shifting only sub-stages 0 and
+1, so the **per-sub-stage** flags are falsifiable rather than merely present. Making the
+schedule programmable later is a parameter becoming a port; nothing else changes.
+
+**Decision 5 — the twiddle table is generated once, committed, and read by all three
+implementations. It is not computed at elaboration time.** The coefficients are the only
+numbers in this design that come from transcendental functions. A table computed at
+elaboration would be computed three times — by Verilator's libm, by Quartus's libm and by
+Python's — and "the three agree in the last unit in the last place, for every entry, on
+every host" is an assumption that **cannot be checked from inside a simulation**: a
+Quartus/Verilator disagreement produces hardware that differs from the model it was verified
+against, and nothing in the flow would notice.
+
+So `model/python/gen_fft_twiddles.py` emits `rtl/fft/generated/fft_twiddle_pkg.sv` and
+`model/cpp/fft/fft_twiddle_table.hpp` from one list of 1024 integers, both committed, both
+checked by `--check` inside `make lint` and `make sim-tiny`. The precedent is exactly the
+generated register map (issue #7, decision 2) and the golden vectors (issue #4); the
+addition here is a **digest**: the vector file carries the table's SHA-256 prefix and the
+test refuses to run against a file whose digest does not match the build, so a regenerated
+table paired with stale expectations is one line of output instead of thousands of wrong
+samples.
+
+Angle reduction is to the first quadrant with exact sign/swap symmetry, so `W^0 = (1, 0)`,
+`W^(N/4) = (0, -1)` and `W^(N/2) = (-1, 0)` are exact rather than whatever `cos(pi/2)`
+returns — which matters, because the radix-2² structure's trivial twiddles depend on it.
+
+**Decision 6 — trivial twiddles are multiplied, not bypassed, and `W^0` quantises to
+`0x7FFF`.** `cos(0) = 1.0` is not representable in Q1.15, so the quantised `W^0` is
+`0x7FFF`, one LSB short of unity, and multiplying by it is not the identity. The FFT
+multiplies anyway. Bypassing per sample would need a multiplexer between the multiplier
+output and a delayed copy of its input, on the sample's own position, in every twiddle
+stage — and it would save **no DSP**, because the multiplier exists for the non-trivial
+samples regardless. What it would buy is a gain of exactly 1 instead of 32767/32768 per
+multiplier stage; the measured consequence of not buying it is that a full-scale impulse
+comes back as 32764 instead of 32767 across a 64-point transform, which is inside the
+3 LSB the float cross-check measures. The structural trivial twiddles that *do* matter —
+the `-j` of BF2II and the absent multiplier after the final group — are structural and cost
+nothing, and those are kept.
+
+**Decision 7 — the core is never stalled; backpressure is applied at the input by credit,
+and the output FIFO is sized from the pipeline's own latency.** The obvious construction is
+a clock enable on every register driven by the downstream ready. Two things rule it out.
+SPEC §23 says, in order, "Avoid one chip-wide clock enable", "Pipeline enables before broad
+distribution", "Keep pipeline stages latency-insensitive", "Break ready/valid feedback with
+elastic buffers" — a ready-driven enable on every DSP and every memory in the transform is
+the first of those, verbatim. And `rtl/common/complex_multiplier.sv` has **no clock enable
+on its datapath**, by an explicit decision recorded in issue #9 and measured by its
+calibration sweep; stalling the FFT internally would mean changing that kernel and
+invalidating its numbers, or not using it.
+
+So the core is a valid-tagged, gap-tolerant pipeline: each stage's registers advance on a
+local, pipelined beat-valid, and a cycle with no beat simply does not advance the delay
+feedback. Nothing downstream can stop a beat once it is in. Backpressure is applied at the
+input by a credit counter that reserves an output slot for every beat admitted, which bounds
+(FIFO occupancy + beats in flight) by the FIFO's depth; the beats in flight are exactly the
+pipeline's latency, so the depth is `fft_pkg::fft_total_latency() + OUT_SLACK`, derived
+rather than guessed.
+
+**The cost is real and is stated rather than buried:** an output FIFO of about one M20K for
+the 64-point / 2-samples-per-cycle configuration, where a stallable design would need a
+four-entry skid. That is what the two calibration projects are for — `fft_stage_calib`
+prices the arithmetic and memory of one stage, `fft_core_calib` prices the whole block, and
+the difference is this decision's bill.
+
+*Consequence worth knowing.* The pipeline is indexed by sample position, not by time: a
+frame's output requires `fft_total_latency()` further beats to be admitted before it
+emerges. In continuous operation — which is what a radar front end is — that is invisible;
+a test driving a finite number of frames must drive that many more, and `test_fft.cpp` does.
+
+**Decision 8 — metadata rides a FIFO, not a delay line.** The core's latency is a fixed
+number of *beats* but not a fixed number of *cycles*: its delay feedbacks advance on beats
+while its multipliers free-run. A shift register would have to reproduce the core's internal
+structure to stay aligned. A FIFO pushed on admission and popped on delivery is aligned by
+construction, and the assertion that the popped `start_of_frame` lands on output position 0
+is what turns the latency arithmetic into a checked fact.
+
+Output beat *k* of a frame carries input beat *k*'s metadata. No output beat "is" a
+particular input beat — the output is a transform of the whole frame — so this is a
+convention, and it is the one that keeps `stream_id`, the sequence number and the frame
+flags meaningful end to end, so the SPEC §5 loss/ordering checks and the issue #8 sequence
+checker work across the FFT exactly as they work across a FIFO.
+
+**Decision 9 — the output pairs bins half a spectrum apart, and the reorder is optional.**
+Output beat *j* carries `X[m]` and `X[m + N/2]`, with `m = bitrev(j)` when `REORDER = 0` and
+`m = j` when `REORDER = 1`.
+
+Pairing `(X[j], X[j+N/2])` rather than the more obvious `(X[2j], X[2j+1])` is what makes the
+reorder buffer a **pure beat permutation**: both slots move together, no sample ever changes
+lane, and the buffer is two independent banks read at the same address. The adjacent pairing
+would need two addresses differing in the low bit — the same bank on the same cycle — and a
+second read port the memory does not have.
+
+`REORDER` is a parameter because the corner-turn memory of issue #15 addresses its write
+side arbitrarily and can absorb the permutation for **nothing**. Reordering here costs one
+frame of latency and two banks of `N/P` beats; whether to spend that belongs to the issue
+that consumes the output, so both orders are supported, both are bit-exact against the
+reference model from the same parameter, and `model/vectors/fft64.vec` pins both with data.
+Double buffering rather than an in-place exchange: bit reversal is an involution, so the
+permutation is a set of swaps, but an in-place version needs a read and a write to different
+addresses in the same cycle and still cannot start until the frame is complete — it trades
+memory for a second port and a much harder correctness argument.
+
+**Decision 10 — which model is the oracle.** The same triangle as issues #4 and #9, one
+level up: `model/python/gen_fft_vectors.py` (NumPy, independent algorithm) writes
+`model/vectors/fft64.vec`; `model/cpp/test/test_fft_ref.cpp` validates
+`model/cpp/fft/fft_ref.hpp` against those vectors **before** anything uses it; and
+`sim/tests/test_fft.cpp` requires the RTL, the C++ model and the vectors to agree
+bit-for-bit. The one thing deliberately shared is the twiddle *table* (decision 5) — what is
+independent is the algorithm.
+
+The Python generator additionally compares every non-saturating record against
+`numpy.fft.fft` scaled by the schedule's gain and fails above 16 LSB; the committed set's
+worst is **3.0 LSB**. That produces no expected value, but it catches the one class of error
+a self-consistent bit-exact model cannot: a transform that agrees with itself and is not a
+DFT.
+
+**Decision 11 — two calibration projects, not one.** SPEC §18 names "one FFT stage" and "one
+full FFT" as separate items, and they answer different questions.
+`quartus/calibration/fft_stage_calib` compiles a single `fft_radix22_stage` — the smallest
+piece containing all four cost classes at once: delay-feedback memory, a twiddle ROM, a
+DSP-mapped complex multiply and the quantisation network. `fft_core_calib` compiles the
+whole `streaming_fft` block. The difference between them, after multiplying the stage by the
+structure, is decision 7's bill, measured rather than argued.
+
+No new Tcl. `quartus/scripts/calibrate.tcl` was written kernel-agnostic by issue #9 — "the
+top-level entity is read FROM the project, not hardcoded here, so adding the SPEC 18 kernels
+that follow the complex multiplier … is a new qpf/qsf/sdc triple and nothing else" — so this
+issue adds two project triples, two wrappers and two matrix entries.
+
+### Measured calibration data (SPEC §18 items 4 and 5, seed 1)
+
+Device `AGMF039R47B1E1VC`, Quartus Prime Pro 26.1, full compile (synthesis +
+Fitter + STA), probe constraint 600 MHz for the reason
+`quartus/calibration/*_calib.sdc` gives. `Fmax` is the register-to-register
+measurement; `ALM(kern)` is the `u_kernel` instance alone, without the wrapper's
+boundary registers. Every point's critical path is inside `u_kernel` and every
+point reports zero unconstrained endpoints.
+
+**One radix-2² stage** (`fft_stage_calib`, the first group of a 64-point /
+2-samples-per-cycle lane: delay lines of 16 and 8 words, a 32-entry twiddle ROM):
+
+| point | DSP | 18x18 | M20K | MLAB | ALM | ALM(kern) | regs | hyper | Fmax MHz | depth |
+|---|---|---|---|---|---|---|---|---|---|---|
+| `TW_PIPE=3` mem AUTO | 2 | 2 | 2 | 0 | 531 | 453.9 | 494 | 160 | **338.5** | 7 |
+| `TW_PIPE=4` mem AUTO | 2 | 2 | 2 | 0 | 534 | 468.3 | 682 | 315 | **345.9** | 4 |
+| `TW_PIPE=4` mem MLAB | 2 | 2 | 0 | 6 | 570 | 505.8 | 519 | 89 | **382.0** | 6 |
+
+**The whole 64-point block** (`fft_core_calib`, `streaming_fft` including the
+elastic boundary, the metadata FIFO and the credit-backed output FIFO):
+
+| point | DSP | 18x18 | M20K | MLAB | ALM | ALM(kern) | regs | hyper | Fmax MHz | depth |
+|---|---|---|---|---|---|---|---|---|---|---|
+| `TW_PIPE=4` reorder, mem AUTO | 10 | 10 | 12 | 26 | 3157 | 2998.0 | 3481 | 1131 | **330.0** | 4 |
+| `TW_PIPE=3` reorder, mem AUTO | 10 | 10 | 12 | 26 | 3282 | 3125.7 | 3106 | 654 | **331.0** | 4 |
+| `TW_PIPE=4` no reorder, mem AUTO | 10 | 10 | 8 | 19 | 2987 | 2829.9 | 3063 | 886 | **337.6** | 6 |
+| `TW_PIPE=4` reorder, mem **DEFAULT** | 10 | 10 | 4 | 42 | 3322 | 3164.2 | 3086 | 603 | **362.2** | 6 |
+
+**Finding 1 — the DSP count is exactly the structure, and nothing else.** Two DSP
+blocks per complex multiply, in `sum_of_two_18x18` mode, which is what issue #9
+measured for `complex_multiplier` on its own. Ten for the 64-point block: two
+lanes × two twiddle multipliers, plus one merge multiplier, × 2. The
+radix-2² structure's whole point is that only every second butterfly needs a
+multiplier, and the count confirms it — a radix-2 SDF of the same size would
+need eight.
+
+**Finding 2 — the delay feedback is the FFT's critical path, and leaving its
+placement to the tool is the wrong answer.** At `mem AUTO` the Fitter puts a
+16-word by 32-bit feedback into an M20K, and the failing path is then *inside the
+M20K*, block register to block register:
+
+```text
+u_kernel|u_bf2i|u_dly|...|altera_syncram_impl1|ram_block2a0~reg0
+  ->     u_kernel|u_bf2i|u_dly|...|altera_syncram_impl1|ram_block2a12~reg0
+```
+
+Nothing downstream can fix that: the path is inside a hard block, so the
+Hyper-Retimer has nowhere to put a register, and the points duly report `Path
+Limit` (and, at the block level, once `Retiming Dependency Loop`). Forcing the
+line into LUT-RAM moves the critical path back into the fabric — MLAB output
+through the butterfly to the next feedback's write port — where it is at least
+the kind of path that pipelining can shorten.
+
+That is the measurement behind `fft_pkg`'s `"DEFAULT"` placement rule, and the
+seventh point measures the rule rather than inferring it from the stage: **330.0
+→ 362.2 MHz (+9.7%), M20K 12 → 4, at +165 ALMs and +16 MLABs.** The M20Ks that
+remain are the output and metadata FIFOs and the reorder banks, which are the
+places an M20K belongs.
+
+**Finding 3 — the twiddle multiplier's depth is currently irrelevant.**
+`TW_PIPE` 3 against 4 is 331.0 against 330.0 MHz at block level — a difference
+of 0.3%, i.e. noise — because the multiplier is nowhere near the critical path.
+At the stage level, where there is less else to be slow, 4 is 7 MHz better than
+3. `TW_PIPE = 4` stays the default, matching issue #9's measured choice, but the
+sweep says plainly that spending a cycle there buys nothing until finding 2's
+path is fixed.
+
+**Finding 4 — the bit-reversal reorder costs about what it looks like.**
+`REORDER = 1` against `0`, both at `mem AUTO`: +170 ALMs, +4 M20K, +7 MLAB and
+−7.6 MHz, plus one frame of latency. That is the number DECISIONS.md decision 9
+leaves for issue #15 to spend or not: if the corner turn can absorb the
+permutation in its own write addressing, this is what it saves.
+
+**Finding 5 — 450 MHz is not met, and the reason is identified rather than
+guessed.** The best point is 362.2 MHz against the SPEC §2 target of 450. The
+remaining critical path, with the memory placement fixed, is
+
+```text
+u_bf2i|dout_q.re[7]  ->  ... -> u_bf2ii|u_dly|...|lutrama26~reg0
+```
+
+— one butterfly's output register, through the trivial `-j`, the second
+butterfly's adder and its round-and-saturate, into the next delay line's write
+port: six logic levels, 1.564 ns of cell delay and 0.997 ns of routing. There is
+exactly one register between those two points, so the Hyper-Retimer has nothing
+to move and reports `Path Limit`.
+
+The structural answer is a register between the butterfly's quantisation and the
+feedback's write port, which deepens `fft_bf2` by one stage and moves the
+position/latency arithmetic in `fft_pkg` with it. That is a timing-closure change
+with a functional blast radius, and SPEC §20 has a procedure for exactly that
+kind of change — one hypothesis, the smallest defensible edit, correctness
+re-proven, then a compile. It is **not** made here: issue #11's remit is to
+produce the measurement that says which change to make, and this is it. The
+number to beat is 362.2 MHz, the path is named above, and the bit-exact model and
+the vector set are what will prove the change did not alter the transform.
