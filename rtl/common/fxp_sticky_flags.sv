@@ -35,20 +35,27 @@ module fxp_sticky_flags
     // all-ones is itself the diagnosis.
     parameter int unsigned COUNT_W = 32
 ) (
-    input  logic               clk,
-    input  logic               rst_n,
+    // `wire`, not `logic`, on every port. Quartus Prime Pro rejects an `input
+    // logic` port under `default_nettype none` ("net type must be explicitly
+    // specified"), which is how this was found: the polyphase bank (issue #10)
+    // is the first block to instantiate this module in a Quartus compile, and
+    // the eight-lane calibration point failed to elaborate. Every other module
+    // in the repository already declares `wire` ports; this one was the
+    // exception, and simulation had never noticed.
+    input  wire                clk,
+    input  wire                rst_n,
 
     // Synchronous clear of both the sticky flags and the counter.
-    input  logic               clear,
+    input  wire                clear,
 
     // Flags for the quantisation happening this cycle, qualified by `valid` so
     // that a combinational function of stale operands cannot be counted.
-    input  logic               valid,
-    input  fxp_flags_t         flags_in,
+    input  wire                valid,
+    input  wire fxp_flags_t    flags_in,
 
-    output fxp_flags_t         flags_sticky,
-    output logic               any_sticky,
-    output logic [COUNT_W-1:0] event_count
+    output wire fxp_flags_t    flags_sticky,
+    output wire                any_sticky,
+    output wire [COUNT_W-1:0]  event_count
 );
 
   fxp_flags_t         sticky_q;

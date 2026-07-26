@@ -117,6 +117,12 @@ module pfb_top
     output wire         unsafe_active_bank,
     output wire [63:0]  unsafe_coeff,
 
+    // ---- delay-line storage-style equivalence probe -------------------------
+    // 0 while the two lines have not filled, 1 once they have and have agreed on
+    // every enabled cycle since. Sticky low on any disagreement.
+    output wire         dl_probe_valid,
+    output wire         dl_probe_ok,
+
     // ---- geometry echo, checked by the test against its own mirror ----------
     output wire [7:0]   cfg_phases,
     output wire [7:0]   cfg_taps,
@@ -373,6 +379,78 @@ module pfb_top
       .core_swap_pending(u_core_pending_unused),
       .coeff_o          (unsafe_coeff)
   );
+
+  // ---------------------------------------------------------------------------
+  // Delay-line storage-style equivalence probe
+  //
+  // pfb_pkg's AUTO threshold resolves EVERY delay line in the datapath to a
+  // shift register at these geometries — correctly, because a FIR history is
+  // tapped at every stage and a metadata path is shallow. The memory form would
+  // therefore be code that no test ever runs, which is the same thing as code
+  // that does not work.
+  //
+  // So two lines of identical geometry, one forced to each style, are fed the
+  // live stream and compared on every enabled cycle once both have filled. A
+  // pure delay is a pure delay: if the M20K form's pointer arithmetic or its
+  // read-before-write ordering is wrong, this says so.
+  //
+  // 40 deep and 32 bits wide: past PFB_MEM_MIN_DEPTH but only 1280 bits, so AUTO
+  // would still choose SRL. The MEM instance is therefore also a test that an
+  // EXPLICIT style override is honoured.
+  // ---------------------------------------------------------------------------
+  localparam int unsigned DL_PROBE_W     = 32;
+  localparam int unsigned DL_PROBE_DEPTH = 40;
+
+  logic dl_en;
+  assign dl_en = s_valid && s_ready;
+
+  logic [DL_PROBE_W-1:0] dl_srl_q, dl_mem_q;
+  logic [DL_PROBE_W-1:0] dl_srl_taps_unused, dl_mem_taps_unused;
+
+  delay_line #(
+      .WIDTH (DL_PROBE_W), .N_TAPS (1), .TAP_STRIDE (DL_PROBE_DEPTH),
+      .STYLE ("SRL")
+  ) u_dl_srl (
+      .clk (clk), .en (dl_en), .d (s_data[DL_PROBE_W-1:0]),
+      .taps (dl_srl_taps_unused), .q (dl_srl_q));
+
+  delay_line #(
+      .WIDTH (DL_PROBE_W), .N_TAPS (1), .TAP_STRIDE (DL_PROBE_DEPTH),
+      .STYLE ("MEM")
+  ) u_dl_mem (
+      .clk (clk), .en (dl_en), .d (s_data[DL_PROBE_W-1:0]),
+      .taps (dl_mem_taps_unused), .q (dl_mem_q));
+
+  localparam int unsigned DL_CNT_W = $clog2(DL_PROBE_DEPTH + 1);
+  logic [DL_CNT_W-1:0] dl_fill_q;
+  logic                dl_ok_q;
+
+  always_ff @(posedge clk) begin
+    if (!rst_n) begin
+      dl_fill_q <= '0;
+      dl_ok_q   <= 1'b1;
+    end else begin
+      if (dl_en && (dl_fill_q != DL_CNT_W'(DL_PROBE_DEPTH))) begin
+        dl_fill_q <= dl_fill_q + DL_CNT_W'(1);
+      end
+      if ((dl_fill_q == DL_CNT_W'(DL_PROBE_DEPTH)) && (dl_srl_q != dl_mem_q)) begin
+        dl_ok_q <= 1'b0;
+      end
+    end
+  end
+
+  assign dl_probe_valid = (dl_fill_q == DL_CNT_W'(DL_PROBE_DEPTH));
+  assign dl_probe_ok    = dl_ok_q;
+
+`ifndef SYNTHESIS
+  always_ff @(posedge clk) begin
+    if (rst_n && dl_probe_valid) begin
+      a_dl_styles_agree : assert (dl_srl_q == dl_mem_q)
+        else $error("delay_line: the SRL and MEM forms disagree at depth %0d (srl=%h mem=%h)",
+                    DL_PROBE_DEPTH, dl_srl_q, dl_mem_q);
+    end
+  end
+`endif
 
   // ---------------------------------------------------------------------------
   // Geometry echo

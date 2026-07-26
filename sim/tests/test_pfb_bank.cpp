@@ -1393,6 +1393,21 @@ int harness::sim_test_main(const SimArgs& args) {
     flag_union |= sticky;
   }
 
+  // ---- delay-line storage-style equivalence -------------------------------
+  // pfb_top runs two lines of identical geometry, one forced to each storage
+  // style, off the live stream. The RTL asserts their agreement every cycle; the
+  // check here is that the probe actually FILLED, so a probe that never saw
+  // enough beats is a failure rather than a silent pass.
+  settle(top.get());
+  if (top->dl_probe_valid == 0) {
+    report(&errors, "coverage", &counters.coverage,
+           "the delay-line style probe never filled; the SRL/MEM equivalence "
+           "check would have passed vacuously");
+  } else if (top->dl_probe_ok == 0) {
+    report(&errors, "rtl_vs_model", &counters.rtl_vs_model,
+           "the SRL and MEM delay-line forms disagreed");
+  }
+
   // ---- coverage audit ------------------------------------------------------
   // Both saturation directions must have been observed. A saturation test that
   // never saturates passes vacuously.
@@ -1464,6 +1479,9 @@ int harness::sim_test_main(const SimArgs& args) {
               frames_checked);
   std::printf("  saturation seen  : %s\n", flags_str(flag_union).c_str());
   std::printf("  swap assertion   : %zu expected fire(s)\n", assertion_fires);
+  std::printf("  delay-line probe : SRL vs MEM %s\n",
+              top->dl_probe_valid == 0 ? "NEVER FILLED"
+                                       : (top->dl_probe_ok ? "agree" : "DISAGREE"));
   std::printf("  RTL vs model     : %zu\n", counters.rtl_vs_model);
   std::printf("  model vs vectors : %zu\n", counters.model_vs_vector);
   std::printf("  RTL vs vectors   : %zu\n", counters.rtl_vs_vector);
