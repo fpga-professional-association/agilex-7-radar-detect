@@ -150,21 +150,52 @@ module reg_block_coeff
   assign data_write = sel && write_enable &&
                       (index == IDX_W'(REGMAP_COEFF_COEFF_DATA_INDEX));
 
-  logic        wr_valid_q;
-  logic        wr_bank_q;
-  logic [15:0] wr_index_q;
-  logic [31:0] wr_data_q;
-
-  // The index the transfer carries is the one in force WHEN THE DATA IS
-  // WRITTEN, captured here rather than read from the register afterwards: with
-  // AUTO_INC set, the register has already moved on by the time a consumer
-  // could sample it.
+  // ---------------------------------------------------------------------------
+  // The live coefficient index, and AUTO_INC
+  //
+  // Kept HERE rather than in the CSR storage, because reg_csr_block has no
+  // hardware-write path into an RW field and giving it one would hand every RW
+  // register in the design a side channel. The rule is therefore explicit and is
+  // stated in COEFF_ADDR's description:
+  //
+  //     COEFF_ADDR.INDEX reads back the last value SOFTWARE wrote. The LIVE
+  //     index — the one a transfer carries — is this register, which is loaded
+  //     from every COEFF_ADDR write and advances after every accepted
+  //     COEFF_DATA write while AUTO_INC is set.
+  //
+  // The transfer carries the index in force WHEN THE DATA WAS WRITTEN, captured
+  // below, so the increment cannot race the transfer it belongs to.
+  // ---------------------------------------------------------------------------
   wire [31:0] addr_reg = csr_i[REGMAP_COEFF_COEFF_ADDR_INDEX*32 +: 32];
   wire [31:0] ctrl_reg = csr_i[REGMAP_COEFF_COEFF_CTRL_INDEX*32 +: 32];
 
   wire        auto_inc = addr_reg[REGMAP_COEFF_COEFF_ADDR_AUTO_INC_LSB];
-  wire [15:0] cur_index = addr_reg[REGMAP_COEFF_COEFF_ADDR_INDEX_LSB +: 16];
-  wire        cur_bank  = ctrl_reg[REGMAP_COEFF_COEFF_CTRL_BANK_SEL_LSB];
+  wire        cur_bank = ctrl_reg[REGMAP_COEFF_COEFF_CTRL_BANK_SEL_LSB];
+
+  logic addr_write;
+  assign addr_write = sel && write_enable &&
+                      (index == IDX_W'(REGMAP_COEFF_COEFF_ADDR_INDEX));
+
+  logic [15:0] index_q;
+
+  always_ff @(posedge clk) begin
+    if (!rst_n) begin
+      index_q <= 16'd0;
+    end else if (addr_write) begin
+      // A software write always wins: it is the only way to restart a load.
+      index_q <= write_data[REGMAP_COEFF_COEFF_ADDR_INDEX_LSB +: 16];
+    end else if (data_write && auto_inc) begin
+      index_q <= index_q + 16'd1;
+    end
+  end
+
+  // ---------------------------------------------------------------------------
+  // The transfer
+  // ---------------------------------------------------------------------------
+  logic        wr_valid_q;
+  logic        wr_bank_q;
+  logic [15:0] wr_index_q;
+  logic [31:0] wr_data_q;
 
   always_ff @(posedge clk) begin
     if (!rst_n) begin
@@ -177,7 +208,7 @@ module reg_block_coeff
   always_ff @(posedge clk) begin
     if (data_write) begin
       wr_bank_q  <= cur_bank;
-      wr_index_q <= cur_index;
+      wr_index_q <= index_q;
       wr_data_q  <= write_data;
     end
   end
@@ -195,22 +226,6 @@ module reg_block_coeff
       pulse_i[REGMAP_COEFF_COEFF_CTRL_INDEX*32 +
               REGMAP_COEFF_COEFF_CTRL_STATUS_CLEAR_LSB];
 
-  // ---------------------------------------------------------------------------
-  // AUTO_INC. Written here rather than inside reg_csr_block because it is the
-  // one place in the register plane where hardware modifies a software-writable
-  // field, and putting it in the generic engine would give every RW register a
-  // side channel. The increment is applied by driving the register's own write
-  // port on the cycle after the data write; see the note in the header about why
-  // the transfer carries the pre-increment index.
-  //
-  // NOTE (issue #10): the increment itself is delivered by the integration that
-  // wires this block to a live coefficient bank (issue #17). Until then AUTO_INC
-  // is storage that reads back what software wrote, `auto_inc` is exported so
-  // the consumer can act on it, and software loads a bank by writing COEFF_ADDR
-  // per coefficient. Making the CSR engine self-modify is a change to a shared
-  // primitive and does not belong in the issue that first needs it.
-  // ---------------------------------------------------------------------------
-
 `ifndef SYNTHESIS
   // The transfer strobe must be one cycle wide and must follow a data write.
   // Both are structural above; asserted so a future edit cannot quietly widen
@@ -219,8 +234,12 @@ module reg_block_coeff
     if (rst_n) begin
       a_coeff_wr_valid_follows_write : assert (!wr_valid_q || $past(data_write))
         else $error("reg_block_coeff: wr_valid without a preceding COEFF_DATA write");
-      a_coeff_auto_inc_readable : assert (auto_inc === 1'b0 || auto_inc === 1'b1)
-        else $error("reg_block_coeff: AUTO_INC is not a defined bit");
+      // The live index advances only on an accepted data write with AUTO_INC
+      // set, or on a software address write. Anything else moving it would make
+      // a bank load silently skip or repeat a coefficient.
+      a_coeff_index_moves_only_on_purpose : assert (
+          $stable(index_q) || $past(addr_write) || ($past(data_write) && $past(auto_inc)))
+        else $error("reg_block_coeff: the live coefficient index moved without a write");
     end
   end
 `endif

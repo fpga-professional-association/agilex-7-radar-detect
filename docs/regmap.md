@@ -339,7 +339,7 @@ Coefficient and weight programming with double buffering and an active-bank sele
 | Bits | Field | Access | Reset | Source | Description |
 |---|---|---|---|---|---|
 | `15:0` | `INDEX` | RW | `0x0` | — | Coefficient index. 16 bits covers 8 phases x 16 taps across 16 antennas with room to spare; an index beyond the elaborated bank is dropped and raises WR_REJECT. |
-| `31` | `AUTO_INC` | RW | `0x1` | — | When 1, INDEX advances by one after every accepted COEFF_DATA write, so a whole bank is loaded by writing COEFF_ADDR once and COEFF_DATA repeatedly. |
+| `31` | `AUTO_INC` | RW | `0x1` | — | When 1, the LIVE index advances by one after every accepted COEFF_DATA write, so a whole bank is loaded by writing COEFF_ADDR once and COEFF_DATA repeatedly. Note that INDEX above reads back the last value SOFTWARE wrote, not the live index: reg_csr_block has no hardware-write path into an RW field, and giving it one would hand every RW register in the design a side channel. The live index lives in rtl/control/reg_block_coeff.sv, is reloaded by any COEFF_ADDR write, and is what a transfer carries. |
 
 ### `COEFF.COEFF_DATA` — `0x5008`
 

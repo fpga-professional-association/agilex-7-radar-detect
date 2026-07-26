@@ -879,8 +879,13 @@ package regmap_pkg;
   //       room to spare; an index beyond the elaborated bank is dropped and raises
   //       WR_REJECT.
   //   [31:31] AUTO_INC (RW)
-  //       When 1, INDEX advances by one after every accepted COEFF_DATA write, so a
-  //       whole bank is loaded by writing COEFF_ADDR once and COEFF_DATA repeatedly.
+  //       When 1, the LIVE index advances by one after every accepted COEFF_DATA write,
+  //       so a whole bank is loaded by writing COEFF_ADDR once and COEFF_DATA
+  //       repeatedly. Note that INDEX above reads back the last value SOFTWARE wrote,
+  //       not the live index: reg_csr_block has no hardware-write path into an RW
+  //       field, and giving it one would hand every RW register in the design a side
+  //       channel. The live index lives in rtl/control/reg_block_coeff.sv, is reloaded
+  //       by any COEFF_ADDR write, and is what a transfer carries.
   localparam int unsigned REGMAP_COEFF_COEFF_ADDR_INDEX = 1;
   localparam logic [REGMAP_ADDR_W-1:0] REGMAP_COEFF_COEFF_ADDR_ADDR = 16'h5004;
   localparam int unsigned REGMAP_COEFF_COEFF_ADDR_INDEX_LSB = 0;
