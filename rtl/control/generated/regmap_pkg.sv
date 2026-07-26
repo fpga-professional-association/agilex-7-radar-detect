@@ -22,22 +22,23 @@ package regmap_pkg;
   localparam int unsigned REGMAP_WINDOW_BYTES = 4096;
   localparam int unsigned REGMAP_WINDOW_W = 12;
   localparam int unsigned REGMAP_N_BLOCKS = 10;
-  localparam int unsigned REGMAP_N_BLOCKS_IMPL = 8;
-  localparam int unsigned REGMAP_N_REGS_TOTAL = 60;
-  localparam logic [31:0] REGMAP_BLOCK_MASK = 32'h000002BF;
+  localparam int unsigned REGMAP_N_BLOCKS_IMPL = 9;
+  localparam int unsigned REGMAP_N_REGS_TOTAL = 69;
+  localparam logic [31:0] REGMAP_BLOCK_MASK = 32'h000002FF;
 
   // ---- implemented block windows, in fabric port order ----
   // The fabric decodes one master port onto these windows; index i here is index i
   // on every per-block port array of rtl/control/reg_fabric.sv.
-  localparam logic [REGMAP_N_BLOCKS_IMPL*REGMAP_ADDR_W-1:0] REGMAP_IMPL_BASE = {16'h9000, 16'h7000, 16'h5000, 16'h4000, 16'h3000, 16'h2000, 16'h1000, 16'h0000};
+  localparam logic [REGMAP_N_BLOCKS_IMPL*REGMAP_ADDR_W-1:0] REGMAP_IMPL_BASE = {16'h9000, 16'h7000, 16'h6000, 16'h5000, 16'h4000, 16'h3000, 16'h2000, 16'h1000, 16'h0000};
   //   [0] id            base 0x0000  4 registers
   //   [1] build_params  base 0x1000  12 registers
   //   [2] ctrl          base 0x2000  4 registers
   //   [3] fault         base 0x3000  4 registers
   //   [4] scratch       base 0x4000  4 registers
   //   [5] coeff         base 0x5000  4 registers
-  //   [6] counters      base 0x7000  21 registers
-  //   [7] covar         base 0x9000  7 registers
+  //   [6] cfar          base 0x6000  9 registers
+  //   [7] counters      base 0x7000  21 registers
+  //   [8] covar         base 0x9000  7 registers
 
   // -------------------------------------------------------------------------
   // Block 0: id — implemented
@@ -129,9 +130,9 @@ package regmap_pkg;
 
   // reset value of the stored bits
   localparam logic [REGMAP_ID_N_REGS*32-1:0] REGMAP_ID_RESET = {
-      32'h000002BF,  // [3]
-      32'h10203C0A,  // [2]
-      32'h01030001,  // [1]
+      32'h000002FF,  // [3]
+      32'h1020450A,  // [2]
+      32'h01040001,  // [1]
       32'h52414441  // [0]
   };
   // bits a software write may set or clear (RW)
@@ -1004,15 +1005,339 @@ package regmap_pkg;
   };
 
   // -------------------------------------------------------------------------
-  // Block 6: cfar — PLANNED (#14, #16)
-  // SPEC 9 groups: CFAR settings; Integration settings
-  // PLANNED. CFAR guard/training geometry and threshold scaling, plus coherent and
-  // non-coherent integration settings.
+  // Block 6: cfar — implemented
+  // SPEC 9 groups: CFAR settings
+  // Settings for the SPEC 7.7 one-dimensional CFAR detector over frequency bins
+  // (rtl/cfar/, issue #14): the detection mode, the guard and reference cell counts on
+  // each side independently, the threshold multiplier, the output mode, and the
+  // detection/suppression accounting coming back the other way. EVERYTHING WRITABLE
+  // HERE TAKES EFFECT AT A FRAME BOUNDARY AND ONLY THERE. rtl/cfar/cfar_core.sv latches
+  // the whole window into an active copy at the admitted start-of-frame beat, so a
+  // frame is always processed under exactly one geometry - which is the only way its
+  // suppression count, its detection count and the alpha carried in its events mean
+  // anything. CFAR_STATUS.CFG_PENDING reports that a write has not been taken yet, so
+  // software watches the change retire rather than inferring it. A guard or reference
+  // count above the elaborated maximum is CLAMPED to that maximum and raises
+  // CFAR_FAULT.CFG_CLAMPED; out of range is defined rather than undefined, because a
+  // register plane can be programmed with anything. The elaborated maxima themselves
+  // are reported in CFAR_STATUS so software sizes its programming without a compiled-in
+  // constant. Note that issue #16 was expected to add coherent and non-coherent
+  // integration settings to this window; the SPEC 9 group 'Integration settings' is
+  // implemented by the covariance window at 0x9000 (issue #13), so this window claims
+  // only 'CFAR settings'.
   // -------------------------------------------------------------------------
   localparam logic [REGMAP_ADDR_W-1:0] REGMAP_CFAR_BASE = 16'h6000;
   localparam int unsigned REGMAP_CFAR_SIZE = 4096;
-  localparam int unsigned REGMAP_CFAR_N_REGS = 0;
-  // No registers in this build: every access to 0x6000..0x6FFF returns error=1.
+  localparam int unsigned REGMAP_CFAR_N_REGS = 9;
+  localparam int unsigned REGMAP_CFAR_INDEX = 6;  // fabric port index
+
+  // CFAR_CTRL @ 0x6000 (MIXED)
+  //   Master controls. STATUS_CLEAR is write-1-pulse and reads back zero, because it is
+  //   an event rather than a mode.
+  //   [0:0] ENABLE (RW)
+  //       Detection enable. Cleared, every bin is reported SUPPRESSED and no detection
+  //       is raised - the same path an incomplete window takes, so there is one
+  //       suppression rule and one counter rather than two. Resets to 0: a detector
+  //       that powers up detecting would flood the packet network before software had
+  //       configured a threshold.
+  //   [5:4] MODE (RW)
+  //       0: cell averaging, the noise estimate is the mean of ALL reference cells. 1:
+  //       greatest-of, the noise estimate is the larger of the two one-sided means. 2
+  //       and 3 are reserved; ordered-statistics CFAR needs a rank-order network rather
+  //       than a sum and is not implemented (SPEC 7.7 lists it as optional).
+  //       Greatest-of requires a non-zero reference count on BOTH sides; cell averaging
+  //       requires only that their sum be non-zero. A mode whose reference geometry is
+  //       unusable suppresses every bin and raises CFAR_FAULT.NO_REF.
+  //   [8:8] OUT_MODE (RW)
+  //       0: EVENTS - the output stream carries only the bins that detected, plus one
+  //       end-of-frame summary per input frame. 1: DENSE - every bin is reported
+  //       (detected, evaluated-and-not-detected, or suppressed) plus the same summary.
+  //       DENSE is the debug and snapshot mode: it makes the whole per-bin decision
+  //       observable without a second data path, at the cost of one output beat per
+  //       bin.
+  //   [16:16] STATUS_CLEAR (RWP)
+  //       Writing 1 clears the sticky CFAR_FAULT bits and zeroes CFAR_DET_COUNT,
+  //       CFAR_SUP_COUNT and CFAR_FRAME_COUNT. A fault raised in the same cycle as the
+  //       clear survives it, which is what stops a read-then-clear from losing an
+  //       event.
+  localparam int unsigned REGMAP_CFAR_CFAR_CTRL_INDEX = 0;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_CFAR_CFAR_CTRL_ADDR = 16'h6000;
+  localparam int unsigned REGMAP_CFAR_CFAR_CTRL_ENABLE_LSB = 0;
+  localparam int unsigned REGMAP_CFAR_CFAR_CTRL_ENABLE_WIDTH = 1;
+  localparam logic [31:0] REGMAP_CFAR_CFAR_CTRL_ENABLE_MASK = 32'h00000001;
+  localparam int unsigned REGMAP_CFAR_CFAR_CTRL_MODE_LSB = 4;
+  localparam int unsigned REGMAP_CFAR_CFAR_CTRL_MODE_WIDTH = 2;
+  localparam logic [31:0] REGMAP_CFAR_CFAR_CTRL_MODE_MASK = 32'h00000030;
+  localparam int unsigned REGMAP_CFAR_CFAR_CTRL_OUT_MODE_LSB = 8;
+  localparam int unsigned REGMAP_CFAR_CFAR_CTRL_OUT_MODE_WIDTH = 1;
+  localparam logic [31:0] REGMAP_CFAR_CFAR_CTRL_OUT_MODE_MASK = 32'h00000100;
+  localparam int unsigned REGMAP_CFAR_CFAR_CTRL_STATUS_CLEAR_LSB = 16;
+  localparam int unsigned REGMAP_CFAR_CFAR_CTRL_STATUS_CLEAR_WIDTH = 1;
+  localparam logic [31:0] REGMAP_CFAR_CFAR_CTRL_STATUS_CLEAR_MASK = 32'h00010000;
+
+  // CFAR_WINDOW @ 0x6004 (RW)
+  //   Guard and reference cell counts, LEADING (higher frequency) and LAGGING (lower
+  //   frequency) sides independently. The reference cells of a side start immediately
+  //   beyond that side's guard cells. The first and last (guard + reference) bins of
+  //   every frame have an incomplete window and are suppressed, which at a 64-bin frame
+  //   with 2 guard and 8 reference cells is 20 of 64 bins - the reason these are
+  //   runtime registers rather than compile-time constants.
+  //   [4:0] GUARD_LEAD (RW)
+  //       Guard cells between the cell under test and the leading reference band. Zero
+  //       is legal and means the reference cells start in the adjacent bin.
+  //   [12:8] GUARD_LAG (RW)
+  //       Guard cells on the lagging side.
+  //   [21:16] REF_LEAD (RW)
+  //       Leading reference cells. Zero is legal in cell-averaging mode (a one-sided
+  //       estimator) and is not in greatest-of mode.
+  //   [29:24] REF_LAG (RW)
+  //       Lagging reference cells.
+  localparam int unsigned REGMAP_CFAR_CFAR_WINDOW_INDEX = 1;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_CFAR_CFAR_WINDOW_ADDR = 16'h6004;
+  localparam int unsigned REGMAP_CFAR_CFAR_WINDOW_GUARD_LEAD_LSB = 0;
+  localparam int unsigned REGMAP_CFAR_CFAR_WINDOW_GUARD_LEAD_WIDTH = 5;
+  localparam logic [31:0] REGMAP_CFAR_CFAR_WINDOW_GUARD_LEAD_MASK = 32'h0000001F;
+  localparam int unsigned REGMAP_CFAR_CFAR_WINDOW_GUARD_LAG_LSB = 8;
+  localparam int unsigned REGMAP_CFAR_CFAR_WINDOW_GUARD_LAG_WIDTH = 5;
+  localparam logic [31:0] REGMAP_CFAR_CFAR_WINDOW_GUARD_LAG_MASK = 32'h00001F00;
+  localparam int unsigned REGMAP_CFAR_CFAR_WINDOW_REF_LEAD_LSB = 16;
+  localparam int unsigned REGMAP_CFAR_CFAR_WINDOW_REF_LEAD_WIDTH = 6;
+  localparam logic [31:0] REGMAP_CFAR_CFAR_WINDOW_REF_LEAD_MASK = 32'h003F0000;
+  localparam int unsigned REGMAP_CFAR_CFAR_WINDOW_REF_LAG_LSB = 24;
+  localparam int unsigned REGMAP_CFAR_CFAR_WINDOW_REF_LAG_WIDTH = 6;
+  localparam logic [31:0] REGMAP_CFAR_CFAR_WINDOW_REF_LAG_MASK = 32'h3F000000;
+
+  // CFAR_THRESHOLD @ 0x6008 (RW)
+  //   The programmable threshold multiplier (SPEC 7.7). A bin detects when its power
+  //   strictly exceeds ALPHA times the mean of its reference cells; the detector never
+  //   divides, comparing cell*N*2^F against ALPHA*sum instead, so the decision is an
+  //   exact integer inequality with no rounding and no tolerance.
+  //   [15:0] ALPHA (RW)
+  //       Threshold multiplier in UNSIGNED Q8.8: 8 integer bits and 8 fractional bits,
+  //       covering [0, 255.996] in steps of 1/256. NOT Q1.15 - the SPEC 6 sample format
+  //       cannot represent a value above 1, and the textbook cell-averaging design
+  //       point alpha = N*(Pfa^(-1/N) - 1) is about 21.9 for 16 reference cells at Pfa
+  //       = 1e-6. The reset value 0x1400 is exactly 20.0, close to that design point.
+  //       0x0100 is exactly 1.0, at which a perfectly flat spectrum detects nothing
+  //       because the comparison is strict; alpha below 1.0 is legal and is the
+  //       cheapest way for a test to force detections everywhere.
+  localparam int unsigned REGMAP_CFAR_CFAR_THRESHOLD_INDEX = 2;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_CFAR_CFAR_THRESHOLD_ADDR = 16'h6008;
+  localparam int unsigned REGMAP_CFAR_CFAR_THRESHOLD_ALPHA_LSB = 0;
+  localparam int unsigned REGMAP_CFAR_CFAR_THRESHOLD_ALPHA_WIDTH = 16;
+  localparam logic [31:0] REGMAP_CFAR_CFAR_THRESHOLD_ALPHA_MASK = 32'h0000FFFF;
+
+  // CFAR_STATUS @ 0x600C (ROHW)
+  //   Hardware-driven status. The geometry fields let software size its programming
+  //   without compiled-in constants, exactly as the build-parameter block does for the
+  //   rest of the design.
+  //   [7:0] MAX_GUARD (ROHW)
+  //       Elaborated maximum guard-cell count per side. A larger value written to
+  //       CFAR_WINDOW is clamped to this.
+  //   [15:8] MAX_REF (ROHW)
+  //       Elaborated maximum reference-cell count per side.
+  //   [23:16] ALPHA_FRAC_W (ROHW)
+  //       Fractional bits in CFAR_THRESHOLD.ALPHA, so software converts a real-valued
+  //       multiplier without a compiled-in scale factor.
+  //   [24:24] CFG_PENDING (ROHW)
+  //       The register values differ from the active copy: a write is waiting for the
+  //       next frame boundary. Clears when the frame that takes it starts.
+  //   [25:25] FRAME_OPEN (ROHW)
+  //       A frame is in flight (being consumed, flushed, or summarised). A write issued
+  //       while this is clear takes effect on the next frame with no wait.
+  localparam int unsigned REGMAP_CFAR_CFAR_STATUS_INDEX = 3;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_CFAR_CFAR_STATUS_ADDR = 16'h600C;
+  localparam int unsigned REGMAP_CFAR_CFAR_STATUS_MAX_GUARD_LSB = 0;
+  localparam int unsigned REGMAP_CFAR_CFAR_STATUS_MAX_GUARD_WIDTH = 8;
+  localparam logic [31:0] REGMAP_CFAR_CFAR_STATUS_MAX_GUARD_MASK = 32'h000000FF;
+  localparam int unsigned REGMAP_CFAR_CFAR_STATUS_MAX_REF_LSB = 8;
+  localparam int unsigned REGMAP_CFAR_CFAR_STATUS_MAX_REF_WIDTH = 8;
+  localparam logic [31:0] REGMAP_CFAR_CFAR_STATUS_MAX_REF_MASK = 32'h0000FF00;
+  localparam int unsigned REGMAP_CFAR_CFAR_STATUS_ALPHA_FRAC_W_LSB = 16;
+  localparam int unsigned REGMAP_CFAR_CFAR_STATUS_ALPHA_FRAC_W_WIDTH = 8;
+  localparam logic [31:0] REGMAP_CFAR_CFAR_STATUS_ALPHA_FRAC_W_MASK = 32'h00FF0000;
+  localparam int unsigned REGMAP_CFAR_CFAR_STATUS_CFG_PENDING_LSB = 24;
+  localparam int unsigned REGMAP_CFAR_CFAR_STATUS_CFG_PENDING_WIDTH = 1;
+  localparam logic [31:0] REGMAP_CFAR_CFAR_STATUS_CFG_PENDING_MASK = 32'h01000000;
+  localparam int unsigned REGMAP_CFAR_CFAR_STATUS_FRAME_OPEN_LSB = 25;
+  localparam int unsigned REGMAP_CFAR_CFAR_STATUS_FRAME_OPEN_WIDTH = 1;
+  localparam logic [31:0] REGMAP_CFAR_CFAR_STATUS_FRAME_OPEN_MASK = 32'h02000000;
+
+  // CFAR_GEOMETRY @ 0x6010 (ROHW)
+  //   Widths of the detection-event format, reported by hardware so a consumer of the
+  //   SPEC 7.8 packet network can parse events without a build-time header.
+  //   [15:0] EVENT_W (ROHW)
+  //       Total width of a packed detection event in bits. Configuration-independent by
+  //       construction: every field of the event format is a constant of
+  //       rtl/packages/cfar_pkg.sv, none is an elaboration parameter, because a packet
+  //       format that changed with the FFT size would have to be renegotiated at every
+  //       SPEC 11 size.
+  //   [23:16] POWER_W (ROHW)
+  //       Width of the cell-power field, which is SPEC 3 POWER_W.
+  //   [31:24] SUM_W (ROHW)
+  //       Width of the reference-sum field. The noise estimate is reported as the SUM
+  //       and the COUNT rather than as their quotient, because the detector never
+  //       divides and adding a divider to fill in a metadata field would put the only
+  //       inexact operation in the block on the reporting path.
+  localparam int unsigned REGMAP_CFAR_CFAR_GEOMETRY_INDEX = 4;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_CFAR_CFAR_GEOMETRY_ADDR = 16'h6010;
+  localparam int unsigned REGMAP_CFAR_CFAR_GEOMETRY_EVENT_W_LSB = 0;
+  localparam int unsigned REGMAP_CFAR_CFAR_GEOMETRY_EVENT_W_WIDTH = 16;
+  localparam logic [31:0] REGMAP_CFAR_CFAR_GEOMETRY_EVENT_W_MASK = 32'h0000FFFF;
+  localparam int unsigned REGMAP_CFAR_CFAR_GEOMETRY_POWER_W_LSB = 16;
+  localparam int unsigned REGMAP_CFAR_CFAR_GEOMETRY_POWER_W_WIDTH = 8;
+  localparam logic [31:0] REGMAP_CFAR_CFAR_GEOMETRY_POWER_W_MASK = 32'h00FF0000;
+  localparam int unsigned REGMAP_CFAR_CFAR_GEOMETRY_SUM_W_LSB = 24;
+  localparam int unsigned REGMAP_CFAR_CFAR_GEOMETRY_SUM_W_WIDTH = 8;
+  localparam logic [31:0] REGMAP_CFAR_CFAR_GEOMETRY_SUM_W_MASK = 32'hFF000000;
+
+  // CFAR_DET_COUNT @ 0x6014 (ROHW)
+  //   Detections raised since the last CFAR_CTRL.STATUS_CLEAR. Saturates at all-ones
+  //   rather than wrapping: a wrapped counter can read zero on a detector that is
+  //   firing continuously, which is the one reading that must never be produced.
+  //   [31:0] VALUE (ROHW)
+  //       Detection count.
+  localparam int unsigned REGMAP_CFAR_CFAR_DET_COUNT_INDEX = 5;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_CFAR_CFAR_DET_COUNT_ADDR = 16'h6014;
+  localparam int unsigned REGMAP_CFAR_CFAR_DET_COUNT_VALUE_LSB = 0;
+  localparam int unsigned REGMAP_CFAR_CFAR_DET_COUNT_VALUE_WIDTH = 32;
+  localparam logic [31:0] REGMAP_CFAR_CFAR_DET_COUNT_VALUE_MASK = 32'hFFFFFFFF;
+
+  // CFAR_SUP_COUNT @ 0x6018 (ROHW)
+  //   Bins suppressed since the last CFAR_CTRL.STATUS_CLEAR: incomplete window at a
+  //   frame edge, block disabled, or an unusable reference geometry. SPEC 7.7 requires
+  //   suppression under invalid or incomplete windows; this is the number that makes it
+  //   visible rather than silent. Saturating, for the reason CFAR_DET_COUNT is.
+  //   [31:0] VALUE (ROHW)
+  //       Suppressed-bin count.
+  localparam int unsigned REGMAP_CFAR_CFAR_SUP_COUNT_INDEX = 6;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_CFAR_CFAR_SUP_COUNT_ADDR = 16'h6018;
+  localparam int unsigned REGMAP_CFAR_CFAR_SUP_COUNT_VALUE_LSB = 0;
+  localparam int unsigned REGMAP_CFAR_CFAR_SUP_COUNT_VALUE_WIDTH = 32;
+  localparam logic [31:0] REGMAP_CFAR_CFAR_SUP_COUNT_VALUE_MASK = 32'hFFFFFFFF;
+
+  // CFAR_FAULT @ 0x601C (W1C)
+  //   Sticky fault bits, write 1 to clear; also cleared by CFAR_CTRL.STATUS_CLEAR.
+  //   Every one of these is a condition the detector handles deterministically rather
+  //   than a condition it fails on - the bit exists so that the handling is visible
+  //   instead of plausible.
+  //   [0:0] CFG_CLAMPED (W1C)
+  //       A guard or reference count written above the elaborated maximum was clamped
+  //       to it when the frame latched.
+  //   [1:1] NEG_INPUT (W1C)
+  //       An input cell arrived with its sign bit set. A negative integrated power is
+  //       not physical; it is clamped to zero so that every width downstream is an
+  //       honest magnitude, and flagged here because it can only be an upstream defect
+  //       or a cross-power stream wired to the detector by mistake.
+  //   [2:2] ORPHAN_BEAT (W1C)
+  //       A beat arrived between frames without start_of_frame. It has no defined bin
+  //       index, so it is consumed and discarded rather than stalled: a stalled
+  //       detector backs pressure into the FFT.
+  //   [3:3] SOF_IN_FRAME (W1C)
+  //       start_of_frame was asserted on a beat that is not a frame's first. The bit is
+  //       IGNORED and the beat is treated as an ordinary bin; the source is violating
+  //       SPEC 5.
+  //   [4:4] NO_REF (W1C)
+  //       A frame ran with a reference geometry the selected mode cannot use - zero
+  //       reference cells in cell-averaging mode, or a zero count on either side in
+  //       greatest-of mode. Every bin of that frame is suppressed.
+  //   [5:5] BIN_OVERFLOW (W1C)
+  //       A frame ran past 65535 bins, so the bin index saturated rather than wrapping.
+  //       A wrapped index would put two different frequencies in one detection event.
+  localparam int unsigned REGMAP_CFAR_CFAR_FAULT_INDEX = 7;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_CFAR_CFAR_FAULT_ADDR = 16'h601C;
+  localparam int unsigned REGMAP_CFAR_CFAR_FAULT_CFG_CLAMPED_LSB = 0;
+  localparam int unsigned REGMAP_CFAR_CFAR_FAULT_CFG_CLAMPED_WIDTH = 1;
+  localparam logic [31:0] REGMAP_CFAR_CFAR_FAULT_CFG_CLAMPED_MASK = 32'h00000001;
+  localparam int unsigned REGMAP_CFAR_CFAR_FAULT_NEG_INPUT_LSB = 1;
+  localparam int unsigned REGMAP_CFAR_CFAR_FAULT_NEG_INPUT_WIDTH = 1;
+  localparam logic [31:0] REGMAP_CFAR_CFAR_FAULT_NEG_INPUT_MASK = 32'h00000002;
+  localparam int unsigned REGMAP_CFAR_CFAR_FAULT_ORPHAN_BEAT_LSB = 2;
+  localparam int unsigned REGMAP_CFAR_CFAR_FAULT_ORPHAN_BEAT_WIDTH = 1;
+  localparam logic [31:0] REGMAP_CFAR_CFAR_FAULT_ORPHAN_BEAT_MASK = 32'h00000004;
+  localparam int unsigned REGMAP_CFAR_CFAR_FAULT_SOF_IN_FRAME_LSB = 3;
+  localparam int unsigned REGMAP_CFAR_CFAR_FAULT_SOF_IN_FRAME_WIDTH = 1;
+  localparam logic [31:0] REGMAP_CFAR_CFAR_FAULT_SOF_IN_FRAME_MASK = 32'h00000008;
+  localparam int unsigned REGMAP_CFAR_CFAR_FAULT_NO_REF_LSB = 4;
+  localparam int unsigned REGMAP_CFAR_CFAR_FAULT_NO_REF_WIDTH = 1;
+  localparam logic [31:0] REGMAP_CFAR_CFAR_FAULT_NO_REF_MASK = 32'h00000010;
+  localparam int unsigned REGMAP_CFAR_CFAR_FAULT_BIN_OVERFLOW_LSB = 5;
+  localparam int unsigned REGMAP_CFAR_CFAR_FAULT_BIN_OVERFLOW_WIDTH = 1;
+  localparam logic [31:0] REGMAP_CFAR_CFAR_FAULT_BIN_OVERFLOW_MASK = 32'h00000020;
+
+  // CFAR_FRAME_COUNT @ 0x6020 (ROHW)
+  //   Frames summarised since the last CFAR_CTRL.STATUS_CLEAR. Exactly one summary
+  //   event is emitted per input frame, so this counter and the number of end_of_frame
+  //   beats on the detection stream are the same number - which is what lets a consumer
+  //   detect a lost output frame.
+  //   [31:0] VALUE (ROHW)
+  //       Summarised-frame count.
+  localparam int unsigned REGMAP_CFAR_CFAR_FRAME_COUNT_INDEX = 8;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_CFAR_CFAR_FRAME_COUNT_ADDR = 16'h6020;
+  localparam int unsigned REGMAP_CFAR_CFAR_FRAME_COUNT_VALUE_LSB = 0;
+  localparam int unsigned REGMAP_CFAR_CFAR_FRAME_COUNT_VALUE_WIDTH = 32;
+  localparam logic [31:0] REGMAP_CFAR_CFAR_FRAME_COUNT_VALUE_MASK = 32'hFFFFFFFF;
+
+  // reset value of the stored bits
+  localparam logic [REGMAP_CFAR_N_REGS*32-1:0] REGMAP_CFAR_RESET = {
+      32'h00000000,  // [8]
+      32'h00000000,  // [7]
+      32'h00000000,  // [6]
+      32'h00000000,  // [5]
+      32'h00000000,  // [4]
+      32'h00000000,  // [3]
+      32'h00001400,  // [2]
+      32'h08080202,  // [1]
+      32'h00000000  // [0]
+  };
+  // bits a software write may set or clear (RW)
+  localparam logic [REGMAP_CFAR_N_REGS*32-1:0] REGMAP_CFAR_WMASK = {
+      32'h00000000,  // [8]
+      32'h00000000,  // [7]
+      32'h00000000,  // [6]
+      32'h00000000,  // [5]
+      32'h00000000,  // [4]
+      32'h00000000,  // [3]
+      32'h0000FFFF,  // [2]
+      32'h3F3F1F1F,  // [1]
+      32'h00000131  // [0]
+  };
+  // bits cleared by writing 1, set by hardware (W1C)
+  localparam logic [REGMAP_CFAR_N_REGS*32-1:0] REGMAP_CFAR_W1CMASK = {
+      32'h00000000,  // [8]
+      32'h0000003F,  // [7]
+      32'h00000000,  // [6]
+      32'h00000000,  // [5]
+      32'h00000000,  // [4]
+      32'h00000000,  // [3]
+      32'h00000000,  // [2]
+      32'h00000000,  // [1]
+      32'h00000000  // [0]
+  };
+  // bits that pulse for one cycle and read 0 (RWP)
+  localparam logic [REGMAP_CFAR_N_REGS*32-1:0] REGMAP_CFAR_PULSEMASK = {
+      32'h00000000,  // [8]
+      32'h00000000,  // [7]
+      32'h00000000,  // [6]
+      32'h00000000,  // [5]
+      32'h00000000,  // [4]
+      32'h00000000,  // [3]
+      32'h00000000,  // [2]
+      32'h00000000,  // [1]
+      32'h00010000  // [0]
+  };
+  // bits read from the hardware input, not from storage (ROHW)
+  localparam logic [REGMAP_CFAR_N_REGS*32-1:0] REGMAP_CFAR_HWMASK = {
+      32'hFFFFFFFF,  // [8]
+      32'h00000000,  // [7]
+      32'hFFFFFFFF,  // [6]
+      32'hFFFFFFFF,  // [5]
+      32'hFFFFFFFF,  // [4]
+      32'h03FFFFFF,  // [3]
+      32'h00000000,  // [2]
+      32'h00000000,  // [1]
+      32'h00000000  // [0]
+  };
 
   // -------------------------------------------------------------------------
   // Block 7: counters — implemented
@@ -1033,7 +1358,7 @@ package regmap_pkg;
   localparam logic [REGMAP_ADDR_W-1:0] REGMAP_COUNTERS_BASE = 16'h7000;
   localparam int unsigned REGMAP_COUNTERS_SIZE = 4096;
   localparam int unsigned REGMAP_COUNTERS_N_REGS = 21;
-  localparam int unsigned REGMAP_COUNTERS_INDEX = 6;  // fabric port index
+  localparam int unsigned REGMAP_COUNTERS_INDEX = 7;  // fabric port index
 
   // TELEM_CTRL @ 0x7000 (MIXED)
   //   Measurement window and the three strobes. ENABLE gates every counter, so a window
@@ -1576,7 +1901,7 @@ package regmap_pkg;
   localparam logic [REGMAP_ADDR_W-1:0] REGMAP_COVAR_BASE = 16'h9000;
   localparam int unsigned REGMAP_COVAR_SIZE = 4096;
   localparam int unsigned REGMAP_COVAR_N_REGS = 7;
-  localparam int unsigned REGMAP_COVAR_INDEX = 7;  // fabric port index
+  localparam int unsigned REGMAP_COVAR_INDEX = 8;  // fabric port index
 
   // COVAR_CTRL @ 0x9000 (MIXED)
   //   Master controls. FLUSH and SAT_CLEAR are write-1-pulse and read back zero,
