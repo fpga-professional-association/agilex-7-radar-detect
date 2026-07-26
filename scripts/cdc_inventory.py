@@ -536,6 +536,16 @@ def main() -> int:
         action="store_true",
         help="exit 1 when any crossing could not be classified",
     )
+    p.add_argument(
+        "--allow-empty",
+        action="store_true",
+        help="a design with NO crossings is a pass rather than a failure. For "
+             "single-clock blocks (issue #16's alignment network is the first), "
+             "where 'zero crossings' is a design claim worth checking rather "
+             "than a sign that the elaboration went wrong. The "
+             "unclassified-crossing check still runs, so a two-clock module "
+             "added later without a tag still fails the gate.",
+    )
     args = p.parse_args()
 
     if shutil.which(args.verilator) is None:
@@ -576,12 +586,17 @@ def main() -> int:
         )
     )
 
-    if report["counts"]["crossings"] == 0:
+    if report["counts"]["crossings"] == 0 and not args.allow_empty:
         print(
             "ERROR: the inventory is empty; the design has no tagged crossings",
             file=sys.stderr,
         )
         return 1
+    if report["counts"]["crossings"] == 0:
+        print(
+            "[cdc-inventory] no crossings, as declared (--allow-empty). The "
+            "unclassified-crossing check still ran and found none."
+        )
     if args.strict and report["counts"]["unknown"] != 0:
         print(
             "ERROR: {} crossing(s) could not be classified; see the 'unknown' "

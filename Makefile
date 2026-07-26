@@ -193,6 +193,7 @@ CDC_INVENTORY_BF_JSON ?= $(RESULTS_DIR)/cdc_inventory_beamformer.json
 # running --strict over it is what proves the corner turn's crossings are
 # declared rather than merely present.
 CDC_INVENTORY_HISTORY_JSON ?= $(RESULTS_DIR)/cdc_inventory_history.json
+CDC_INVENTORY_ALIGN_JSON ?= $(RESULTS_DIR)/cdc_inventory_align.json
 
 # --- register/control plane (issue #7, SPEC 9 / 13.1 / 14) -----------------
 # A fourth self-contained build, for the reason the others have one: a failure
@@ -451,6 +452,24 @@ HISTORY_FILES := sim/verilator/files_history.f
 HISTORY_TEST  := test_history
 HISTORY_BIN    = sim/verilator/build/fast_tiny_$(HISTORY_TOP)/V$(HISTORY_TOP)_$(HISTORY_TEST)
 
+# --- frequency-bin alignment network (issue #16, SPEC 7.4 / 13 / 14 / 18) ---
+# A self-contained build, for the reason every other one is. What is different
+# about this one is that the top holds FOUR elaborations rather than one: SPEC
+# 7.4 requires two ARCHITECTURES to be compared, and the only honest comparison
+# is one in which the same suite runs unchanged against both. align_top builds
+# the direct registered crossbar and the multistage omega network at two widths
+# each, latency-matched, behind one port set, and test_align runs all eleven of
+# its passes against each in turn — in-order and skewed responses, a dropped
+# response whose timeout must be exact, a duplicated one that must be counted
+# and discarded, four backpressure profiles required to produce a
+# byte-identical beat sequence, a SPEC 9 tag collision, a response from the
+# wrong absolute frame, and a measured throughput and blocking rate for each
+# architecture.
+ALIGN_TOP     := align_top
+ALIGN_FILES   := sim/verilator/files_align.f
+ALIGN_TEST    := test_align
+ALIGN_BIN      = sim/verilator/build/fast_tiny_$(ALIGN_TOP)/V$(ALIGN_TOP)_$(ALIGN_TEST)
+
 ifeq ($(HOST_KIND),windows)
   QUARTUS_SH ?= C:/altera_pro/26.1/quartus/bin64/quartus_sh.exe
 else
@@ -499,47 +518,50 @@ define LINT_RECIPE
 	    '$(CONFIG)' 'sim/verilator/lint_waivers.vlt'
 	$(REGMAP_CHECK_RECIPE)
 	$(FFT_TWIDDLE_CHECK_RECIPE)
-	@printf '[lint] 1/14 %s\n' 'benchmark_sim_top'
+	@printf '[lint] 1/15 %s\n' 'benchmark_sim_top'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) --test $(TEST)
-	@printf '[lint] 2/14 %s\n' '$(STREAM_TOP)'
+	@printf '[lint] 2/15 %s\n' '$(STREAM_TOP)'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
 	    --top $(STREAM_TOP) --files $(STREAM_FILES) --test $(STREAM_TEST)
-	@printf '[lint] 3/14 %s\n' '$(VIOL_TOP)'
+	@printf '[lint] 3/15 %s\n' '$(VIOL_TOP)'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
 	    --top $(VIOL_TOP) --files $(VIOL_FILES) --test $(VIOL_TEST)
-	@printf '[lint] 4/14 %s\n' '$(CONTROL_TOP)'
+	@printf '[lint] 4/15 %s\n' '$(CONTROL_TOP)'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
 	    --top $(CONTROL_TOP) --files $(CONTROL_FILES) --test $(CONTROL_TEST)
-	@printf '[lint] 5/14 %s\n' '$(CDC_TOP)'
+	@printf '[lint] 5/15 %s\n' '$(CDC_TOP)'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
 	    --top $(CDC_TOP) --files $(CDC_FILES) --test $(firstword $(CDC_TESTS))
-	@printf '[lint] 6/14 %s\n' '$(CDCV_TOP)'
+	@printf '[lint] 6/15 %s\n' '$(CDCV_TOP)'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
 	    --top $(CDCV_TOP) --files $(CDCV_FILES) --test $(CDCV_TEST)
-	@printf '[lint] 7/14 %s\n' '$(TELEM_TOP)'
+	@printf '[lint] 7/15 %s\n' '$(TELEM_TOP)'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
 	    --top $(TELEM_TOP) --files $(TELEM_FILES) --test $(firstword $(TELEM_TESTS))
-	@printf '[lint] 8/14 %s\n' '$(CMULT_TOP)'
+	@printf '[lint] 8/15 %s\n' '$(CMULT_TOP)'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
 	    --top $(CMULT_TOP) --files $(CMULT_FILES) --test $(CMULT_TEST)
-	@printf '[lint] 9/14 %s\n' '$(PFB_TOP)'
+	@printf '[lint] 9/15 %s\n' '$(PFB_TOP)'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
 	    --top $(PFB_TOP) --files $(PFB_FILES) --test $(PFB_TEST)
-	@printf '[lint] 10/14 %s\n' '$(FFT_TOP)'
+	@printf '[lint] 10/15 %s\n' '$(FFT_TOP)'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
 	    --top $(FFT_TOP) --files $(FFT_FILES) --test $(FFT_TEST)
-	@printf '[lint] 11/14 %s\n' '$(COVAR_TOP)'
+	@printf '[lint] 11/15 %s\n' '$(COVAR_TOP)'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
 	    --top $(COVAR_TOP) --files $(COVAR_FILES) --test $(COVAR_TEST)
-	@printf '[lint] 12/14 %s\n' '$(BF_TOP)'
+	@printf '[lint] 12/15 %s\n' '$(BF_TOP)'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
 	    --top $(BF_TOP) --files $(BF_FILES) --test $(BF_TEST)
-	@printf '[lint] 13/14 %s\n' '$(CFAR_TOP)'
+	@printf '[lint] 13/15 %s\n' '$(CFAR_TOP)'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
 	    --top $(CFAR_TOP) --files $(CFAR_FILES) --test $(CFAR_TEST)
-	@printf '[lint] 14/14 %s\n' '$(HISTORY_TOP)'
+	@printf '[lint] 14/15 %s\n' '$(HISTORY_TOP)'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
 	    --top $(HISTORY_TOP) --files $(HISTORY_FILES) --test $(HISTORY_TEST)
+	@printf '[lint] 15/15 %s\n' '$(ALIGN_TOP)'
+	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
+	    --top $(ALIGN_TOP) --files $(ALIGN_FILES) --test $(ALIGN_TEST)
 endef
 
 # `sim-tiny`: SPEC 12.1 fast build of every simulation top, then every test
@@ -652,11 +674,13 @@ define SIM_TINY_RECIPE
 	    --top $(CFAR_TOP) --files $(CFAR_FILES) --test $(CFAR_TEST)
 	$(BUILD_VERILATOR) --mode fast --config tiny --jobs $(JOBS) \
 	    --top $(HISTORY_TOP) --files $(HISTORY_FILES) --test $(HISTORY_TEST)
+	$(BUILD_VERILATOR) --mode fast --config tiny --jobs $(JOBS) \
+	    --top $(ALIGN_TOP) --files $(ALIGN_FILES) --test $(ALIGN_TEST)
 	@printf '[sim-tiny] seeds: %s\n' '$(SEEDS)'
-	@printf '[sim-tiny] tests: %s %s %s %s %s %s %s %s %s %s %s %s %s %s\n' '$(TEST)' '$(STREAM_TEST)' \
+	@printf '[sim-tiny] tests: %s %s %s %s %s %s %s %s %s %s %s %s %s %s %s\n' '$(TEST)' '$(STREAM_TEST)' \
 	    '$(VIOL_TEST)' '$(CONTROL_TEST)' '$(CDC_TESTS)' '$(CDCV_TEST)' \
 	    '$(TELEM_TESTS)' '$(CMULT_TEST)' '$(PFB_TEST)' '$(FFT_TEST)' '$(COVAR_TEST)' \
-	    '$(BF_TEST)' '$(CFAR_TEST)' '$(HISTORY_TEST)'
+	    '$(BF_TEST)' '$(CFAR_TEST)' '$(HISTORY_TEST)' '$(ALIGN_TEST)'
 	@rc=0; for s in $(SEEDS); do \
 	    printf '\n[sim-tiny] ===== seed %s : %s =====\n' "$$s" '$(TEST)'; \
 	    ./$(SIM_TINY_BIN) +seed=$$s +results=$(RESULTS_DIR) || rc=1; \
@@ -692,6 +716,8 @@ define SIM_TINY_RECIPE
 	    ./$(CFAR_BIN) +seed=$$s +results=$(RESULTS_DIR) || rc=1; \
 	    printf '\n[sim-tiny] ===== seed %s : %s =====\n' "$$s" '$(HISTORY_TEST)'; \
 	    ./$(HISTORY_BIN) +seed=$$s +results=$(RESULTS_DIR) || rc=1; \
+	    printf '\n[sim-tiny] ===== seed %s : %s =====\n' "$$s" '$(ALIGN_TEST)'; \
+	    ./$(ALIGN_BIN) +seed=$$s +results=$(RESULTS_DIR) || rc=1; \
 	  done; \
 	  if [ $$rc -ne 0 ]; then \
 	    printf '\n[sim-tiny] FAILED (seeds: %s)\n' '$(SEEDS)' 1>&2; exit 1; \
@@ -853,6 +879,19 @@ define CDC_INVENTORY_RECIPE
 	    --top $(HISTORY_TOP) --files $(HISTORY_FILES) --test $(HISTORY_TEST) --quiet
 	$(PYTHON) scripts/cdc_inventory.py --top $(HISTORY_TOP) --files $(HISTORY_FILES) \
 	    --out $(CDC_INVENTORY_HISTORY_JSON) --print --strict
+# The alignment network (issue #16) is SINGLE CLOCK by construction: both of its
+# interfaces are already in history_clk (history_pkg section 5 puts the read
+# request and the read response there, and the beamformer that consumes the
+# output beat is in it too). Running the inventory over it therefore expects to
+# find ZERO crossings — which is a check, not an absence: `--strict` fails on any
+# instantiated module with two clock-like ports that carries no
+# `(* cdc_primitive *)` tag, so a crossing added here later cannot go unrecorded.
+	@printf '[cdc-inventory] SPEC 8 crossing report for top=%s -> %s\n' \
+	    '$(ALIGN_TOP)' '$(CDC_INVENTORY_ALIGN_JSON)'
+	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
+	    --top $(ALIGN_TOP) --files $(ALIGN_FILES) --test $(ALIGN_TEST) --quiet
+	$(PYTHON) scripts/cdc_inventory.py --top $(ALIGN_TOP) --files $(ALIGN_FILES) \
+	    --out $(CDC_INVENTORY_ALIGN_JSON) --print --strict --allow-empty
 endef
 
 # Remaining simulation entry points. The Verilator flow itself exists as of
@@ -982,6 +1021,7 @@ help:
 	@printf '%-18s %-9s %s\n' 'calibrate-fft'    'windows' 'SPEC 18 FFT stage + full-FFT sweep (~1 h of Fitter)'
 	@printf '%-18s %-9s %s\n' 'calibrate-beamformer' 'windows' 'SPEC 18 beamforming dot-product + matrix-slice sweep'
 	@printf '%-18s %-9s %s\n' 'calibrate-history' 'windows' 'SPEC 18 M20K history-bank + corner-turn sweep'
+	@printf '%-18s %-9s %s\n' 'calibrate-align' 'windows' 'SPEC 7.4 crossbar vs Clos routing sweep + block cost'
 	@printf '%-18s %-9s %s\n' 'calibrate-summary' 'local'  'rebuild the calibration JSON/table from evidence on disk (KERNEL=<name>)'
 	@printf '\n'
 	@printf '%-18s %-9s %s\n' 'seed-sweep'       'windows' 'TODO(issue #23) ten-seed robustness sweep'
@@ -1291,6 +1331,33 @@ calibrate-history:
 	$(RUN_CALIBRATION) --kernel history_core --seed $(SEED) --jobs $(CALIB_JOBS) \
 	    --quartus-bin '$(QUARTUS_BIN)' $(CALIB_ARGS)
 
+# SPEC 18 / SPEC 7.4: the alignment-network comparison (issue #16).
+#
+# TWO kernels and the split between them is the whole point. `align_sw` is the
+# ROUTING FABRIC alone — the thing the two architectures actually are — swept at
+# a narrow and a full-scale-representative width, four points, latency-matched at
+# both. `align_net` is the whole block, two points, one per architecture, which
+# prices the parts that are identical in both (the reassembly buffer, the
+# detector, the scheduler, the counters) so the pull request's projection has a
+# number rather than a difference.
+#
+# Six points at roughly nine minutes each is about an hour of Fitter time. As
+# with every other sweep here this is WINDOWS SIDE and is deliberately not a
+# prerequisite of any simulation target:
+#
+#   C:/altera_pro/26.1/riscfree/build_tools/bin/make.exe calibrate-align
+calibrate-align:
+	$(QUARTUS_CHECK)
+	$(PYTHON_CHECK)
+	@printf '[calibrate] SPEC 18 sweep: kernel=align_sw seed=%s jobs=%s\n' \
+	    '$(SEED)' '$(CALIB_JOBS)'
+	$(RUN_CALIBRATION) --kernel align_sw --seed $(SEED) --jobs $(CALIB_JOBS) \
+	    --quartus-bin '$(QUARTUS_BIN)' $(CALIB_ARGS)
+	@printf '[calibrate] SPEC 18 sweep: kernel=align_net seed=%s jobs=%s\n' \
+	    '$(SEED)' '$(CALIB_JOBS)'
+	$(RUN_CALIBRATION) --kernel align_net --seed $(SEED) --jobs $(CALIB_JOBS) \
+	    --quartus-bin '$(QUARTUS_BIN)' $(CALIB_ARGS)
+
 # KERNEL selects which sweep to rebuild; default cmult, e.g. KERNEL=fft_core.
 CALIB_KERNEL ?= cmult
 
@@ -1315,7 +1382,7 @@ reproduce-final:
         lint numerics-check regmap-check fft-check cdc-inventory \
         sim-tiny sim-medium sim-random sim-stress sim-coverage sim-full-smoke \
         coeff-check calibrate-fir calibrate-pfb8 calibrate-beamformer \
-        calibrate-history \
+        calibrate-history calibrate-align \
         quartus-map quartus-fit quartus-sta quartus-report quartus-compile \
         calibrate-cmult calibrate-fft calibrate-summary \
         seed-sweep compare-baseline reproduce-final
