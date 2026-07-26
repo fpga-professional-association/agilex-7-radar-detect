@@ -1,0 +1,93 @@
+# ---------------------------------------------------------------------------
+# fft_core_calib.qsf — SPEC 18 calibration project settings for the full
+# 64-point streaming FFT (issue #11, SPEC 18 item 5).
+#
+# SAME DEVICE, same probe, same virtual-pin strategy and the same
+# hand-maintained contract as quartus/calibration/fft_stage_calib.qsf; read that
+# file's header for the reasoning, which is not repeated here.
+#
+# WHAT THIS PROJECT MEASURES, and why it is not just "the stage times six":
+# rtl/fft/streaming_fft.sv is the whole SPEC 5 block — the transform, the elastic
+# boundary, the frame tracking, the optional bit-reversal reorder and the
+# credit-backed output FIFO. The difference between this project's numbers and
+# the stage project's, after multiplying the stage by the structure, IS the
+# buffering cost of making a fixed-latency pipeline into a stream block. That
+# number is the evidence behind the flow-control decision recorded in
+# DECISIONS.md, so it is measured rather than argued. calibrate.tcl additionally
+# records the per-entity utilisation row for u_kernel, so the split appears in
+# the evidence too.
+#
+# All paths are relative to this directory (quartus/calibration/).
+# ---------------------------------------------------------------------------
+
+# --- device (SPEC.md 2, 15) -------------------------------------------------
+set_global_assignment -name FAMILY "Agilex 7"
+set_global_assignment -name DEVICE AGMF039R47B1E1VC
+set_global_assignment -name TOP_LEVEL_ENTITY fft_core_wrap
+
+set_global_assignment -name MIN_CORE_JUNCTION_TEMP 0
+set_global_assignment -name MAX_CORE_JUNCTION_TEMP 100
+
+# --- project output ---------------------------------------------------------
+set_global_assignment -name PROJECT_OUTPUT_DIRECTORY output_files
+set_global_assignment -name NUM_PARALLEL_PROCESSORS ALL
+
+# --- simulation-only code exclusion -----------------------------------------
+set_global_assignment -name VERILOG_MACRO "SYNTHESIS=1"
+
+# --- design source ----------------------------------------------------------
+# Order matters: packages first. Every file is the SAME FILE the simulation
+# builds and lints.
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/packages/fxp_pkg.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/packages/stream_pkg.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/fft/generated/fft_twiddle_pkg.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/fft/fft_pkg.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/common/complex_multiplier.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/common/fxp_sticky_flags.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/common/sync_fifo.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/stream/stream_elastic_buffer.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/fft/fft_delay_line.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/fft/fft_bf2.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/fft/fft_twiddle_rom.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/fft/fft_radix22_stage.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/fft/fft_sdf_path.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/fft/fft_dit_merge.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/fft/fft_reorder.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/fft/fft_core.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/fft/streaming_fft.sv
+set_global_assignment -name SYSTEMVERILOG_FILE fft_core_wrap.sv
+
+# --- timing constraints -----------------------------------------------------
+set_global_assignment -name SDC_FILE fft_core_calib.sdc
+
+# ---------------------------------------------------------------------------
+# Virtual pins
+# ---------------------------------------------------------------------------
+set_instance_assignment -name VIRTUAL_PIN ON -to s_valid
+set_instance_assignment -name VIRTUAL_PIN ON -to s_ready
+set_instance_assignment -name VIRTUAL_PIN ON -to "s_re0[*]"
+set_instance_assignment -name VIRTUAL_PIN ON -to "s_im0[*]"
+set_instance_assignment -name VIRTUAL_PIN ON -to "s_re1[*]"
+set_instance_assignment -name VIRTUAL_PIN ON -to "s_im1[*]"
+set_instance_assignment -name VIRTUAL_PIN ON -to s_sof
+set_instance_assignment -name VIRTUAL_PIN ON -to s_eof
+set_instance_assignment -name VIRTUAL_PIN ON -to "s_id[*]"
+set_instance_assignment -name VIRTUAL_PIN ON -to "s_seq[*]"
+set_instance_assignment -name VIRTUAL_PIN ON -to "s_user[*]"
+
+set_instance_assignment -name VIRTUAL_PIN ON -to m_valid
+set_instance_assignment -name VIRTUAL_PIN ON -to m_ready
+set_instance_assignment -name VIRTUAL_PIN ON -to "m_re0[*]"
+set_instance_assignment -name VIRTUAL_PIN ON -to "m_im0[*]"
+set_instance_assignment -name VIRTUAL_PIN ON -to "m_re1[*]"
+set_instance_assignment -name VIRTUAL_PIN ON -to "m_im1[*]"
+set_instance_assignment -name VIRTUAL_PIN ON -to m_sof
+set_instance_assignment -name VIRTUAL_PIN ON -to m_eof
+set_instance_assignment -name VIRTUAL_PIN ON -to "m_id[*]"
+set_instance_assignment -name VIRTUAL_PIN ON -to "m_seq[*]"
+set_instance_assignment -name VIRTUAL_PIN ON -to "m_user[*]"
+
+set_instance_assignment -name VIRTUAL_PIN ON -to flags_clear
+set_instance_assignment -name VIRTUAL_PIN ON -to "stage_flags[*]"
+set_instance_assignment -name VIRTUAL_PIN ON -to any_ovf
+set_instance_assignment -name VIRTUAL_PIN ON -to "ovf_events[*]"

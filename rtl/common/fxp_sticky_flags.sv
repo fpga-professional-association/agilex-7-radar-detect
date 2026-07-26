@@ -42,6 +42,10 @@ module fxp_sticky_flags
     // the eight-lane calibration point failed to elaborate. Every other module
     // in the repository already declares `wire` ports; this one was the
     // exception, and simulation had never noticed.
+    //
+    // Issue #11's FFT calibration hit the same error independently, on its own
+    // first Quartus compile. Two blocks finding it on the same day is the
+    // measure of how invisible it was to simulation.
     input  wire                clk,
     input  wire                rst_n,
 

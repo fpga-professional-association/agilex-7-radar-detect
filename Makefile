@@ -58,9 +58,9 @@
 # issue #5 with the stream-primitive and negative-assertion tests, by issue #7
 # with the register/control plane, by issue #6 with the FIFO and CDC
 # primitives plus the SPEC 8 CDC inventory report, by issue #8 with the
-# telemetry primitives, and by issue #9 with the complex multiplier), the
-# quartus-* targets (issue #3) and the SPEC 18 calibration sweep
-# `calibrate-cmult` (issue #9).
+# telemetry primitives, by issue #9 with the complex multiplier, and by issue
+# #11 with the streaming FFT), the quartus-* targets (issue #3) and the SPEC 18
+# calibration sweeps `calibrate-cmult` (issue #9) and `calibrate-fft` (#11).
 #
 # Everything else is still a scaffold stub from issue #1. Stubs fail loudly:
 # they print `TODO(issue #N)` and the stub command exits 1. GNU make then
@@ -295,6 +295,36 @@ PFB_BIN        = sim/verilator/build/fast_tiny_$(PFB_TOP)/V$(PFB_TOP)_$(PFB_TEST
 # design that was never regenerated survives `make sim-tiny`.
 GEN_COEFF = $(PYTHON) scripts/generate_coefficients.py
 
+# --- streaming FFT (issue #11, SPEC 6 / 7.2 / 13.1 / 14 / 18) --------------
+# A seventh self-contained build, for the reason the others have one: a failure
+# in it is unambiguously an FFT failure. fft_top holds five elaborations of
+# rtl/fft/streaming_fft.sv in one build — the 64-point reference, the same with
+# the output left bit-reversed, two saturating scaling schedules, and a 256-point
+# instance — so "the output permutation is right", "the per-sub-stage overflow
+# flags distinguish two schedules" and "the parameterisation still elaborates"
+# are same-build facts rather than comparisons of separate runs.
+#
+#   test_fft  every record of model/vectors/fft64.vec driven BACK TO BACK, then
+#             each record again in isolation for the sticky per-sub-stage flags,
+#             then random frames dense and again under bursty stalls on both
+#             sides (the outputs must be identical), then the 256-point
+#             elaboration. Every beat is checked against the C++ model and, for
+#             the directed set, against the committed NumPy expectation.
+FFT_TOP       := fft_top
+FFT_FILES     := sim/verilator/files_fft.f
+FFT_TEST      := test_fft
+FFT_BIN        = sim/verilator/build/fast_tiny_$(FFT_TOP)/V$(FFT_TOP)_$(FFT_TEST)
+
+# The twiddle table and the golden FFT vectors are generated and committed, for
+# the reasons in model/python/gen_fft_twiddles.py and model/vectors/README.md.
+# `fft-check` is what stops either from drifting, and it also runs the standalone
+# validation of the C++ model against the vectors — the SPEC 12.4 step that has
+# to happen before the model is trusted as the RTL oracle.
+GEN_FFT_TWIDDLES = $(PYTHON) model/python/gen_fft_twiddles.py
+GEN_FFT_VECTORS  = $(PYTHON) model/python/gen_fft_vectors.py
+FFT_REF_SRC   := model/cpp/test/test_fft_ref.cpp
+FFT_REF_BIN    = $(NUMERICS_DIR)/test_fft_ref
+
 ifeq ($(HOST_KIND),windows)
   QUARTUS_SH ?= C:/altera_pro/26.1/quartus/bin64/quartus_sh.exe
 else
@@ -327,6 +357,8 @@ endef
 LINT_RECIPE      = $(SIM_DISPATCH)
 SIM_TINY_RECIPE  = $(SIM_DISPATCH)
 NUMERICS_RECIPE  = $(SIM_DISPATCH)
+FFT_CHECK_RECIPE = $(SIM_DISPATCH)
+FFT_TWIDDLE_CHECK_RECIPE =
 CDC_INVENTORY_RECIPE = $(SIM_DISPATCH)
 COEFF_CHECK_RECIPE   = $(SIM_DISPATCH)
 SIM_STUB_17      = $(SIM_DISPATCH)
@@ -340,32 +372,36 @@ define LINT_RECIPE
 	@printf '[lint] verilator --lint-only --Wall, config=%s, waivers=%s\n' \
 	    '$(CONFIG)' 'sim/verilator/lint_waivers.vlt'
 	$(REGMAP_CHECK_RECIPE)
-	@printf '[lint] 1/9 %s\n' 'benchmark_sim_top'
+	$(FFT_TWIDDLE_CHECK_RECIPE)
+	@printf '[lint] 1/10 %s\n' 'benchmark_sim_top'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) --test $(TEST)
-	@printf '[lint] 2/9 %s\n' '$(STREAM_TOP)'
+	@printf '[lint] 2/10 %s\n' '$(STREAM_TOP)'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
 	    --top $(STREAM_TOP) --files $(STREAM_FILES) --test $(STREAM_TEST)
-	@printf '[lint] 3/9 %s\n' '$(VIOL_TOP)'
+	@printf '[lint] 3/10 %s\n' '$(VIOL_TOP)'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
 	    --top $(VIOL_TOP) --files $(VIOL_FILES) --test $(VIOL_TEST)
-	@printf '[lint] 4/9 %s\n' '$(CONTROL_TOP)'
+	@printf '[lint] 4/10 %s\n' '$(CONTROL_TOP)'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
 	    --top $(CONTROL_TOP) --files $(CONTROL_FILES) --test $(CONTROL_TEST)
-	@printf '[lint] 5/9 %s\n' '$(CDC_TOP)'
+	@printf '[lint] 5/10 %s\n' '$(CDC_TOP)'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
 	    --top $(CDC_TOP) --files $(CDC_FILES) --test $(firstword $(CDC_TESTS))
-	@printf '[lint] 6/9 %s\n' '$(CDCV_TOP)'
+	@printf '[lint] 6/10 %s\n' '$(CDCV_TOP)'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
 	    --top $(CDCV_TOP) --files $(CDCV_FILES) --test $(CDCV_TEST)
-	@printf '[lint] 7/9 %s\n' '$(TELEM_TOP)'
+	@printf '[lint] 7/10 %s\n' '$(TELEM_TOP)'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
 	    --top $(TELEM_TOP) --files $(TELEM_FILES) --test $(firstword $(TELEM_TESTS))
-	@printf '[lint] 8/9 %s\n' '$(CMULT_TOP)'
+	@printf '[lint] 8/10 %s\n' '$(CMULT_TOP)'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
 	    --top $(CMULT_TOP) --files $(CMULT_FILES) --test $(CMULT_TEST)
-	@printf '[lint] 9/9 %s\n' '$(PFB_TOP)'
+	@printf '[lint] 9/10 %s\n' '$(PFB_TOP)'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
 	    --top $(PFB_TOP) --files $(PFB_FILES) --test $(PFB_TEST)
+	@printf '[lint] 10/10 %s\n' '$(FFT_TOP)'
+	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
+	    --top $(FFT_TOP) --files $(FFT_FILES) --test $(FFT_TEST)
 endef
 
 # `sim-tiny`: SPEC 12.1 fast build of every simulation top, then every test
@@ -408,6 +444,15 @@ endef
 #                            arithmetic paths) and against each other, on the
 #                            directed set and on >= 24 000 random operand pairs
 #                            per seed; plus the latency sweep and the flag audit.
+#   test_fft                 fft_top — the SPEC 7.2 streaming FFT. Five
+#                            elaborations in one build (64-point reference, the
+#                            same left bit-reversed, two saturating scaling
+#                            schedules, and 256-point), checked against
+#                            model/vectors/fft64.vec and model/cpp/fft/ on the
+#                            directed set driven back to back, on random frames
+#                            dense and again under bursty stalls with the two
+#                            runs required to be identical, and on the per-
+#                            sub-stage saturation flags record by record.
 #   test_seq_checker         telemetry_top — SPEC 5 loss, duplication and
 #                            reordering: each fault injected deliberately and
 #                            required to land in the right category with the
@@ -436,10 +481,11 @@ define SIM_TINY_RECIPE
 	    --top $(CMULT_TOP) --files $(CMULT_FILES) --test $(CMULT_TEST)
 	$(BUILD_VERILATOR) --mode fast --config tiny --jobs $(JOBS) \
 	    --top $(PFB_TOP) --files $(PFB_FILES) --test $(PFB_TEST)
+	    --top $(FFT_TOP) --files $(FFT_FILES) --test $(FFT_TEST)
 	@printf '[sim-tiny] seeds: %s\n' '$(SEEDS)'
-	@printf '[sim-tiny] tests: %s %s %s %s %s %s %s %s %s\n' '$(TEST)' '$(STREAM_TEST)' \
+	@printf '[sim-tiny] tests: %s %s %s %s %s %s %s %s %s %s\n' '$(TEST)' '$(STREAM_TEST)' \
 	    '$(VIOL_TEST)' '$(CONTROL_TEST)' '$(CDC_TESTS)' '$(CDCV_TEST)' \
-	    '$(TELEM_TESTS)' '$(CMULT_TEST)' '$(PFB_TEST)'
+	    '$(TELEM_TESTS)' '$(CMULT_TEST)' '$(PFB_TEST)' '$(FFT_TEST)'
 	@rc=0; for s in $(SEEDS); do \
 	    printf '\n[sim-tiny] ===== seed %s : %s =====\n' "$$s" '$(TEST)'; \
 	    ./$(SIM_TINY_BIN) +seed=$$s +results=$(RESULTS_DIR) || rc=1; \
@@ -465,6 +511,8 @@ define SIM_TINY_RECIPE
 	    ./$(CMULT_BIN) +seed=$$s +results=$(RESULTS_DIR) +vectors=$(VECTORS_DIR) || rc=1; \
 	    printf '\n[sim-tiny] ===== seed %s : %s =====\n' "$$s" '$(PFB_TEST)'; \
 	    ./$(PFB_BIN) +seed=$$s +results=$(RESULTS_DIR) +vectors=$(VECTORS_DIR) || rc=1; \
+	    printf '\n[sim-tiny] ===== seed %s : %s =====\n' "$$s" '$(FFT_TEST)'; \
+	    ./$(FFT_BIN) +seed=$$s +results=$(RESULTS_DIR) +vectors=$(VECTORS_DIR) || rc=1; \
 	  done; \
 	  if [ $$rc -ne 0 ]; then \
 	    printf '\n[sim-tiny] FAILED (seeds: %s)\n' '$(SEEDS)' 1>&2; exit 1; \
@@ -525,6 +573,52 @@ define COEFF_CHECK_RECIPE
 	@printf '[coeff] checking model/vectors/pfb_*.{coeff,vec} against %s\n' \
 	    'scripts/generate_coefficients.py'
 	$(GEN_COEFF) --check
+endef
+
+# `fft-check` (issue #11): the SPEC 7.2 / 12.4 FFT model gate. Three steps, in
+# the order that makes each one meaningful:
+#
+#   1. the twiddle table. rtl/fft/generated/fft_twiddle_pkg.sv and
+#      model/cpp/fft/fft_twiddle_table.hpp are generated and committed; `--check`
+#      regenerates them in memory and fails on any difference. It runs inside
+#      `lint` as well (FFT_TWIDDLE_CHECK_RECIPE) because lint COMPILES the
+#      generated package, exactly as regmap-check runs inside lint.
+#   2. the golden vectors. model/vectors/fft64.vec is regenerated from the
+#      independent NumPy model and compared, so a committed expectation cannot
+#      drift away from the script and the seed that produced it.
+#   3. the C++ reference model against those vectors, standalone, under the
+#      issue #4 -Werror build contract. This is the SPEC 12.4 step that has to
+#      happen BEFORE the model is used as the RTL oracle: an oracle that has not
+#      been checked against anything is not an oracle.
+#
+# Steps 1 and 2 need a Python interpreter with NumPy and are skipped with a
+# printed note when one is absent, the same way numerics-check treats its own
+# regeneration check. Step 3 always runs — the vector loader verifies the file's
+# record count, rounding mode and twiddle digest, so a truncated or stale file
+# still fails without Python.
+define FFT_TWIDDLE_CHECK_RECIPE
+	@printf '[fft] twiddle table: regenerate-and-compare (%s)\n' \
+	    'rtl/fft/generated + model/cpp/fft'
+	@if [ -n '$(PYTHON)' ]; then \
+	    $(GEN_FFT_TWIDDLES) --check; \
+	  else \
+	    printf '[fft] no Python found; skipping the twiddle regeneration check\n'; \
+	  fi
+endef
+
+define FFT_CHECK_RECIPE
+	$(FFT_TWIDDLE_CHECK_RECIPE)
+	@printf '[fft] golden vectors: regenerate-and-compare (%s/fft64.vec)\n' '$(VECTORS_DIR)'
+	@if [ -n '$(PYTHON)' ]; then \
+	    $(GEN_FFT_VECTORS) --out $(VECTORS_DIR) --check; \
+	  else \
+	    printf '[fft] no Python found; skipping the vector regeneration check\n'; \
+	  fi
+	@printf '[fft] C++ reference model vs vectors (%s %s)\n' '$(CXX)' '$(NUMERICS_CXXFLAGS)'
+	@mkdir -p $(NUMERICS_DIR)
+	$(CXX) $(NUMERICS_CXXFLAGS) -o $(FFT_REF_BIN) $(FFT_REF_SRC)
+	./$(FFT_REF_BIN) --vectors $(VECTORS_DIR)
+	@printf '\n[fft] PASS: the C++ FFT model and the NumPy vectors agree bit-exactly\n'
 endef
 
 # `cdc-inventory` (issue #6): the SPEC 8 "explicit CDC inventory report".
@@ -663,6 +757,7 @@ help:
 	@printf '%-18s %-9s %s\n' 'numerics-check'   'wsl'     'SPEC 6/12.4 fixed-point equivalence (sub-target of sim-tiny)'
 	@printf '%-18s %-9s %s\n' 'regmap-check'     'local'   'SPEC 9 register map: generated artefacts match control/regmap.json'
 	@printf '%-18s %-9s %s\n' 'coeff-check'      'wsl'     'SPEC 7.1 polyphase coefficient sets match their generator'
+	@printf '%-18s %-9s %s\n' 'fft-check'        'wsl'     'SPEC 7.2/12.4 FFT twiddles + vectors + C++ model (sub-target of sim-tiny)'
 	@printf '%-18s %-9s %s\n' 'cdc-inventory'    'wsl'     'SPEC 8 CDC crossing report (sub-target of sim-tiny)'
 	@printf '%-18s %-9s %s\n' 'sim-tiny'         'wsl'     'numerics + regmap + inventory + fast builds + every test'
 	@printf '%-18s %-9s %s\n' 'sim-medium'       'wsl'     'TODO(issue #17) medium-config regression'
@@ -680,20 +775,23 @@ help:
 	@printf '%-18s %-9s %s\n' 'calibrate-cmult'  'windows' 'SPEC 18 complex-multiplier sweep (~1.5 h of Fitter)'
 	@printf '%-18s %-9s %s\n' 'calibrate-fir'    'windows' 'SPEC 18 complex-FIR-lane sweep (TAPS=16)'
 	@printf '%-18s %-9s %s\n' 'calibrate-pfb8'   'windows' 'SPEC 18 eight-lane polyphase-bank sweep'
-	@printf '%-18s %-9s %s\n' 'calibrate-summary' 'local'  'rebuild the calibration JSON/table from evidence on disk'
+	@printf '%-18s %-9s %s\n' 'calibrate-fft'    'windows' 'SPEC 18 FFT stage + full-FFT sweep (~1 h of Fitter)'
+	@printf '%-18s %-9s %s\n' 'calibrate-summary' 'local'  'rebuild the calibration JSON/table from evidence on disk (KERNEL=<name>)'
 	@printf '\n'
 	@printf '%-18s %-9s %s\n' 'seed-sweep'       'windows' 'TODO(issue #23) ten-seed robustness sweep'
 	@printf '%-18s %-9s %s\n' 'compare-baseline' 'local'   'TODO(issue #21) compare current run to baseline'
 	@printf '%-18s %-9s %s\n' 'reproduce-final'  'both'    'TODO(issue #25) reproduce the final result'
 	@printf '\n'
-	@printf 'numerics-check, coeff-check and cdc-inventory are not SPEC 16 entry points;\n'
-	@printf 'they are the issue #4 numerics gate, the issue #10 coefficient gate and the\n'
-	@printf 'SPEC 8 CDC inventory report, run\n'
-	@printf 'automatically as prerequisites of sim-tiny and listed here so each can\n'
-	@printf 'also be run on its own while working on the code it covers.\n'
+	@printf 'numerics-check, coeff-check, fft-check and cdc-inventory are not SPEC 16\n'
+	@printf 'entry points; they are the issue #4 numerics gate, the issue #10\n'
+	@printf 'coefficient gate, the issue #11 FFT model gate and the SPEC 8 CDC\n'
+	@printf 'inventory report, run automatically as prerequisites of sim-tiny and\n'
+	@printf 'listed here so each can also be run on its own while working on the\n'
+	@printf 'code it covers.\n'
 	@printf '\n'
-	@printf 'lint and sim-tiny (issue #2), numerics-check (issue #4), the quartus-*\n'
-	@printf 'targets (issue #3) and calibrate-cmult (issue #9) are implemented.\n'
+	@printf 'lint and sim-tiny (issue #2), numerics-check (issue #4), fft-check\n'
+	@printf '(issue #11), the quartus-* targets (issue #3) and the calibrate-*\n'
+	@printf 'sweeps (issues #9 and #11) are implemented.\n'
 	@printf 'Targets marked TODO are still stubs:\n'
 	@printf 'they print TODO(issue #N)\n'
 	@printf 'and exit 1; GNU make then reports its own exit status 2 for the failed\n'
@@ -743,7 +841,7 @@ lint:
 # whole target into WSL, and the WSL-side make applies the dependency there, so
 # adding it here too would run the numerics gate twice.
 ifneq ($(HOST_KIND),windows)
-sim-tiny: numerics-check coeff-check cdc-inventory
+sim-tiny: numerics-check coeff-check fft-check cdc-inventory
 endif
 
 numerics-check:
@@ -753,6 +851,13 @@ numerics-check:
 # of sim-tiny; standalone here so it can be run while editing the filter design.
 coeff-check:
 	$(COEFF_CHECK_RECIPE)
+
+# The FFT model gate (issue #11). Its twiddle step also runs inside lint, and
+# the whole target is a prerequisite of sim-tiny; standalone here so it can be
+# run on its own while editing rtl/fft/, the twiddle generator or the vector
+# generator.
+fft-check:
+	$(FFT_CHECK_RECIPE)
 
 cdc-inventory:
 	$(CDC_INVENTORY_RECIPE)
@@ -867,6 +972,29 @@ calibrate-cmult:
 	$(RUN_CALIBRATION) --kernel cmult --seed $(SEED) --jobs $(CALIB_JOBS) \
 	    --quartus-bin '$(QUARTUS_BIN)' $(CALIB_ARGS)
 
+# `calibrate-fft` (issue #11): the SPEC 18 items 4 and 5 — "one FFT stage" and
+# "one full FFT". Two projects rather than one, because the two questions are
+# different: fft_stage_calib prices the arithmetic and the memory of a single
+# radix-2^2 stage in isolation (delay feedback, twiddle ROM, DSP mapping), and
+# fft_core_calib prices the whole SPEC 5 block, so the difference between them is
+# the buffering cost of the streaming wrapper rather than an argument about it.
+#
+# Windows side only, and deliberately not a prerequisite of any simulation
+# target, for the reasons calibrate-cmult gives. The same CALIB_JOBS warning
+# applies and is worth repeating: one Fitter run of these projects peaks near
+# 20 GB of virtual memory on this host.
+calibrate-fft:
+	$(QUARTUS_CHECK)
+	$(PYTHON_CHECK)
+	@printf '[calibrate] SPEC 18 sweep: kernel=fft_stage seed=%s jobs=%s\n' \
+	    '$(SEED)' '$(CALIB_JOBS)'
+	$(RUN_CALIBRATION) --kernel fft_stage --seed $(SEED) --jobs $(CALIB_JOBS) \
+	    --quartus-bin '$(QUARTUS_BIN)' $(CALIB_ARGS)
+	@printf '[calibrate] SPEC 18 sweep: kernel=fft_core seed=%s jobs=%s\n' \
+	    '$(SEED)' '$(CALIB_JOBS)'
+	$(RUN_CALIBRATION) --kernel fft_core --seed $(SEED) --jobs $(CALIB_JOBS) \
+	    --quartus-bin '$(QUARTUS_BIN)' $(CALIB_ARGS)
+
 # Rebuild the JSON record and the summary table from evidence already on disk.
 # Runs no Quartus and is safe on any host that has a Python interpreter.
 
@@ -895,9 +1023,12 @@ calibrate-pfb8:
 	@$(PYTHON) scripts/run_calibration.py --kernel pfb8 --seed $(SEED) \
 	    --jobs $(CALIB_JOBS) $(CALIB_ARGS)
 
+# KERNEL selects which sweep to rebuild; default cmult, e.g. KERNEL=fft_core.
+CALIB_KERNEL ?= cmult
+
 calibrate-summary:
 	$(PYTHON_CHECK)
-	$(RUN_CALIBRATION) --kernel cmult --summary-only
+	$(RUN_CALIBRATION) --kernel $(CALIB_KERNEL) --summary-only
 
 # ===========================================================================
 # Cross-toolchain analysis targets (SPEC.md 16)
@@ -913,9 +1044,9 @@ reproduce-final:
 	$(call TODO,25,Evidence package and reproducibility)
 
 .PHONY: help env-check \
-        lint numerics-check regmap-check cdc-inventory \
+        lint numerics-check regmap-check fft-check cdc-inventory \
         sim-tiny sim-medium sim-random sim-stress sim-coverage sim-full-smoke \
         coeff-check calibrate-fir calibrate-pfb8 \
         quartus-map quartus-fit quartus-sta quartus-report quartus-compile \
-        calibrate-cmult calibrate-summary \
+        calibrate-cmult calibrate-fft calibrate-summary \
         seed-sweep compare-baseline reproduce-final

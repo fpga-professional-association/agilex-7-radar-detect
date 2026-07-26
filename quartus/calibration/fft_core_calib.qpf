@@ -1,0 +1,16 @@
+# ---------------------------------------------------------------------------
+# fft_core_calib.qpf — SPEC 18 resource-calibration project: the full 64-point
+# streaming FFT (issue #11, SPEC 18 item 5).
+#
+# One revision, for the reason fft_stage_calib.qpf and cmult_calib.qpf give: the
+# sweep varies elaboration parameters, not revision settings, and the parameters
+# that produced each record live in the record rather than in a tracked file.
+#
+# Hand-maintained: do not let the GUI rewrite this file with tool metadata.
+# ---------------------------------------------------------------------------
+
+QUARTUS_VERSION = "26.1"
+
+# Revisions
+
+PROJECT_REVISION = "fft_core_calib"
