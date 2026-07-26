@@ -1,0 +1,16 @@
+# ---------------------------------------------------------------------------
+# bf_matrix_calib.qpf — SPEC 18 resource-calibration project: one beamforming
+# matrix slice (issue #12, SPEC 18 item 7).
+#
+# One revision, for the reason bf_dot_calib.qpf gives: the sweep varies
+# elaboration parameters, not revision settings, and the parameters that
+# produced a record are in the record.
+#
+# Hand-maintained: do not let the GUI rewrite this file with tool metadata.
+# ---------------------------------------------------------------------------
+
+QUARTUS_VERSION = "26.1"
+
+# Revisions
+
+PROJECT_REVISION = "bf_matrix_calib"

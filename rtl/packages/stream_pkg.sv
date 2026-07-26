@@ -86,12 +86,39 @@ package stream_pkg;
   // DATA is sized for the SPEC 3 nominal BEAT, not for one sample: a beat
   // carries SAMPLES_PER_CYCLE complex samples, which is 8 x 2 x SAMPLE_W = 256
   // bits in the full_agmf039 configuration. The polyphase bank (issue #10) is
-  // the first block whose interface is actually that wide; the previous bound of
+  // the first block whose interface is actually that wide; the original bound of
   // 64 covered a single complex sample and matched no SPEC 11 configuration.
   // Raising it changes no instance's payload width — every instance's width
   // comes from its own stream_geom_t — it only widens the working type the
   // pack/unpack functions compute in.
-  localparam int unsigned STREAM_MAX_DATA_W = 256;
+  //
+  // 1024 SINCE ISSUE #12, AND THE BEAMFORMER IS WHY. Every block up to the
+  // beamformer consumes a beat that is one sample per lane; the beamforming
+  // matrix (SPEC 7.5) consumes a beat that is BIN_PAR frequency bins EACH
+  // carrying the whole N_ANT antenna vector, because a beam is a sum ACROSS
+  // antennas and every antenna's sample for a bin must be present at once. That
+  // is BIN_PAR * N_ANT * 32 bits: 1024 at the 2-bin, 16-antenna slice the SPEC
+  // 18 calibration compiles.
+  //
+  // The bound was raised rather than the calibration shrunk because the
+  // alternative is worse than it looks. Quartus does not define SYNTHESIS's
+  // opposite: with the bound left at 256 the elaboration checks (which live
+  // under `ifndef SYNTHESIS`) are absent from a synthesis build and stream_pack
+  // would silently TRUNCATE the data field, so three quarters of the
+  // beamformer's multipliers would optimise away and the calibration would
+  // report a resource figure for a block that does not exist. SPEC 24 forbids
+  // exactly that ("constant-driving unused inputs so large blocks optimize
+  // away"), and a silent truncation is the same defect arrived at by accident.
+  //
+  // NOT 4096, which is what the full_agmf039 beamformer beat (8 bins x 16
+  // antennas) will need. The cost of this bound is linear: every pack/unpack in
+  // the design computes in a STREAM_MAX_PAYLOAD_W-bit working type, so 4096
+  // would be four times this one's simulation cost paid by every block for a
+  // geometry nothing yet verifies. Raising it to 4096 belongs to the issue that
+  // builds the alignment network producing such a beat (#16) and the one that
+  // freezes full scale (#20), with measured data in hand. The measured cost of
+  // THIS raise is recorded in DECISIONS.md (issue #12).
+  localparam int unsigned STREAM_MAX_DATA_W = 1024;
   localparam int unsigned STREAM_MAX_ID_W   = 8;
   localparam int unsigned STREAM_MAX_SEQ_W  = 32;
   localparam int unsigned STREAM_MAX_USER_W = 8;

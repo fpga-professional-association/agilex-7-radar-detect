@@ -2226,3 +2226,377 @@ clock enable or a reset, which are the three things that stop the fold), and `co
 states that a pair costs one `complex_multiplier`. Both are measurements waiting to be made,
 not results. Issue #10's decision 13 is the standing warning that applies here: lint clean
 is not the same as synthesizable, and this kernel has not yet been through Quartus.
+
+## 2026-07-25 — Beamforming matrix: the aligned-vector beat, one quantisation per beam, visible time multiplexing, a reused weight store  (issue #12)
+
+Context: SPEC §7.5 asks for `Y[b] = sum_a X[a]·W[b][a]` over up to 16 antennas and 16 beams,
+eight frequency bins per cycle, complex programmable weights with double buffering and safe
+bank switching, a pipelined accumulation tree, saturation and overflow reporting,
+parameterised multiplier implementation and parameterised beam and bin parallelism — and,
+in its own paragraph, *"Do not silently reduce throughput to meet utilization. Any time
+multiplexing must be visible in parameters and reported throughput."* SPEC §18 items 6 and 7
+require one dot product and one complete beam to be synthesized and measured before
+full-scale parameters are chosen. This is the third Phase 2 kernel and **the design's
+dominant DSP consumer**: the numbers below are the ones issue #20's parameter freeze has to
+be planned around.
+
+**Decision 1 — the input beat is `BIN_PAR` aligned antenna vectors, and the alignment is
+stated as a contract because nothing downstream can check it.** A beat's data field carries
+`BIN_PAR` consecutive frequency bins, each as the *complete* vector of `N_ANT` complex
+samples for that bin, bin-major and antenna-minor. With `BIN_PAR = 1` that is exactly "one
+beat is one bin's antenna vector", which is what issue #16's frequency alignment network
+will produce.
+
+The word *aligned* is the whole contract, and it is the reason it is written down in
+ARCHITECTURE.md rather than left to a diagram: a beamformer sums **across** the antenna
+dimension, so a beat in which antenna 3 is one bin behind the others produces a result that
+is not a beam **and is not detectably wrong from the output alone**. It is still a complex
+number of plausible magnitude; it still saturates plausibly; it passes every protocol check.
+There is no test this block can run on itself that catches a misaligned producer.
+
+What the block deliberately does *not* require of #16 is as important: no particular bin
+order (`bin_base` is positional, not decoded) and no relationship between frame length and
+any parameter. Constraining either would push a beamformer parameter into the alignment
+network for nothing.
+
+*The cost is a very wide interface, and it is paid rather than hidden.* `BIN_PAR * N_ANT * 32`
+bits: 1024 at the calibrated slice, **4096** at the `full_agmf039` 8-bin, 16-antenna
+configuration. That is the widest interface in the design and it is intrinsic — an
+alternative that presented antennas serially would need `N_ANT` beats of storage per bin
+inside this block, which is the alignment network rebuilt in the wrong place.
+
+**Decision 2 — one quantisation, at the end of the tree, and the cost of the alternative is
+a measured number rather than an argument.** Every `complex_multiplier` runs with
+`ROUND_OUT = 0`; the `N_ANT` exact 33-bit partial products are summed at
+`bf_acc_w(N_ANT) = fxp_mac_q15_acc_w(2*N_ANT)` bits — 37 for 16 antennas — and rounded and
+saturated **once**, at the output.
+
+This is `fxp_pkg`'s accumulator policy applied literally, and the width makes the
+accumulation provably unable to overflow, so there is **no intermediate saturation
+anywhere**. Three things follow, and all three are load-bearing:
+
+* integer addition is associative and nothing clamps in between, so the tree's *shape*
+  cannot change its *answer*. That is what makes `ADD_REG_EVERY` a pure cost parameter and
+  what lets one expectation list serve every engine in the verification top;
+* the C++ model may sum antenna 0 upward while the RTL sums through a balanced tree, and the
+  two are the same integer rather than merely close;
+* rounding per antenna would buy **sixteen** rounding networks instead of one. Issue #9
+  measured what one costs: `MULT4` at four stages is 102.0 kernel ALMs and 715 MHz with
+  `ROUND_OUT = 1` against 1.2 kernel ALMs and ≥ 1302 MHz with `ROUND_OUT = 0` — about a
+  hundred ALMs and roughly half the achievable clock per avoided rounding, plus double the
+  quantisation noise.
+
+*The output format is Q1.15 with saturation, deliberately not a wider "beam sample".* SPEC §6
+fixes one sample format for the whole datapath, and everything downstream — the power and
+covariance engine (#13), CFAR (#14), the packet payload — is written against Q1.15 complex.
+A wider beam sample would make the beamformer the one block whose output nothing else can
+consume without a converter, and the converter would round anyway. Saturation *is* a real
+event here — the sum of `N` Q1.15 products reaches `N` in magnitude — so the programming
+contract is that a weight row is normalised (`sum_a |W[b][a]| <= 1`), and a row that is not
+produces a clamped sample and a direction-resolved flag rather than a wrapped one. A wrapped
+overflow turns a strong beam into a strong beam of the opposite sign, which CFAR cannot
+distinguish from a real target.
+
+*The exact accumulator is exported anyway.* `bf_dot` presents `acc_re`/`acc_im` at
+`bf_acc_w(N_ANT)` bits, unrounded and unsaturated. Nothing in this issue consumes it, but
+issue #13 computes `|Y|²` and would otherwise square a value that has already been rounded
+and clamped. It costs nothing when unused — it is the same wire the quantiser reads — and it
+is the difference between a clean interface for the next kernel and a second copy of this
+module.
+
+**Decision 3 — time multiplexing is a first-class, reported property, not an implementation
+detail.** When `BEAM_PAR < N_BEAMS` the engine computes the remaining beams on later cycles
+from the same held input beat, in `BEAM_MUX = N_BEAMS / BEAM_PAR` groups. The full statement,
+derived from the parameters rather than asserted:
+
+```text
+input  beats accepted per cycle  =  1 / BEAM_MUX
+output beats produced per cycle  =  1
+sustained bins per cycle         =  BIN_PAR / BEAM_MUX
+arithmetic throughput            =  BIN_PAR * BEAM_PAR beam-bins per cycle   (invariant)
+```
+
+The last line is the substance: multiplexing trades **input rate for engine reuse** and
+changes nothing else. All six numbers are exported on the block's `tput_*` ports, read back
+through `WEIGHT_PARALLELISM` / `WEIGHT_THROUGHPUT` in the register map, and checked against
+the elaborated parameters by the test — so SPEC §7.5's "visible in ... reported throughput"
+is a readback rather than a comment. `beamformer_assertions` additionally checks the
+admission rate on live traffic, so a build that admitted faster than the engine can serve
+fails rather than silently dropping beams.
+
+*`BEAM_MUX` is restricted to a power of two, and the restriction buys something specific.*
+The output sequence number is `seq_out = {seq_in, group}`: a free concatenation, continuous
+beat-to-beat (which `stream_protocol_checker`'s `a_seq_continuous` requires on the master
+interface), and invertible by slicing, so a consumer recovers the input beat index and the
+beam group. A non-power-of-two factor would need a multiply on the sequence field and would
+break the slice.
+
+*The output `user` field carries the beam group.* SPEC §12.5's transaction identity names
+`beam` as a dimension and this is the only field it can live in; the bin dimension is
+positional within the beat and needs none. Forwarding the input's `user` instead would leave
+`beam` unexpressible. Output beat *k* is not "the same beat as" any input beat once
+`BEAM_MUX > 1`, so this is a convention, and the precedent for stating one rather than
+implying it is issue #11 decision 8.
+
+**Decision 4 — the weight swap is aligned to the ISSUE of the first beam group, not to the
+admission of the beat, and this was a real defect found by a multiplexed DUT.** The obvious
+wiring drives the weight bank's `core_beat`/`core_sof` from `admit`/`s_fields.sof`, exactly
+as `pfb_bank` does. It is wrong here, and only here, because of decision 3: with
+`BEAM_MUX > 1` a new beat is admitted **on the same cycle** as the *last group of the
+previous beat is issued* — that is precisely what sustains one beat every `BEAM_MUX` cycles.
+Driving the bank from the admission therefore swaps the matrix one cycle early, and the
+previous frame's final beat gets its last `BEAM_PAR` beams computed with the **next frame's**
+weights.
+
+The symptom is a frame beamformed with two different calibration solutions, on one beat per
+frame, in beams nobody is looking at. It is invisible at `BEAM_MUX = 1`, where admission and
+issue coincide — which is exactly why `sim/verilator/tops/beamformer_top.sv` elaborates a
+multiplexed instance alongside the reference one, and why the swap pass found it on `mux2`
+and on nothing else:
+
+```text
+ERROR [rtl_vs_model] swap.mux2 seq 1087 beam+0 bin 0: RTL (5863,4567) vs model (500,-554)
+```
+
+The fix — `core_beat = issue && (grp == 0)`, `core_sof = the held beat's sof` — also makes
+the property *stateable*: the bank in use changes on the cycle the datapath first reads it
+for the new frame, which is what `a_coeff_swap_at_sof` asserts.
+
+**Decision 5 — `stream_pkg::STREAM_MAX_DATA_W` is raised from 256 to 1024, and not to 4096.**
+Decision 1's beat is `BIN_PAR * N_ANT * 32` bits, so the SPEC §18 matrix calibration (2 bins,
+16 antennas) needs 1024 and the full-scale configuration will need 4096. The bound is on the
+*working type* the pack/unpack functions compute in, not on any instance's payload width.
+
+The bound was raised rather than the calibration shrunk because the alternative is worse than
+it looks. Quartus does not define the opposite of `SYNTHESIS`: with the bound left at 256 the
+elaboration checks — which all live under `` `ifndef SYNTHESIS `` — are **absent from a
+synthesis build**, and `stream_pack` would silently truncate the data field. Three quarters
+of the beamformer's multipliers would then optimise away and the calibration would report a
+resource figure for a block that does not exist. SPEC §24 forbids exactly that
+("constant-driving unused inputs so large blocks optimize away"); a silent truncation is the
+same defect arrived at by accident.
+
+Not 4096, because the cost is linear and paid by everything: every pack/unpack in the design
+computes in a `STREAM_MAX_PAYLOAD_W`-bit working type, so 4096 would be four times this
+raise's simulation cost, paid by every block, for a geometry nothing yet verifies. **Measured cost of the raise from 256 to 1024: `make sim-tiny SEEDS=1` from a clean build directory went from 144 s to 152 s wall clock on this host — 5.6%, with every one of the eighteen test runs passing at both settings.** Raising it to 4096 belongs to the issue that builds the alignment network
+producing such a beat (#16) and the one that freezes full scale (#20), with their own
+measurement in hand.
+
+**Decision 6 — the weight bank REUSES `rtl/pfb/coeff_bank.sv`; it does not reimplement it,
+and it was not hoisted into `rtl/common/` either.** SPEC §7.5's "weight double buffering" and
+"safe weight-bank switching" are, word for word, the requirement SPEC §7.1 places on the
+polyphase coefficient store, and issue #10 built exactly that: a dual-bank store of
+`P × T` complex Q1.15 words, written through a `cdc_handshake`, swapped by a `cdc_pulse` at a
+frame boundary, with status synchronised back and a checker proving both properties. Nothing
+in it is polyphase-specific — `PHASES × TAPS` is a two-dimensional index into a flat store,
+and here it is `N_BEAMS × N_ANT`.
+
+So `weight_bank` instantiates it and adds what is genuinely beamformer-specific: the SPEC
+§7.5 bounds, the beam-major/antenna-minor index contract (checked at elaboration at the two
+corners a transposed instantiation would hit), and a beamformer-named status surface for the
+register map.
+
+*The tidier refactor — hoist `coeff_bank`'s body into a `dual_bank_store` under
+`rtl/common/` and make both a thin wrapper — was rejected for now, in the open.* It changes
+no logic; it would move the SPEC §8 CDC inventory entry and the assertion names of a module
+that is already verified and calibrated, for no functional gain; and issue #13 is in flight
+against the same tree, so a mechanical refactor of a shared file is a merge hazard bought
+with nothing. The honest cost is a naming seam — a file under `rtl/beamformer/` instantiating
+a module under `rtl/pfb/` — and it is recorded rather than hidden. The moment to pay for the
+hoist is when a **third** consumer appears; `control/regmap.json` already names issue #16's
+per-antenna fan-out as one.
+
+*The dividend is immediate:* `a_coeff_swap_at_sof` and `a_coeff_stable_between` hold for the
+beam weights with no second copy to drift, and the negative test that proves the first one
+can fire is the same mechanism issue #10 built.
+
+**Decision 7 — swap granularity is the whole array, never per beam.** One `active_bank` bit
+covers all `N_BEAMS × N_ANT` weights; a swap replaces the entire matrix atomically at a frame
+boundary. Per-beam granularity — `N_BEAMS` independent bank bits and pending flags — was
+considered and rejected:
+
+* a beamforming matrix is a **calibration solution**, not `N_BEAMS` independent filters. The
+  rows are computed together from one array-manifold estimate and a beam pattern is only
+  meaningful relative to the others'. Half-swapped, the array steers to a geometry that was
+  never solved for, and no downstream consumer could tell that from a real result;
+* "which bank is active" is **one bit** in the register map. Per-beam makes it an
+  `N_BEAMS`-bit field, makes `SWAP_REQ` a mask, and makes "the swap completed" a reduction
+  software has to poll — a materially larger control surface bought to enable an operation
+  nobody has asked for;
+* the property that makes double buffering worth having — the active bank's contents never
+  change except on the cycle the active bank changes — is stateable for one bank bit and
+  becomes `N_BEAMS` separate properties for `N_BEAMS` bits.
+
+The cost is that a single-beam update still costs a full spare-bank load. That is a software
+cost, on a plane that is not in the datapath, and it buys an atomic matrix. If a later issue
+needs incremental steering it should get a separate mechanism with its own name, not a
+widened bank bit.
+
+**Decision 8 — the independent oracle leg is a double-precision evaluation in C++, not a
+committed NumPy vector set, and this is a deliberate departure from issues #4/#9/#10/#11.**
+SPEC §12.4's problem is that an oracle agreeing only with itself is not an oracle, and the
+C++ model shares `fxp_pkg`'s definitions with the RTL *by design*. Every non-saturating beat
+is therefore also checked against `bf::dot_float()` — the same sum in doubles, through no
+shared code — to within 2 output LSB.
+
+Why no generator and no golden file: the beamformer is **stateless**. There is no history, no
+schedule and no transcendental table, so a vector file would carry no information the weight
+set and the input beat do not already carry — whereas an FFT vector pins a whole scaling
+schedule and a PFB vector pins a tap ordering. The two error classes a vector file exists to
+catch here are covered more directly: a *wrong algorithm* by the double-precision leg, and a
+*wrong index* by the Hadamard orthogonality case and the SPEC §13.2 permutation relation,
+both of which are expectations with no model in them at all. If a later issue makes the
+beamformer stateful, this trade stops holding and a generator should be added with it.
+
+**Decision 9 — a symmetric directed case cannot detect a transpose, and the fault injection
+is what said so.** The oracle was proved to bite by transposing the weight index in
+`beamformer.sv`. It fired on 41 472 model comparisons, 41 472 double-precision comparisons and
+1 024 permutation-relation comparisons — but on **zero** directed comparisons, because the
+unit-weight pass had been written as "beam *b* selects antenna *b*", which makes `W` the
+identity: symmetric, and therefore unchanged by a transpose. The Hadamard pass is symmetric
+too, by construction (`H[p][a]` depends only on `popcount(p & a)`).
+
+The unit-weight pass was changed to a cyclic shift — asymmetric for every `N_ANT > 2` — and
+the injection re-run to confirm it now fails as well. The lesson generalises and is recorded
+because of it: **a directed case built from a symmetric matrix is blind to a transpose**, and
+a transpose is the most likely defect in any matrix kernel. The permutation relation is the
+check that does not depend on getting that right.
+
+**Decision 10 — the adder tree is one signal per level, not one array indexed by level, and
+the shape is forced rather than chosen.** Verilator's combinational-loop analysis works on
+whole variables: with the whole tree in a single `node[c][l][i]` array, a level that feeds the
+next one *combinationally* — which is exactly what `ADD_REG_EVERY > 1` asks for — makes the
+array appear to depend on itself and the build fails with `UNOPTFLAT`.
+`rtl/pfb/fir_lane.sv` keeps one array only because every one of its levels is registered, so
+the loop is always broken by a flip-flop. Declaring each level inside its own generate scope
+makes the dependency the acyclic chain it actually is, at the cost of one hierarchical
+reference per level and no waiver.
+
+### Measured calibration data (SPEC §18 items 6 and 7, seed 1)
+
+Seed 1, `AGMF039R47B1E1VC`, Quartus Prime Pro 26.1.0 Build 110, probe constraint 600.24 MHz
+— the same device, the same tool and the same deliberately-unreachable probe issues #9, #10
+and #11 used, so all four sets of numbers are comparable. Four points, all successful. Full
+records in `results/synthesis/calibration_bf_dot.json` and `calibration_bf_matrix.json`
+(generated, not committed); per-point evidence, including the verbatim DSP and retiming
+panels, under `results/synthesis/calibration/`.
+
+| point | DSP | DSP mode | M20K | ALM (total / kernel) | ALUTs | regs (total / kernel) | Hyper (kernel) | Fmax MHz | depth | fit s |
+|---|---|---|---|---|---|---|---|---|---|---|
+| `bfdot_a16_reg1` | 32 | 32× sum of two 18×18 | 0 | 1234 / 651.2 | 1285 | 1478 / 1407 | 109 | 660.1* | 1 | 584 |
+| `bfdot_a16_reg2` | 32 | 32× sum of two 18×18 | 0 | 1241 / 658.2 | 1295 | 871 / 800 | 231 | **460.0** | 2 | 581 |
+| `bfmat_b2x4a16_reg1` | 256 | 256× sum of two 18×18 | 7 | 12146 / 11121.5 | 19086 | 19782 / 18658 | 128 | **413.9** | 3 | 1054 |
+| `bfmat_b2x4a16_reg2` | 256 | 256× sum of two 18×18 | 7 | 9739 / 8715.6 | 13255 | 14109 / 12985 | 76 | **402.4** | 4 | 1053 |
+
+`*` the register-to-register paths met the 600 MHz probe, so that Fmax is a lower bound
+rather than a measured limit. Every other figure is a genuine measured limit. The worst
+register-to-register path is **inside `u_kernel` for all four points**, so none of these
+numbers is bounding the wrapper instead of the kernel; `scripts/run_calibration.py` records
+that per point rather than leaving it for a reader to notice.
+
+**The accumulation tree does not compete with the complex multiply for the DSP block's
+adder.** Every point maps to exactly 2 DSP blocks per complex multiply in `Sum of Two 18x18`
+mode — 32 blocks for a 16-antenna dot product, 256 for eight of them — which is issue #9's
+mapping scaled linearly and completely unchanged by the 37-bit adder tree hanging off it.
+That was the open question this kernel had to answer, because issue #10 found the *opposite*
+result one level down: a systolic FIR buys no DSP cascade precisely because the complex
+multiply has already consumed the block's adder. Here the tree is in fabric by construction
+and the DSPs are untouched, so **DSP count is exactly `2 × N_ANT` per dot product and scales
+exactly linearly**. That is what makes the full-scale projection below arithmetic rather than
+extrapolation.
+
+**The adder-tree pipelining answer INVERTS between the atom and the block, and that is the
+most useful thing this sweep produced.**
+
+At the dot product, `ADD_REG_EVERY = 2` is a disaster for Fmax: it saves 607 kernel registers
+(43%), saves **no ALMs at all** (+7, i.e. the adders are the same adders), and costs
+200 MHz — 660.1 down to 460.0, a 30% loss that lands it 2% above the SPEC §2 450 MHz target
+with no margin. The retimer visibly tried: 231 Hyper-Registers against 109, and still
+`Path Limit`.
+
+At the block, the same axis costs **2.8%** of Fmax (413.9 → 402.4) and saves **22% of kernel
+ALMs** (11121.5 → 8715.6) and **30% of kernel registers** (18658 → 12985). The reason is the
+next finding: at block level the critical path is not in the tree at all, so shortening the
+tree's pipeline stops mattering and only its cost remains.
+
+**Neither block point clears 450 MHz, and the limit is the WEIGHT DISTRIBUTION NETWORK, not
+the arithmetic.** `bfmat_b2x4a16_reg1`'s worst register-to-register path is
+
+```text
+u_kernel|u_weights|u_store|mem[0][25][18]
+   -> u_kernel|g_bin[0].g_beam[1].u_dot|g_mult[6].u_mult|g_reg_in.b_q.im[6]
+```
+
+— the weight store's output, through the beam-group multiplexer, into a multiplier's operand
+register — with the Fitter reporting `Insufficient Registers` rather than `Path Limit`, i.e.
+the path is **register-starved and not logic-starved**. The `reg2` point's path moved
+somewhere else again (`f_im_q.sat_pos -> u_sat_cnt|count_q[6]`, the saturation flag into the
+telemetry counter), which is also not the arithmetic. The arithmetic itself clears 660 MHz.
+
+This is exactly what `bf_matrix_wrap`'s header and `beamformer.sv` section 5 predicted would
+be worth measuring, and it was predicted because issue #10 found the analogous cone — the
+coefficient bank's `bank_sel` into a multiplier operand — on the critical path of a FIR lane.
+Same shape, one level up, and now with a number.
+
+**The structural answer, and why it is NOT made here.** A pipeline register between the
+weight bank's output and the multiplier operand would break that path. It is not free and it
+is not local:
+
+* it costs `BEAM_PAR × N_ANT × 32` flip-flops — 2048 at this slice, **8192** at the full-scale
+  16-beam configuration;
+* it moves the weight-bank swap point. Decision 4 above aligns the swap to the *issue* of the
+  first beam group precisely so the bank in use changes on the cycle the datapath first reads
+  it; inserting a register in the weight path means the beat/`sof` pair driving the bank must
+  move with it, or `a_coeff_swap_at_sof` stops describing the truth.
+
+That is a timing-closure change with a functional blast radius, and SPEC §20 has a procedure
+for exactly that kind of change — one hypothesis, the smallest defensible edit, correctness
+re-proven, then a compile. It is deliberately **not** made in this issue, on the same
+reasoning issue #11 recorded for the FFT's delay-feedback path: this issue's remit is to
+produce the measurement that says which change to make, and this is it. **The number to beat
+is 413.9 MHz, the path is named above, and the bit-exact model, the three-engine equivalence
+and the permutation relation are what will prove the change did not alter a single beam.**
+
+**The seven M20K at the block are the output elastic buffer, not the weight store.** Both dot
+points report M20K = 0 and MLAB = 0: sixteen 32-bit weights are ALM registers. The 8 × 16 × 2
+× 32-bit weight store is likewise not a memory. The seven blocks are the 280-bit output
+payload at the credit-derived depth, which is the same thing issue #10 found at `pfb8` and the
+same note applies — `stream_elastic_buffer`'s header still claims distributed registers "by
+construction", and that claim is wrong at wide payloads.
+
+**Decision 11 — `ADD_REG_EVERY = 1` is the shipped default, on measurement.** At the atom it
+is 200 MHz better for 607 registers and zero ALMs. At the block the two are within 3% of each
+other on Fmax while `reg2` is 22% cheaper — which would argue for `reg2` *if* the block's
+limit were the tree. It is not: the limit is the weight path, and fixing that (above) will
+move the block's Fmax back toward the arithmetic's, at which point the tree's own 200 MHz
+gap starts to matter again. Shipping the configuration with the headroom, and re-measuring
+the axis after the weight path is pipelined, is the order that cannot paint itself into a
+corner. The parameter stays, the sweep entry stays, and issue #20 has both numbers.
+
+### Full-scale DSP projection (SPEC §2, SPEC §18)
+
+DSP scales **exactly** linearly and is measured at both levels (32 per 16-antenna dot
+product at the atom, 256 for eight of them at the block), so this is arithmetic:
+
+| configuration | dot products | DSP blocks | % of 12 300 | sustained bins/cycle |
+|---|---|---|---|---|
+| **16 beams × 8 bins/cycle × 16 antennas, `BEAM_PAR = 16`** | 128 | **4 096** | **33.3%** | 8 |
+| 16 beams × 8 bins/cycle × 16 antennas, `BEAM_PAR = 8` (`BEAM_MUX = 2`) | 64 | 2 048 | 16.7% | 4 |
+| 16 beams × 8 bins/cycle × 16 antennas, `BEAM_PAR = 4` (`BEAM_MUX = 4`) | 32 | 1 024 | 8.3% | 2 |
+
+ALM, projected from the block point's kernel figure of 11121.5 for eight dot products
+(1390 per dot product, which already includes an amortised share of the weight store, the
+beam-group mux, the credit gate and the output buffer): **≈ 178 k ALM, ≈ 13.6% of
+1 305 600**, at `BEAM_PAR = 16`. Treat that as a **lower bound**: the weight-mux part of it
+grows with `N_BEAMS × N_ANT` and with `BEAM_PAR`, both of which double or quadruple from the
+calibrated slice, and the calibration measured 8 beams and `BEAM_PAR = 4`.
+
+**The headline for issue #20.** Against issue #10's measured polyphase projection of
+**4 096 DSP (33%)** for 16 antennas, the beamformer at full parallelism is another
+**4 096 DSP (33%)** — **8 192 of 12 300, 67%, before the FFT, the covariance engine or CFAR**.
+SPEC §2 targets 75–90% total DSP utilisation, so the budget is not comfortable and it is not
+hopeless: it is *tight*, and the beamformer is the single largest lever in it. `BEAM_PAR` is
+that lever, its effect is exactly linear, and SPEC §7.5's insistence that time multiplexing be
+visible in reported throughput is precisely so that pulling it is a recorded architectural
+choice rather than a quiet reduction. The `WEIGHT_PARALLELISM` / `WEIGHT_THROUGHPUT`
+registers exist to make the chosen point readable from a running device.
