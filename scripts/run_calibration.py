@@ -740,6 +740,92 @@ MATRICES: dict[str, dict] = {
             },
         ],
     },
+    # -----------------------------------------------------------------------
+    # SPEC 18 item 9: "one packet-switch stage" (issue #18).
+    #
+    # rtl/packet/pkt_switch_stage.sv at the SPEC 7.8 NOMINAL SCALE: radix 4,
+    # four virtual channels, 512-bit flits. This is the block SPEC 7.8 says "is
+    # expected to create substantial ALM and routing pressure", and the switch is
+    # where the pressure is: sixteen 517-bit buffers, a 4x4 crossbar 517 bits
+    # wide, twenty arbiters and thirty-two credit counters, none of which exists
+    # anywhere else in the design.
+    #
+    # THE AXIS: OUT_PIPE, 0 against 1 — one registered hop between the switch
+    # allocator's grant and the outgoing link against two. The two produce
+    # IDENTICAL traffic (the extra stage is a pure delay on a credit-controlled
+    # link and the credit accounting already reserved the slot), which is what
+    # makes it a pure cost comparison. The question is whether a second register
+    # buys Fmax at 517-bit flits or whether HyperFlex retiming already recovers
+    # it from the first.
+    #
+    # NOT SWEPT, and in the open:
+    #   * PACKET_W. The point of measuring at 512 is that buffer storage,
+    #     crossbar width and routing scale with it while arbitration and credit
+    #     logic do not; a second width would be priced by the same argument the
+    #     projection already makes, and the ports are sized for one geometry so
+    #     a different width needs its own project.
+    #   * VC_DEPTH. It moves storage linearly and arbitration not at all. What a
+    #     later revision needs from it is the high-water mark the simulation
+    #     reports, not a fitter run.
+    #   * RADIX. 4 is the topology decision (packet_pkg section 5); a different
+    #     radix is a different network, not a different point.
+    # -----------------------------------------------------------------------
+    "pkt_switch": {
+        "description": "SPEC 7.8 packet-switch stage, 4x4 x 4 VC x 512-bit "
+                       "flits: output pipelining depth",
+        "top": "pkt_switch_wrap",
+        "axes": {
+            "out_pipe": [0, 1],
+        },
+        "points": [
+            {
+                "id": "pktsw_r4v4_w512_p0",
+                "label": "radix 4, 4 VC, 512-bit, OUT_PIPE=0",
+                "params": {"PACKET_W": 512, "N_VC": 4, "RADIX": 4,
+                           "VC_DEPTH": 4, "OUT_PIPE": 0, "DEST_DIGIT": 1},
+            },
+            {
+                "id": "pktsw_r4v4_w512_p1",
+                "label": "radix 4, 4 VC, 512-bit, OUT_PIPE=1",
+                "params": {"PACKET_W": 512, "N_VC": 4, "RADIX": 4,
+                           "VC_DEPTH": 4, "OUT_PIPE": 1, "DEST_DIGIT": 1},
+            },
+        ],
+    },
+
+    # -----------------------------------------------------------------------
+    # SPEC 18 item 9, second point: a TWO-STAGE fabric slice (issue #18).
+    #
+    # Two switch stages in series with the credit loop between them closed
+    # locally, at the same 512-bit flit width. The difference between this and
+    # pkt_switch is the cost of a HOP — the inter-stage flit bus and the credit
+    # return path — which is the term the full-scale projection cannot get from
+    # a single-stage measurement. See quartus/calibration/pkt_slice_wrap.sv for
+    # what this point deliberately does NOT price (the butterfly's shuffle
+    # permutation, which is placement rather than logic).
+    #
+    # ONE POINT. The OUT_PIPE axis was answered by pkt_switch above and the hop
+    # cost is what is being isolated here; sweeping the same axis twice would
+    # buy a copy of a number.
+    # -----------------------------------------------------------------------
+    "pkt_slice": {
+        "description": "SPEC 7.8 two-stage packet-fabric slice, 4 ports x 4 VC "
+                       "x 512-bit flits",
+        "top": "pkt_slice_wrap",
+        "axes": {
+            "stages": [2],
+        },
+        "points": [
+            {
+                "id": "pktslice_2stage_w512",
+                "label": "2 stages x radix 4 x 4 VC, 512-bit",
+                "params": {"PACKET_W": 512, "N_VC": 4, "RADIX": 4,
+                           "VC_DEPTH": 4, "OUT_PIPE": 0},
+            },
+        ],
+    },
+
+
 }
 
 # Per-kernel note recorded in the exported JSON, explaining what was left out of
@@ -777,6 +863,31 @@ PRUNING_NOTES: dict[str, str] = {
         "a 16-word by 32-bit line is far below an M20K's useful geometry and "
         "far above what should be spent on ALM registers; AUTO against MLAB is "
         "the question that is actually open. See scripts/run_calibration.py."),
+    "pkt_switch": (
+        "Two points on one axis: the switch stage's output pipelining depth, "
+        "OUT_PIPE 0 against 1, at the SPEC 7.8 nominal radix 4, four virtual "
+        "channels and 512-bit flits. PACKET_W is not an axis because the whole "
+        "point is to measure at full width rather than to extrapolate from the "
+        "tiny 64, and the wrapper's ports are sized for one geometry. VC_DEPTH "
+        "is not an axis because it moves storage linearly and arbitration not "
+        "at all; the number a later revision needs from it is the high-water "
+        "mark the simulation reports. RADIX is not an axis because a different "
+        "radix is a different network. STORAGE was pruned on the same grounds "
+        "as VC_DEPTH and the measured data says that was the wrong axis to "
+        "prune: 42 788 of the switch's registers are buffer storage in ALMs, "
+        "which is the largest single term in the full-scale projection, so "
+        "MLAB against regs is the sweep issue #20 should run first. See "
+        "scripts/run_calibration.py and DECISIONS.md (issue #18)."),
+    "pkt_slice": (
+        "One point. It exists to isolate the per-HOP cost — the inter-stage "
+        "flit bus and the credit return path — which a single-stage compile "
+        "cannot show; the output-pipelining axis was answered by the pkt_switch "
+        "sweep and repeating it here would buy a copy of a number. The "
+        "butterfly's shuffle permutation is deliberately not reproduced on a "
+        "four-port slice: it is a fixed renaming of point-to-point wires whose "
+        "cost is placement rather than logic, and a permutation of four "
+        "elements is not the sixteen-element one the real fabric routes. See "
+        "quartus/calibration/pkt_slice_wrap.sv. "),
     "bf_dot": (
         "Two points on one axis: the adder-tree pipelining stride, a register "
         "per level against a register per two levels, at the SPEC 7.5 nominal "

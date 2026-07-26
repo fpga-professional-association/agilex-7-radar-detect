@@ -41,6 +41,11 @@ rtl/packages/covar_pkg.sv
 // (issue #14), which takes its input width from covar_pkg above by reference.
 rtl/packages/cfar_pkg.sv
 
+// And the packet window's block against rtl/packages/packet_pkg.sv (issue #18),
+// which states the detection-event payload width by reference to cfar_pkg above.
+// No packet DATAPATH is in this build.
+rtl/packages/packet_pkg.sv
+
 // ---- protocol assertions (SPEC 14) -------------------------------------
 // Instantiated inside reg_fabric under `ifndef SYNTHESIS`, so the protocol is
 // checked everywhere the fabric is used. Must precede the RTL that instantiates
@@ -62,6 +67,7 @@ rtl/control/reg_block_cfar.sv
 // covariance and CFAR windows, its hardware inputs are tied off in control_top:
 // this build tests the register plane, not the kernel.
 rtl/control/reg_block_history.sv
+rtl/control/reg_block_packet.sv
 rtl/control/reg_fabric.sv
 
 // ---- deliberately dead block (simulation only) -------------------------

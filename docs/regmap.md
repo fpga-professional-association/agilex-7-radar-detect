@@ -7,10 +7,10 @@ for the register and control plane ([SPEC.md](../SPEC.md) §9, issue #7). Edit t
 and re-run the generator; `make regmap-check` fails the build on any hand edit here or
 on a source change that was never regenerated.
 
-- Register-map version: **1.6.0** (schema 1)
+- Register-map version: **1.7.0** (schema 1)
 - Interface: 32-bit data, 16-bit byte address, 4 byte enables
 - Window per block: `0x1000` bytes
-- Blocks declared: 11 (10 implemented), registers implemented: 88
+- Blocks declared: 12 (11 implemented), registers implemented: 100
 
 ## Access types
 
@@ -40,6 +40,7 @@ the non-writable bits (`error=0`).
 | `debug` | `0x8000`–`0x8FFF` | 0 | planned (#19) | Snapshot and debug control |
 | `covar` | `0x9000`–`0x9FFF` | 7 | implemented | Integration settings |
 | `history` | `0xA000`–`0xAFFF` | 13 | implemented | Active bank selection; Frame counts |
+| `packet` | `0xB000`–`0xBFFF` | 12 | implemented | Fault injection; Stall counters; FIFO high-water marks |
 
 Any address outside every implemented window, any address inside a window but beyond
 that block's last register, any unaligned address, a write with no byte enables set,
@@ -54,9 +55,9 @@ Fixed identification of the control plane itself. Every field is a constant fold
 | Offset | Address | Register | Access | Reset | Description |
 |---|---|---|---|---|---|
 | `0x000` | `0x0000` | `MAGIC` | RO | `0x52414441` | Constant marker. Reading 0x52414441 ('RADA') at block base proves a control plane is present and the address decode is alive. |
-| `0x004` | `0x0004` | `VERSION` | RO | `0x01060001` | Register-map version, from regmap_version in the source of truth. Static build data, deliberately not a git describe: the same source tree must produce the same register contents on any machine, and a VCS-derived value would make the generated artefacts depend on checkout state. |
-| `0x008` | `0x0008` | `GEOMETRY` | RO | `0x1020580B` | Shape of the register plane, so a discovery walk needs no compiled-in constants. |
-| `0x00C` | `0x000C` | `CAPABILITY` | RO | `0x000006FF` | One bit per declared block, set when that block is implemented in this build. Bit i is block i in declaration order; a planned block reads 0 and its window returns error. |
+| `0x004` | `0x0004` | `VERSION` | RO | `0x01070001` | Register-map version, from regmap_version in the source of truth. Static build data, deliberately not a git describe: the same source tree must produce the same register contents on any machine, and a VCS-derived value would make the generated artefacts depend on checkout state. |
+| `0x008` | `0x0008` | `GEOMETRY` | RO | `0x1020640C` | Shape of the register plane, so a discovery walk needs no compiled-in constants. |
+| `0x00C` | `0x000C` | `CAPABILITY` | RO | `0x00000EFF` | One bit per declared block, set when that block is implemented in this build. Bit i is block i in declaration order; a planned block reads 0 and its window returns error. |
 
 ### `ID.MAGIC` — `0x0000`
 
@@ -69,7 +70,7 @@ Fixed identification of the control plane itself. Every field is a constant fold
 | Bits | Field | Access | Reset | Source | Description |
 |---|---|---|---|---|---|
 | `31:24` | `MAJOR` | RO | `0x1` | — | Incompatible layout change. |
-| `23:16` | `MINOR` | RO | `0x6` | — | Registers or fields added. |
+| `23:16` | `MINOR` | RO | `0x7` | — | Registers or fields added. |
 | `15:8` | `PATCH` | RO | `0x0` | — | Documentation-only change. |
 | `7:0` | `SCHEMA` | RO | `0x1` | — | Source-of-truth schema version. |
 
@@ -77,8 +78,8 @@ Fixed identification of the control plane itself. Every field is a constant fold
 
 | Bits | Field | Access | Reset | Source | Description |
 |---|---|---|---|---|---|
-| `7:0` | `N_BLOCKS` | RO | `0xB` | — | Declared blocks, implemented and planned. |
-| `15:8` | `N_REGS` | RO | `0x58` | — | Implemented registers across all blocks. |
+| `7:0` | `N_BLOCKS` | RO | `0xC` | — | Declared blocks, implemented and planned. |
+| `15:8` | `N_REGS` | RO | `0x64` | — | Implemented registers across all blocks. |
 | `23:16` | `DATA_W` | RO | `0x20` | — | Register data width in bits. |
 | `31:24` | `ADDR_W` | RO | `0x10` | — | Register address width in bits. |
 
@@ -86,7 +87,7 @@ Fixed identification of the control plane itself. Every field is a constant fold
 
 | Bits | Field | Access | Reset | Source | Description |
 |---|---|---|---|---|---|
-| `31:0` | `BLOCK_MASK` | RO | `0x6FF` | — | Implemented-block bitmap. |
+| `31:0` | `BLOCK_MASK` | RO | `0xEFF` | — | Implemented-block bitmap. |
 
 ## `build_params` — `0x1000`
 
@@ -868,6 +869,123 @@ The SPEC 7.3 time-frequency history and corner turn (rtl/memory/, issue #15). Tw
 | `1` | `COLLISION_SEEN` | W1C | `0x0` | — | At least one response addressed the slot being written. Unreachable outside fault injection. |
 | `2` | `SKEW_SEEN` | W1C | `0x0` | — | At least one antenna ran a full depth ahead of the frame barrier. |
 | `3` | `FRAMING_SEEN` | W1C | `0x0` | — | At least one write beat carried a start- or end-of-frame flag at the wrong beat index. A frame one beat short shifts every subsequent bin of that antenna for the rest of the run, and nothing downstream can tell a short frame from a correct one, because both are just words in a bank. |
+
+## `packet` — `0xB000`
+
+The SPEC 7.8 packet network (rtl/packet/, issue #18): the fabric's geometry and packet format reported by hardware, the SPEC 9 fault-injection hooks, the sticky reassembly-error bits from both ends of the network, and the per-stage and per-port telemetry. The window is at 0xB000 and NOT at the next free address (0xA000), deliberately: issue #15 was building the history-memory window concurrently with this one, and two blocks landing on one base is a merge conflict that neither side would see until the generator ran. Leaving a window between them costs nothing - the space is 16 windows wide and 12 are in use - and the alternative costs a re-gate.
+
+What this window does NOT contain is the CONTENT that rides over the network: the snapshot records, the aggregated telemetry payloads and the error-event bodies belong to issue #19, which owns the debug window at 0x8000. This block owns the fabric, not its traffic.
+
+| Offset | Address | Register | Access | Reset | Description |
+|---|---|---|---|---|---|
+| `0x000` | `0xB000` | `PACKET_CTRL` | MIXED | `0x00000001` | Master controls. TEL_CLEAR is write-1-pulse and reads back zero, because it is an event rather than a mode. |
+| `0x004` | `0xB004` | `PACKET_STATUS` | ROHW | `0x00000000` | Elaborated topology, reported by hardware. Software sizing its own buffers reads this rather than carrying build-time constants, exactly as the build-parameter block serves the rest of the design. |
+| `0x008` | `0xB008` | `PACKET_GEOMETRY` | ROHW | `0x00000000` | Flit geometry, reported by hardware because PACKET_W is a SPEC 11 sized parameter and a register map that baked it in would be a different map at every configuration. |
+| `0x00C` | `0xB00C` | `PACKET_FORMAT` | ROHW | `0x00000000` | Packet-header geometry. Every field here is a CONSTANT of rtl/packages/packet_pkg.sv rather than an elaboration parameter, so a captured packet decodes identically at every SPEC 11 size; it is reported anyway so that a decoder needs no build-time header at all. |
+| `0x010` | `0xB010` | `PACKET_FAULT` | RW | `0x00000000` | SPEC 9 fault injection for the fabric (SPEC 7.8 'error injection hook'). Two independent hooks. FLIP corrupts payload bits of the flits one ingress port is emitting: one bit is caught by the per-flit parity at the next hop, two are not - parity is blind to an even error count by construction - and are caught by the payload scoreboard instead, so the limits of the parity scheme are exercised rather than assumed. KILL withholds the credit one switch buffer would have returned upstream, which stops that virtual channel dead while producing no wrong data at all. The withheld credits are HELD and released when KILL_EN clears, not dropped, so the injection can be reverted and the fabric proved to recover; a dropped credit would be a one-way trip. |
+| `0x014` | `0xB014` | `PACKET_ERROR` | W1C | `0x00000000` | Sticky reassembly and framing errors, from BOTH ends of the network. Write 1 to clear; also cleared by PACKET_CTRL.TEL_CLEAR. The ingress bits describe what a SOURCE handed over and the egress bits what the FABRIC delivered, and they are kept apart because they are different questions: an ingress length error is a producer defect, an egress one is a transport defect, and a single 'length error' bit would make the two indistinguishable. |
+| `0x018` | `0xB018` | `PACKET_FLITS` | ROHW | `0x00000000` | Flits switched by the observed stage. Saturating rather than wrapping, for the reason every error-adjacent counter in this map saturates: a wrapped counter can read small on a fabric that has been busy for a long time. |
+| `0x01C` | `0xB01C` | `PACKET_STALLS` | ROHW | `0x00000000` | Cycles on which the observed stage held a buffered flit it could not move. |
+| `0x020` | `0xB020` | `PACKET_WATERMARK` | ROHW | `0x00000000` | The two numbers that size the next revision of the fabric's buffering and bound its arbitration. MAX_WAIT is the fairness metric: for every buffered head flit it counts the cycles on which the output that flit wanted granted somebody else, and reports the maximum ever observed. Counting overtakes rather than idle cycles is what makes it a property of the ARBITER rather than of the traffic - a head that waits because the whole network is backpressured has not been treated unfairly. |
+| `0x024` | `0xB024` | `PACKET_PKT_IN` | ROHW | `0x00000000` | Packets accepted by the observed ingress port. |
+| `0x028` | `0xB028` | `PACKET_PKT_OUT` | ROHW | `0x00000000` | Packets delivered by the observed egress port. Compared against PACKET_PKT_IN summed over the sources addressing it, this is the loss and duplication check expressed in registers rather than in a scoreboard. |
+| `0x02C` | `0xB02C` | `PACKET_OBSERVE` | RW | `0x00000000` | Which port and which stage the counters above report. One observation window multiplexed by software rather than 16 ports x 2 counters x 32 bits of register space: the counters are free-running in hardware and only the READ is multiplexed, so nothing is lost by moving the selector instead of the storage. |
+
+### `PACKET.PACKET_CTRL` — `0xB000`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `0` | `ENABLE` | RW | `0x1` | — | Global fabric enable. Reserved for the multi-domain integration (issue #19), which is where an enable can be lowered safely: a fabric disabled with packets in flight would strand them, so the sequencing belongs to the block that owns the producers. |
+| `8` | `TEL_CLEAR` | RWP | `0x0` | — | Clear every telemetry counter, every buffer high-water mark and every sticky error bit in the fabric, in one cycle across all stages and ports. One strobe rather than a per-counter clear, so a measurement window opens at one edge everywhere - the same argument rtl/common/perf_counter.sv makes for its snapshot strobe. |
+
+### `PACKET.PACKET_STATUS` — `0xB004`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `7:0` | `N_PORTS` | ROHW | `0x0` | — | Ingress and egress port count, RADIX**STAGES. |
+| `15:8` | `N_VC` | ROHW | `0x0` | — | Virtual channels per port. |
+| `23:16` | `RADIX` | ROHW | `0x0` | — | Ports per switch stage. |
+| `31:24` | `STAGES` | ROHW | `0x0` | — | Switch stages between ingress and egress. |
+
+### `PACKET.PACKET_GEOMETRY` — `0xB008`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `15:0` | `PACKET_W` | ROHW | `0x0` | — | Flit payload width in bits. |
+| `31:16` | `FLIT_W` | ROHW | `0x0` | — | Total flit width including the parity, VC, SOF and EOF control bits. |
+
+### `PACKET.PACKET_FORMAT` — `0xB00C`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `7:0` | `HDR_W` | ROHW | `0x0` | — | Header width in bits, occupying the low bits of the header flit's data field. |
+| `15:8` | `MAX_FLITS` | ROHW | `0x0` | — | Longest legal packet in flits, header included. |
+| `23:16` | `SEQ_W` | ROHW | `0x0` | — | Per (source, VC) packet sequence-number width. |
+| `27:24` | `DEST_W` | ROHW | `0x0` | — | Destination field width. |
+| `31:28` | `SRC_W` | ROHW | `0x0` | — | Source field width. |
+
+### `PACKET.PACKET_FAULT` — `0xB010`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `1:0` | `FLIP_MASK` | RW | `0x0` | — | Bit 0 flips one payload bit of the flit being emitted, bit 1 flips a second. Header flits are never corrupted: a flipped destination is a misroute the fabric would deliver correctly, which tests nothing. |
+| `8:4` | `FLIP_PORT` | RW | `0x0` | — | Ingress port the FLIP hook applies to. |
+| `12` | `KILL_EN` | RW | `0x0` | — | Enable the credit-return hook. |
+| `19:16` | `KILL_STAGE` | RW | `0x0` | — | Switch stage whose credit return is withheld. |
+| `24:20` | `KILL_PORT` | RW | `0x0` | — | Global port index within that stage. |
+| `29:28` | `KILL_VC` | RW | `0x0` | — | Virtual channel whose credit return is withheld. |
+
+### `PACKET.PACKET_ERROR` — `0xB014`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `0` | `ING_LENGTH` | W1C | `0x0` | — | A source's declared packet length disagreed with the flits it framed (SPEC 14 packet length consistency, checked at the producer). |
+| `1` | `ING_TYPE` | W1C | `0x0` | — | A source declared a reserved packet type. |
+| `2` | `ING_VC` | W1C | `0x0` | — | A source moved the VC field mid packet. |
+| `3` | `ING_LEN_RANGE` | W1C | `0x0` | — | A source declared a length outside 1..MAX_FLITS. |
+| `8` | `EGR_PARITY` | W1C | `0x0` | — | A delivered flit failed its parity check. |
+| `9` | `EGR_LENGTH` | W1C | `0x0` | — | A delivered packet's flit count disagreed with its header (SPEC 14 packet length consistency, checked at the consumer). |
+| `10` | `EGR_VC` | W1C | `0x0` | — | A delivered flit's VC tag disagreed with its packet's header. |
+| `11` | `EGR_DEST` | W1C | `0x0` | — | A packet arrived at a port that is not its destination: the routing function checked at its only observable end. |
+| `12` | `EGR_TYPE` | W1C | `0x0` | — | A delivered packet carried a reserved type. |
+
+### `PACKET.PACKET_FLITS` — `0xB018`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `31:0` | `VALUE` | ROHW | `0x0` | — | Flit count. |
+
+### `PACKET.PACKET_STALLS` — `0xB01C`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `31:0` | `VALUE` | ROHW | `0x0` | — | Stall-cycle count. |
+
+### `PACKET.PACKET_WATERMARK` — `0xB020`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `15:0` | `MAX_WAIT` | ROHW | `0x0` | — | Longest observed overtake run, in cycles. |
+| `23:16` | `HIWATER` | ROHW | `0x0` | — | Deepest observed switch input-buffer occupancy. |
+
+### `PACKET.PACKET_PKT_IN` — `0xB024`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `31:0` | `VALUE` | ROHW | `0x0` | — | Packet count. |
+
+### `PACKET.PACKET_PKT_OUT` — `0xB028`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `31:0` | `VALUE` | ROHW | `0x0` | — | Packet count. |
+
+### `PACKET.PACKET_OBSERVE` — `0xB02C`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `4:0` | `PORT` | RW | `0x0` | — | Ingress and egress port index for PACKET_PKT_IN and PACKET_PKT_OUT. |
+| `11:8` | `STAGE` | RW | `0x0` | — | Switch stage index for PACKET_FLITS, PACKET_STALLS and PACKET_WATERMARK. |
 
 ## Regenerating
 

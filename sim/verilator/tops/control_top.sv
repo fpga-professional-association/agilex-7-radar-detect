@@ -92,6 +92,8 @@ module control_top
     output wire [REGMAP_CFAR_N_REGS*32-1:0]     obs_cfar_pulse,
     output wire [REGMAP_HISTORY_N_REGS*32-1:0]  obs_history_csr,
     output wire [REGMAP_HISTORY_N_REGS*32-1:0]  obs_history_pulse,
+    output wire [REGMAP_PACKET_N_REGS*32-1:0]   obs_packet_csr,
+    output wire [REGMAP_PACKET_N_REGS*32-1:0]   obs_packet_pulse,
 
     // ---- control outputs the blocks drive ----
     output wire [31:0]                          obs_block_enable,
@@ -113,6 +115,13 @@ module control_top
     output wire [5:0]                           obs_cfar_ref_lead,
     output wire [15:0]                          obs_cfar_alpha,
     output wire                                 obs_cfar_status_clear,
+
+    // ---- the packet window's configuration outputs (issue #18) ----
+    output wire [1:0]                           obs_packet_flip_mask,
+    output wire [4:0]                           obs_packet_flip_port,
+    output wire                                 obs_packet_kill_en,
+    output wire [4:0]                           obs_packet_observe_port,
+    output wire                                 obs_packet_tel_clear,
 
     // Invariants of the blocks that have no writable or pulse bits. Both must
     // hold in every cycle of every test.
@@ -554,6 +563,68 @@ module control_top
       .hw_fault            (4'd0),
       .csr                 (obs_history_csr),
       .pulse               (obs_history_pulse)
+  );
+
+  // ---------------------------------------------------------------------------
+  // The packet-network window (issue #18). Its hardware telemetry inputs are
+  // tied off here for the same reason the coefficient, covariance and CFAR
+  // windows' are: control_top is the register plane's own test bench, and wiring
+  // a live rtl/packet/pkt_fabric.sv into it would make a register-plane failure
+  // and a packet-network failure indistinguishable.
+  // sim/verilator/tops/packet_top.sv drives the fabric's fault-injection and
+  // telemetry ports directly in the meantime, and the live wiring arrives with
+  // the multi-domain integration (issue #19).
+  // ---------------------------------------------------------------------------
+  wire       packet_cfg_enable_unused;
+  wire [3:0] packet_kill_stage_unused;
+  wire [4:0] packet_kill_port_unused;
+  wire [1:0] packet_kill_vc_unused;
+  wire [3:0] packet_observe_stage_unused;
+
+  reg_block_packet #(
+      .IDX_W (IDX_W)
+  ) u_packet (
+      .clk               (clk),
+      .rst_n             (rst_n),
+      .sel               (blk_sel[REGMAP_PACKET_INDEX]),
+      .write_enable      (blk_write_enable),
+      .read_enable       (blk_read_enable),
+      .index             (blk_index),
+      .write_data        (blk_write_data),
+      .byte_enable       (blk_byte_enable),
+      .read_data         (blk_read_data[REGMAP_PACKET_INDEX*REG_DATA_W +: REG_DATA_W]),
+      .ready             (blk_ready[REGMAP_PACKET_INDEX]),
+      .error             (blk_error[REGMAP_PACKET_INDEX]),
+      .cfg_enable        (packet_cfg_enable_unused),
+      .cfg_tel_clear     (obs_packet_tel_clear),
+      .cfg_flip_mask     (obs_packet_flip_mask),
+      .cfg_flip_port     (obs_packet_flip_port),
+      .cfg_kill_en       (obs_packet_kill_en),
+      .cfg_kill_stage    (packet_kill_stage_unused),
+      .cfg_kill_port     (packet_kill_port_unused),
+      .cfg_kill_vc       (packet_kill_vc_unused),
+      .cfg_observe_port  (obs_packet_observe_port),
+      .cfg_observe_stage (packet_observe_stage_unused),
+      .hw_n_ports        (8'd0),
+      .hw_n_vc           (8'd0),
+      .hw_radix          (8'd0),
+      .hw_stages         (8'd0),
+      .hw_packet_w       (16'd0),
+      .hw_flit_w         (16'd0),
+      .hw_hdr_w          (8'd0),
+      .hw_max_flits      (8'd0),
+      .hw_seq_w          (8'd0),
+      .hw_dest_w         (4'd0),
+      .hw_src_w          (4'd0),
+      .hw_err            (9'd0),
+      .hw_flits          (32'd0),
+      .hw_stalls         (32'd0),
+      .hw_max_wait       (16'd0),
+      .hw_hiwater        (8'd0),
+      .hw_pkt_in         (32'd0),
+      .hw_pkt_out        (32'd0),
+      .csr               (obs_packet_csr),
+      .pulse             (obs_packet_pulse)
   );
 
   // Invariants of the blocks with no writable and no pulse bits.

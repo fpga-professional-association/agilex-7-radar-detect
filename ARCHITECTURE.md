@@ -928,8 +928,46 @@ away, not an assumption.
 
 ### 3.6 Packet fabric (`rtl/packet/`)
 
-TODO — populated by issue #18. The detection-event payload it will carry is normative as of
-issue #14 and is specified in §6.4 below.
+The SPEC §7.8 event aggregator and packet network, in `packet_clk`. Populated by issue #18.
+Sixteen ingress adapters, two stages of four radix-4 switches wired as a butterfly, sixteen
+egress reassembly points, four virtual channels, `PACKET_W`-bit flits. The detection-event
+payload it carries is normative as of issue #14; the packet format that wraps it is §6.4
+below.
+
+| Module | Role |
+|---|---|
+| `../packages/packet_pkg.sv` | normative packet format: the 36-bit header layout, the flit layout and its odd-parity rule, the flit-isation arithmetic, the legality predicates, and the butterfly wiring and routing functions. Every offset in the design and in the C++ model resolves through it |
+| `pkt_rr_arb.sv` | the one arbiter: masked-priority round robin with a registered pointer that advances only when the caller CONSUMED the grant. Both arbitration levels of the switch are instances of it |
+| `pkt_ingress.sv` | per-source adapter. Frames a message stream into flits, prepends the header, assigns the per-(source, VC) sequence number, buffers per VC, and drives the credit-controlled link. Checks the declared length against the framed flit count (SPEC §14) |
+| `pkt_switch_stage.sv` | one RADIX x RADIX buffered switch: per-(port, VC) `sync_fifo`s, virtual-channel allocation, a REGISTER, switch allocation, credit counters both ways, the overtake fairness metric, and the credit-return fault hook. **The SPEC §18 item 9 calibration unit** |
+| `pkt_egress.sv` | per-destination reassembly point: per-VC buffers, a per-VC-enabled output port, and five sticky checks — parity, length, VC-tag agreement, destination, packet type — re-derived from the flits that actually arrived |
+| `pkt_fabric.sv` | the butterfly: N ingress, STAGES x (N/RADIX) switches, N egress, the wiring, the local credit loops, the fault-injection routing and the per-stage telemetry aggregation |
+
+**Two arbitration levels separated by a register.** SPEC §7.8 forbids an unregistered
+monolithic crossbar and asks for pipelined arbitration. The failure mode it is aiming at is an
+iSLIP-style request/grant/accept loop resolved combinationally, whose cone grows with
+RADIX x N_VC and which no amount of Hyper-Register retiming can break because the loop closes
+inside one cycle (SPEC §23: "treat feedback-loop latency as an architectural constraint").
+Here the VC allocator's result reaches the switch allocator only through the lock register, so
+the longest arbitration cone is ONE `pkt_rr_arb` and the two levels retime independently. The
+cost is one cycle of latency per hop on a packet's FIRST flit only; the lock persists for the
+rest of the packet, so flits 2..L are switched one per cycle with no re-arbitration.
+
+**Every credit loop is one hop long.** Ingress to stage 0, stage s to stage s+1, last stage to
+egress: flits forward, a registered credit pulse back, both ends adjacent. No backward signal
+crosses more than one hop and no combinational path runs from an egress consumer's `ready` to
+an ingress producer's `ready`, which is what makes the fabric's timing independent of its
+depth. The buffer-dependency graph is acyclic because every flit moves strictly forward, so
+the network is deadlock-free without VC remapping or escape channels.
+
+**What a virtual channel isolates, and what it does not.** An output VC is locked to one input
+for the duration of a packet; the output PORT is not locked, so a channel with no credit drops
+out of the switch allocation and the others keep the link busy. That is the SPEC §7.8 purpose
+of virtual channels and it holds inside the fabric. It does NOT extend to an ingress port's
+own message interface, which is serial: a producer half-way through handing over a packet on a
+jammed channel cannot offer a different one. That is head-of-line blocking at the producer, it
+is real, and the fix — if a later integration needs one — is a per-VC message interface per
+port, not a change to the fabric.
 
 ### 3.7 Control plane (`rtl/control/`)
 
@@ -1147,10 +1185,11 @@ TODO — populated by issue #19; HBM2e binding by issue #24.
 
 ### 6.4 Event packet format and virtual channels
 
-The virtual-channel arrangement, the arbitration and the 512-bit packet framing are
-populated by issue #18. What is **normative as of issue #14** is the DETECTION EVENT the
-CFAR detector emits and the aggregator carries — `rtl/packages/cfar_pkg.sv` is the
-definition, and this section is its prose.
+Two normative definitions live here. The DETECTION EVENT the CFAR detector emits
+(`rtl/packages/cfar_pkg.sv`, issue #14) is the network's primary payload; the PACKET FORMAT
+that wraps it, the virtual-channel rules, the topology and the flow control
+(`rtl/packages/packet_pkg.sv`, issue #18) are how it travels. This section is the prose for
+both, payload first.
 
 #### The detection-event contract
 
@@ -1212,10 +1251,124 @@ operation in the block on the reporting path. A consumer that wants the mean com
 `noise_sum / ref_cnt` at whatever precision it needs; a consumer that wants to CHECK the
 detection does not need the mean at all.
 
-**What issue #18 must supply.** A packet header carrying at least the beam (`stream_id`) and
-a source-block identifier, since the same virtual channel will carry power, covariance and
-error records; a 512-bit packet holds two 176-bit events plus a header with room to spare,
-and the fixed payload width means the packing is a constant rather than a negotiation.
+#### The packet format (issue #18)
+
+`rtl/packages/packet_pkg.sv` is the definition; this is its prose. A **packet** is 1 to 32
+flits. The first is the HEADER flit and carries no payload; the rest carry the payload,
+`PACKET_W` bits at a time, least significant word first.
+
+A **flit** is what the fabric moves in one cycle:
+
+```text
+MSB                                                     LSB
++-----------------------+-----+-----+------+--------+
+|         data          | eof | sof |  vc  | parity |
++-----------------------+-----+-----+------+--------+
+       PACKET_W            1     1     2       1
+```
+
+The CONTROL bits are at the bottom and the variable-width data field at the top — the inverse
+of the `stream_pkg` rule, for the same reason stated the other way round: here it is the
+control fields whose offsets must not move when `PACKET_W` changes between SPEC §11 sizes,
+because every checker, every buffer tap and the C++ mirror address them by constant offset.
+
+The **header** occupies the low 36 bits of the header flit's data field:
+
+```text
+MSB                                                              LSB
++---------+--------+--------+--------+--------+--------+
+|   seq   | length |  type  |   vc   |  src   |  dest  |
++---------+--------+--------+--------+--------+--------+
+    16        6        3        2        5        4      = 36 bits
+```
+
+| Field | Bits | Meaning |
+|---|---|---|
+| `dest` | 4 | egress port, 16 destinations |
+| `src` | 5 | ingress port, 32 sources — SPEC §7.8 says "16 or more", and aggregation fans IN, so the source field is deliberately one binade wider than the destination field |
+| `vc` | 2 | virtual channel, `N_VC = 4` |
+| `type` | 3 | `0` detection, `1` power summary, `2` covariance summary, `3` error, `4` counter snapshot, `5` raw capture; `6` and `7` reserved and checkable |
+| `length` | 6 | TOTAL flits INCLUDING the header, 1..32 |
+| `seq` | 16 | packet sequence number per (source, VC) |
+
+Every width above is a constant of `packet_pkg`, none is an elaboration parameter — the same
+argument `cfar_pkg` makes for its 176-bit event, and the reason a captured packet decodes
+identically at every SPEC §11 size. `PACKET_FORMAT` in the register plane reports the same
+numbers so software needs no build-time header at all.
+
+**Length is TOTAL, not payload-only,** because the invariant a checker wants to state is "the
+number of flits between SOF and EOF inclusive equals the header's length field", and a
+payload-only field makes that statement an arithmetic identity with an off-by-one in it. It is
+checked twice: at the ingress against what the source declared, and at the egress against what
+the network delivered. Those are different statements — eight switch stages of buffers,
+arbiters and crossbars lie between them.
+
+**Flit-isation.** `payload_flits = ceil(bits / PACKET_W)`, `total = 1 + payload_flits`. A
+zero-payload packet is legal and is one flit carrying both SOF and EOF: an error event or a
+counter-snapshot marker is a header and nothing else. A 176-bit detection event is 4 flits at
+`PACKET_W = 64` and 2 at 512.
+
+**Parity per flit, not a CRC per packet.** One odd parity bit over each flit's own data and
+control bits. The reasons are structural: a per-flit check is verifiable AT EVERY HOP, so a
+corruption is localised to a hop and a channel rather than merely detected at reassembly; it
+is combinational and stateless, roughly `PACKET_W/3` ALMs per checked point, with no per-(input,
+VC) CRC accumulator at every hop — which is what a packet CRC across deliberately interleaved
+flits would need; and the dominant on-die failure this benchmark can express (a stuck bit, a
+mis-wired mux, a flit written into the wrong VC) flips a small number of bits in one flit.
+
+Odd rather than even parity, so an all-zero word — what an undriven or reset link presents —
+is NOT a legal flit: "the link is dead" and "the link is carrying an empty flit" become
+different observations.
+
+**What parity does not catch is stated rather than discovered.** An EVEN number of bit errors
+in one flit passes. Parity is therefore not the only integrity mechanism: the per-(source, VC)
+sequence number catches loss, duplication and reordering regardless of content, the length
+field catches truncation and extension, and the egress scoreboard compares every payload word.
+`sim/tests/test_packet.cpp` injects a one-bit flip (parity fires) and a two-bit flip (parity is
+silent, the payload comparison fires), so the limit is a measured property of the design.
+
+#### Virtual channels and ordering (issue #18)
+
+Four channels. Ordering is guaranteed **within a (source, VC, destination) triple** and is not
+claimed across VCs — two packets from one source to one destination on different channels may
+arrive in either order, which is what a virtual channel is for. The guarantee comes from two
+facts and needs no reorder buffer: destination-tag routing over the butterfly gives every
+triple exactly ONE path, and an output VC is locked to one input for the whole of a packet so
+its flits stay contiguous on that path.
+
+#### Topology: an R-ary butterfly, and why not a crossbar (issue #18)
+
+`N = RADIX**STAGES` ports; the nominal network is 16 ports as two stages of radix 4. Stage `s`
+routes on destination digit `STAGES-1-s`, most significant first. At stage `s` a switch is
+named by the port index with that digit deleted, and a port's position inside it is that digit;
+`pkt_bfly_insert()` puts the digit back, and the same function maps a switch output to the next
+stage's wire, so the topology is ONE function rather than two tables that can disagree.
+
+The rejected alternative is the obvious one, and SPEC §7.8 rejects it in words ("Do not build
+one unregistered, monolithic crossbar"). The routability argument is why the words are there: a
+16x16 crossbar at 512-bit flits is 256 crosspoints, each a 517-bit-wide mux input, with all 16
+output muxes reaching all 16 inputs — 16 x 16 x 517 = 132 k wires converging on 16 points. On
+Agilex 7 that is a routing-congestion problem before it is an ALM problem. The two-stage
+radix-4 butterfly is 8 switches of 16 crosspoints: 128 crosspoints, each mux reaching 4 inputs,
+and the inter-stage wiring is a FIXED PERMUTATION of 16 point-to-point flit buses rather than
+an all-to-all. Same bisection, half the crosspoints, and — the part that matters for HyperFlex
+— a registered hop between the halves.
+
+A fat tree was the other candidate and is not built. It buys path diversity, which buys nothing
+here: the traffic is aggregation (many sources, few sinks), and adaptive routing would destroy
+the in-order-per-triple property that makes the egress checkable with a sequence number instead
+of a reorder buffer. Determinism is worth more than diversity for this workload.
+
+#### Flow control: credits, not ready (issue #18)
+
+SPEC §7.8 allows either. Credits are used because a returned `ready` would be a combinational
+path from a downstream buffer's full flag, across a port boundary, into an upstream output mux
+— precisely the ready chain SPEC §5 forbids and SPEC §23 asks to be broken with elastic
+buffers. A credit counter replaces it with a registered pulse in the opposite direction:
+nothing downstream is in an upstream sender's timing cone at all. Every counter resets to the
+downstream buffer's depth, decrements on a send and increments on a returned credit; a flit is
+sent only when the count is non-zero, so no buffer can overflow, and both bounds are asserted
+on every cycle in the RTL rather than argued for here.
 
 ## 7. Parameterization and elaboration
 
