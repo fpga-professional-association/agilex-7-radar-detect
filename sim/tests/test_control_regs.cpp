@@ -804,7 +804,9 @@ int harness::sim_test_main(const SimArgs& args) {
     };
     const Illegal cases[] = {
         // Declared but unimplemented windows: every planned block.
-        {regmap::COEFF_BASE, false, true, 0xF, "planned coeff window"},
+        // The coefficient window became implemented with issue #10, so what is
+        // illegal there is now an address past its last register.
+        {regmap::COEFF_BASE + 0x100u, false, true, 0xF, "coeff window, no register"},
         {regmap::CFAR_BASE, true, false, 0xF, "planned cfar window"},
         {regmap::DEBUG_BASE, false, true, 0xF, "planned debug window"},
         // The counters window is implemented as of issue #8, so what is illegal
@@ -895,7 +897,7 @@ int harness::sim_test_main(const SimArgs& args) {
       legal.push_back(regmap::kRegisters[i].address);
     }
     const std::vector<std::uint32_t> illegal = {
-        regmap::COEFF_BASE,          regmap::CFAR_BASE + 0x20u,
+        regmap::COEFF_BASE + 0x200u, regmap::CFAR_BASE + 0x20u,
         regmap::COUNTERS_BASE + 0x800u, regmap::DEBUG_BASE + 0x10u,
         0xF000u,                     0xABCDu & ~0x3u,
         regmap::ID_BASE + 0x200u,    regmap::SCRATCH_BASE + 0x040u,

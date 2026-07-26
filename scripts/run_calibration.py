@@ -148,6 +148,114 @@ MATRICES: dict[str, dict] = {
             ]
         ),
     },
+
+    # -----------------------------------------------------------------------
+    # SPEC 18 item 2: one complex FIR lane (issue #10)
+    # -----------------------------------------------------------------------
+    # The question this kernel has to answer is which ACCUMULATION STRUCTURE
+    # Agilex 7 and Quartus Pro 26.1 actually prefer for a 16-tap complex FIR:
+    #
+    #   TREE      a balanced adder tree in the fabric. 4 DSPs per tap for the
+    #             multiplies, 15 fabric adders per output component.
+    #   SYSTOLIC  a linear cascade, the shape a DSP chainout/chainin cascade
+    #             wants -- the textbook answer -- at the cost of a delay line
+    #             twice as deep (two stages per tap) and a coefficient-swap
+    #             transition window TAPS-1 beats long.
+    #
+    # THREE POINTS, and the pruning is in the open:
+    #
+    #   * the two structures at the calibrated multiplier depth (PIPE_STAGES=4,
+    #     issue #9's measured default). This is the comparison the issue exists
+    #     for and it is the only axis swept at full width.
+    #   * ONE pipeline-depth point, TREE at PIPE_STAGES=3. The multiplier's own
+    #     depth axis was already swept exhaustively by the cmult sweep; what is
+    #     not known is whether a lane whose multiplier is one stage shallower
+    #     still clears the probe once an adder tree hangs off it. One point
+    #     answers that; four would re-measure the cmult sweep through a lane.
+    #   * the MULT3 axis is NOT swept here at all. Issue #9 measured it on the
+    #     multiplier in isolation, where it is a pure arithmetic comparison; in
+    #     a lane it would be sixteen copies of the same already-answered
+    #     question. VARIANT_SEL stays 0 (MULT4) for every point.
+    #
+    # The delay-line storage axis is likewise not swept, and that is a finding
+    # rather than an omission: a direct-form FIR taps its history at every stage,
+    # a memory serves one read per cycle, and so a tapped delay line CANNOT be an
+    # M20K at any depth (rtl/pfb/delay_line.sv). pfb_pkg resolves it to a shift
+    # register and an explicit "MEM" is an elaboration error. What the records
+    # below report is what Quartus did with that shift register -- ALM registers
+    # or an MLAB -- which is the part that was genuinely unknown.
+    "fir": {
+        "description": "SPEC 7.1 complex FIR lane, 16 taps: adder tree vs "
+                       "systolic cascade",
+        "top": "fir_wrap",
+        "axes": {
+            "acc_style": {"0": "TREE", "1": "SYSTOLIC"},
+            "mult_pipe_stages": [3, 4],
+            "taps": [16],
+        },
+        "points": [
+            {
+                "id": "fir_t16_tree_p4",
+                "label": "TAPS=16 TREE mult_pipe=4",
+                "params": {"TAPS": 16, "MULT_PIPE_STAGES": 4,
+                           "ACC_STYLE_SEL": 0, "VARIANT_SEL": 0},
+            },
+            {
+                "id": "fir_t16_sys_p4",
+                "label": "TAPS=16 SYSTOLIC mult_pipe=4",
+                "params": {"TAPS": 16, "MULT_PIPE_STAGES": 4,
+                           "ACC_STYLE_SEL": 1, "VARIANT_SEL": 0},
+            },
+            {
+                "id": "fir_t16_tree_p3",
+                "label": "TAPS=16 TREE mult_pipe=3",
+                "params": {"TAPS": 16, "MULT_PIPE_STAGES": 3,
+                           "ACC_STYLE_SEL": 0, "VARIANT_SEL": 0},
+            },
+        ],
+    },
+
+    # -----------------------------------------------------------------------
+    # SPEC 18 item 3: one eight-lane polyphase FIR bank (issue #10)
+    # -----------------------------------------------------------------------
+    # What this point prices that the lane point cannot:
+    #
+    #   * whether eight lanes' DSPs still cascade, or whether the Fitter runs
+    #     out of column-adjacent blocks and falls back to fabric adders,
+    #   * what the 8 x 16 x 2 x 32-bit coefficient store maps to and what its
+    #     4096-bit output mux costs,
+    #   * the per-BLOCK costs that do not scale with lanes: the credit gate, the
+    #     metadata alignment path and the output elastic buffer,
+    #   * whether the critical path is still inside a lane at eight-lane fanout.
+    #     run_calibration records the critical path's hierarchy for every point
+    #     and flags one whose register-to-register path does not touch u_kernel.
+    #
+    # TWO points, the same two structures. The pipeline axis is not repeated
+    # here: it was answered at the lane, and an eight-lane compile is the most
+    # expensive thing in this sweep.
+    "pfb8": {
+        "description": "SPEC 7.1 polyphase FIR bank, 8 phases x 16 taps",
+        "top": "pfb8_wrap",
+        "axes": {
+            "acc_style": {"0": "TREE", "1": "SYSTOLIC"},
+            "phases": [8],
+            "taps": [16],
+        },
+        "points": [
+            {
+                "id": "pfb8_t16_tree",
+                "label": "8 phases x 16 taps TREE",
+                "params": {"PHASES": 8, "TAPS": 16, "MULT_PIPE_STAGES": 4,
+                           "ACC_STYLE_SEL": 0},
+            },
+            {
+                "id": "pfb8_t16_sys",
+                "label": "8 phases x 16 taps SYSTOLIC",
+                "params": {"PHASES": 8, "TAPS": 16, "MULT_PIPE_STAGES": 4,
+                           "ACC_STYLE_SEL": 1},
+            },
+        ],
+    },
 }
 
 

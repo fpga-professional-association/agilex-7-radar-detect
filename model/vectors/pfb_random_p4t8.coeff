@@ -1,0 +1,52 @@
+# pfb coefficient file
+# schema: 1
+# kind: pfb_coeff
+# set: random
+# description: uniform full-range Q1.15 complex; saturates often
+# phases: 4
+# taps: 8
+# window: none
+# cutoff: 0.000000000
+# mix: 0.000000000
+# l1_target: 0.000000000
+# seed: 521440925
+# rounding_mode: nearest_even
+# coeff_w: 16
+# frac_w: 15
+# count: 32
+# generator: scripts/generate_coefficients.py
+# reference: model/python/pfb_model.py (NumPy, independent)
+# order: phase-major, tap-minor: index = phase*taps + tap
+# columns: index phase tap re im
+0 0 0 25660 22141
+1 0 1 -11698 9270
+2 0 2 15446 -6085
+3 0 3 3329 5473
+4 0 4 -31708 25709
+5 0 5 -14111 6240
+6 0 6 -26455 -27784
+7 0 7 13385 32651
+8 1 0 1595 -29328
+9 1 1 16225 31703
+10 1 2 -18940 -7100
+11 1 3 25628 -21649
+12 1 4 -2396 29574
+13 1 5 2466 11301
+14 1 6 25362 15099
+15 1 7 27609 -20243
+16 2 0 -19394 -3892
+17 2 1 11301 -25093
+18 2 2 17298 -24796
+19 2 3 -3302 570
+20 2 4 -1416 12358
+21 2 5 26308 22507
+22 2 6 -11938 -221
+23 2 7 18822 8064
+24 3 0 6979 26430
+25 3 1 -6655 -18169
+26 3 2 -31037 -12433
+27 3 3 22247 17538
+28 3 4 -12826 -13422
+29 3 5 -26016 11448
+30 3 6 7921 26324
+31 3 7 30716 -2519

@@ -43,6 +43,7 @@ rtl/control/reg_block_build_params.sv
 rtl/control/reg_block_ctrl.sv
 rtl/control/reg_block_fault.sv
 rtl/control/reg_block_scratch.sv
+rtl/control/reg_block_coeff.sv
 rtl/control/reg_fabric.sv
 
 // ---- deliberately dead block (simulation only) -------------------------

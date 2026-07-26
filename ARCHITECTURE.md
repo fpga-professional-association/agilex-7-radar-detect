@@ -109,7 +109,65 @@ registers a DSP block owns natively first, so at `PIPE_STAGES = 2` the whole mul
 inside the block and the fabric sees only the post-adder. The full table and its rationale
 are in the module header and in DECISIONS.md (issue #9).
 
-Issues #10–#14 populate the block directories and consume this module.
+#### Polyphase FIR bank (`rtl/pfb/`, issue #10)
+
+The first block directory to be populated, and the first consumer of the complex
+multiplier. One `pfb_bank` per antenna; the antenna dimension is a top-level concern and
+deliberately does not appear inside it.
+
+| Path | Parameters | Issue | Function |
+|---|---|---|---|
+| `rtl/packages/pfb_pkg.sv` | — | #10 | Accumulator width, the **beat/cycle latency split**, the delay-line storage threshold, the coefficient index mapping. One place, so the lane, the bank, the register plane and the C++ model cannot disagree. |
+| `rtl/pfb/delay_line.sv` | `WIDTH`, `N_TAPS`, `TAP_STRIDE`, `STYLE` (`"AUTO"`/`"SRL"`/`"MEM"`) | #10 | Parameterised delay, gated by `en` so it advances once per **sample** rather than once per clock. `taps[i]` is the input delayed by `(i+1)*TAP_STRIDE` enabled cycles. |
+| `rtl/pfb/coeff_bank.sv` | `PHASES`, `TAPS`, `SYNC_STAGES`, `ALLOW_UNSAFE_SWAP` | #10 | Dual coefficient banks for the WHOLE polyphase bank, the cfg→core seam built from the issue #6 primitives, and the frame-aligned swap. |
+| `rtl/pfb/fir_lane.sv` | `TAPS`, `MULT_PIPE_STAGES`, `MULT_VARIANT`, `ACC_STYLE` (`"TREE"`/`"SYSTOLIC"`), `DELAY_STYLE` | #10 | One complex FIR lane. `TAPS` `complex_multiplier` instances at `ROUND_OUT = 0`, accumulated at `pfb_acc_w(TAPS)` bits, quantised **once** at the output. |
+| `rtl/pfb/pfb_bank.sv` | the lane parameters plus `PHASES`, the SPEC §5 metadata geometry, `TELEM_COUNT_W` | #10 | `PHASES` lanes behind one SPEC §5 stream interface, with a credit gate, the metadata alignment path, the output elastic buffer and the SPEC §9 telemetry. |
+| `rtl/control/reg_block_coeff.sv` | `IDX_W` | #10 | The software half: the 0x5000 coefficient window, the COEFF_DATA write strobe and the SWAP_REQ pulse. |
+
+Simulation-only and synthesis-only companions:
+
+| Path | Issue | Function |
+|---|---|---|
+| `sim/verilator/tops/pfb_top.sv` | #10 | Two complete banks — TREE and SYSTOLIC — driven from one stimulus port in lockstep, plus one `coeff_bank` elaborated with `ALLOW_UNSAFE_SWAP = 1` outside the datapath so the frame-boundary assertion can be provoked by name. |
+| `sim/assertions/pfb_assertions.sv`, `sim/assertions/coeff_bank_checker.sv` | #10 | The SPEC §14 property sets; see VERIFICATION_PLAN.md §5.10. |
+| `quartus/calibration/fir_wrap.sv`, `pfb8_wrap.sv` | #10 | Synthesis wrappers for SPEC §18 items 2 and 3. |
+
+**The decomposition.** A beat carries `SAMPLES_PER_CYCLE` consecutive complex samples. A
+prototype filter `h` of length `PHASES*TAPS` is split phase-wise, `h_p[k] = h[k*PHASES + p]`,
+and branch `p` filters the decimated substream `x_p[m] = x[m*PHASES + p]`. The branches do
+**not** share history: this is the critically-decimated polyphase front end, not one long
+filter evaluated at `PHASES` samples per cycle.
+
+**Beats and cycles — the alignment contract.** A FIR history is indexed by sample, so the
+delay line carries `en`. Anything that combines values from **different beats** must
+therefore also advance once per beat. That splits a lane's latency in two, and the two
+halves are not interchangeable:
+
+| `ACC_STYLE` | latency (beats) | latency (cycles) | delay line | accumulator |
+|---|---|---|---|---|
+| `TREE` (default) | 0 | `MULT_PIPE + ceil(log2 TAPS) + 1` | `TAPS-1` stages, stride 1 | balanced adder tree in fabric |
+| `SYSTOLIC` | `TAPS-1` | `MULT_PIPE + 2` | `2*(TAPS-1)` stages, stride 2 | linear cascade, DSP-chainin shape |
+
+A consumer aligns metadata with a result by delaying it `pfb_lat_beats()` **beats** and then
+`pfb_lat_cycles()` **cycles**, in that order. Doing it in either unit alone is correct only
+on a gapless stream. `pfb_bank` does exactly that, and the random-backpressure pass in
+`sim/tests/test_pfb_bank.cpp` is what makes it falsifiable.
+
+**Flow control.** The interior is a fixed-latency valid pipeline with no `ready` at all — a
+ready chain would land on the clock enable of every DSP register (SPEC §23). Backpressure is
+absorbed at the boundary by a credit gate of `pfb_inflight_beats() + 2` credits feeding an
+output elastic buffer of the same depth, so the buffer can never overflow and the interior
+never has to stall. `s_ready` is a flip-flop whose input depends only on this block's own
+credit counter.
+
+**Numerics.** Every multiplier runs at `ROUND_OUT = 0`, so each tap contributes its exact
+33-bit partial sums and its rounding network does not exist. The `TAPS` partial sums are
+accumulated at `fxp_mac_q15_acc_w(2*TAPS)` bits — a width at which the accumulation provably
+cannot overflow — and the result is rounded and saturated exactly once, at the lane output.
+There is no intermediate saturation anywhere in a lane, which is also why the adder tree and
+the cascade are bit-identical rather than merely close.
+
+Issues #11–#14 populate the remaining block directories and consume the same multiplier.
 
 ### 3.6 Packet fabric (`rtl/packet/`)
 
@@ -159,7 +217,33 @@ TODO — populated by issue #6 (domain definition and CDC primitives) and issue 
 CDC inventory: every crossing, its mechanism (async FIFO / synchronizer / handshake),
 and the assertion that guards it, per SPEC §8.
 
-TODO — populated by issue #6; regenerated as an inventory report by later issues.
+The inventory is **generated, not written**: `make cdc-inventory` elaborates a file list with
+`verilator --xml-only` and joins the instance tree against the `(* cdc_primitive *)`
+attributes in `rtl/`. `--strict` fails when any instantiated module with two or more
+clock-like ports carries no attribute, which is what keeps the report complete as the design
+grows rather than complete on the day it was written.
+
+Two tops are covered as of issue #10:
+
+| Top | File list | Crossings | Unknown |
+|---|---|---|---|
+| `cdc_prims_top` | `sim/verilator/files_cdc.f` | 24 | 0 |
+| `pfb_top` | `sim/verilator/files_pfb.f` | 32 | 0 |
+
+The polyphase build is the first **design** block with a configuration-to-core seam of its
+own. `coeff_bank` and `pfb_bank` are tagged as composites — the same arrangement
+`rtl/cdc/stream_cdc.sv` uses over `async_fifo` — so the report lists the composite and the
+real synchronizers nested under it:
+
+| Crossing | Mechanism | Direction | Payload |
+|---|---|---|---|
+| coefficient write | `cdc_handshake` (four-phase) | cfg → core | `{bank, address, data}` as ONE transfer |
+| bank-swap request | `cdc_pulse` (toggle) | cfg → core | 1-bit event, with an overrun flag |
+| active bank / swap pending / write reject | `cdc_sync2`, one instance **per bit** | core → cfg | 1 bit each |
+
+The address and the data cross as a single handshake payload on purpose: crossing them as
+independent synchronised buses is exactly the multibit crossing SPEC §8 prohibits, and would
+let one bit of an address be sampled from a different cycle than its data.
 
 ## 6. Interfaces
 
@@ -282,6 +366,9 @@ TODO — populated by issue #2 (config plumbing into the build) and issue #20.
 | `stream_pipe` | `STAGES + 1` | 1 beat/cycle for `OUT_DEPTH >= STAGES + 2` | #5 |
 | `stream_loopback` | 3 | 1 beat/cycle | #2, #5 |
 | `complex_multiplier` | `PIPE_STAGES` (1–5) | 1 operand pair/cycle, no backpressure | #9 |
+| `fir_lane` (`TREE`) | `MULT_PIPE + ceil(log2 TAPS) + 1` cycles, 0 beats | 1 sample/cycle, no backpressure | #10 |
+| `fir_lane` (`SYSTOLIC`) | `MULT_PIPE + 2` cycles **and** `TAPS-1` beats | 1 sample/cycle, no backpressure | #10 |
+| `pfb_bank` | the lane's, plus 1 cycle for the output elastic buffer | 1 beat/cycle sustained | #10 |
 
 `complex_multiplier`'s latency is exactly its parameter, by construction and for both
 variants — the register-location priority order is chosen so that the enables sum to
@@ -289,6 +376,16 @@ variants — the register-location priority order is chosen so that the enables 
 drives one isolated beat into each elaborated instance, counts edges to `valid_out`, and
 compares against the `cfg_pipe_stages` the top echoes back from the instance's own
 parameter. A block composing this kernel can therefore treat the number as a contract.
+
+`fir_lane`'s latency is **two numbers, not one**, and the units are not interchangeable: see
+§3.5. `sim/tests/test_pfb_bank.cpp` checks both against the RTL's own `cfg_lat_*` echo before
+it checks anything else, and then scoreboards every output beat **by sequence number**, so a
+result delivered against the wrong metadata fails on content rather than passing quietly.
+
+A `SYSTOLIC` lane also has a **warm-up**: its first `TAPS-1` beats produce partial cascades
+and are suppressed, so a finite burst yields `TAPS-1` fewer output beats with the remainder
+still in flight. That is the ordinary drain behaviour of a filter whose latency is measured
+in samples; the output *sequence* is identical to the tree's.
 
 TODO — remaining blocks populated by the implementing issues; consolidated by issue #17 and
 issue #20.

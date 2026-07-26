@@ -27,11 +27,12 @@ sim/verilator/build*/
 
 # Standalone C++ reference-model build (make numerics-check).
 #
-# NOTE: model/vectors/*.vec is deliberately NOT ignored. Those files are
-# committed source-of-truth golden vectors — the point of a golden vector is
-# that a change to it appears as a reviewable diff — not build output. They are
-# regenerated and compared, not rebuilt, by `make numerics-check`. See
-# DECISIONS.md (issue #4).
+# NOTE: model/vectors/*.vec and model/vectors/*.coeff are deliberately NOT
+# ignored. Those files are committed source-of-truth golden vectors — the point
+# of a golden vector is that a change to it appears as a reviewable diff — not
+# build output. They are regenerated and compared, not rebuilt, by
+# `make numerics-check` (issue #4) and `make coeff-check` (issue #10). See
+# DECISIONS.md (issue #4 decision on the vector format, issue #10 decision 10).
 model/cpp/build/
 
 # Results are generated, never committed (dirs kept via .gitkeep).

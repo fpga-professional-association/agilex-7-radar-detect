@@ -1,0 +1,52 @@
+# pfb coefficient file
+# schema: 1
+# kind: pfb_coeff
+# set: ident
+# description: per-phase unit impulse; every lane a pass-through
+# phases: 4
+# taps: 8
+# window: none
+# cutoff: 0.000000000
+# mix: 0.000000000
+# l1_target: 0.000000000
+# seed: 848803354
+# rounding_mode: nearest_even
+# coeff_w: 16
+# frac_w: 15
+# count: 32
+# generator: scripts/generate_coefficients.py
+# reference: model/python/pfb_model.py (NumPy, independent)
+# order: phase-major, tap-minor: index = phase*taps + tap
+# columns: index phase tap re im
+0 0 0 32767 0
+1 0 1 0 0
+2 0 2 0 0
+3 0 3 0 0
+4 0 4 0 0
+5 0 5 0 0
+6 0 6 0 0
+7 0 7 0 0
+8 1 0 32767 0
+9 1 1 0 0
+10 1 2 0 0
+11 1 3 0 0
+12 1 4 0 0
+13 1 5 0 0
+14 1 6 0 0
+15 1 7 0 0
+16 2 0 32767 0
+17 2 1 0 0
+18 2 2 0 0
+19 2 3 0 0
+20 2 4 0 0
+21 2 5 0 0
+22 2 6 0 0
+23 2 7 0 0
+24 3 0 32767 0
+25 3 1 0 0
+26 3 2 0 0
+27 3 3 0 0
+28 3 4 0 0
+29 3 5 0 0
+30 3 6 0 0
+31 3 7 0 0

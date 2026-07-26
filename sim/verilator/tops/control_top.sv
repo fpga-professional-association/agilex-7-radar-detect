@@ -80,6 +80,7 @@ module control_top
     output wire [REGMAP_FAULT_N_REGS*32-1:0]    obs_fault_csr,
     output wire [REGMAP_FAULT_N_REGS*32-1:0]    obs_fault_pulse,
     output wire [REGMAP_SCRATCH_N_REGS*32-1:0]  obs_scratch_csr,
+    output wire [REGMAP_COEFF_N_REGS*32-1:0]    obs_coeff_csr,
     output wire [REGMAP_COUNTERS_N_REGS*32-1:0] obs_counters_csr,
     // The counters window is the only block here carrying writable storage and
     // pulse bits in the same register, so it is the one place where "a pulse
@@ -259,6 +260,55 @@ module control_top
       .pulse        (scratch_pulse)
   );
 
+  // The coefficient window (issue #10). A real block rather than a bare
+  // register file, because it owns the two strobes — the COEFF_DATA write that
+  // issues a transfer and the SWAP_REQ pulse — that a bare register file cannot
+  // produce.
+  //
+  // Its hardware status inputs are tied off HERE, exactly as the counters
+  // window's are and for the same reason: control_top is the register plane's
+  // own test bench, and wiring a live rtl/pfb/coeff_bank.sv into it would make a
+  // register-plane failure and a polyphase failure indistinguishable. The live
+  // wiring arrives with the medium integration (issue #17);
+  // sim/verilator/tops/pfb_top.sv drives the bank's configuration port directly
+  // in the meantime.
+  wire        coeff_wr_valid_unused, coeff_wr_bank_unused;
+  wire [15:0] coeff_wr_index_unused;
+  wire [31:0] coeff_wr_data_unused;
+  wire        coeff_swap_req_unused, coeff_status_clear_unused;
+  wire [REGMAP_COEFF_N_REGS*32-1:0] coeff_pulse;
+
+  reg_block_coeff #(
+      .IDX_W (IDX_W)
+  ) u_coeff (
+      .clk             (clk),
+      .rst_n           (rst_n),
+      .sel             (blk_sel[REGMAP_COEFF_INDEX]),
+      .write_enable    (blk_write_enable),
+      .read_enable     (blk_read_enable),
+      .index           (blk_index),
+      .write_data      (blk_write_data),
+      .byte_enable     (blk_byte_enable),
+      .read_data       (blk_read_data[REGMAP_COEFF_INDEX*REG_DATA_W +: REG_DATA_W]),
+      .ready           (blk_ready[REGMAP_COEFF_INDEX]),
+      .error           (blk_error[REGMAP_COEFF_INDEX]),
+      .wr_valid        (coeff_wr_valid_unused),
+      .wr_bank         (coeff_wr_bank_unused),
+      .wr_index        (coeff_wr_index_unused),
+      .wr_data         (coeff_wr_data_unused),
+      .swap_req        (coeff_swap_req_unused),
+      .status_clear    (coeff_status_clear_unused),
+      .hw_active_bank  (1'b0),
+      .hw_swap_pending (1'b0),
+      .hw_wr_busy      (1'b0),
+      .hw_swap_busy    (1'b0),
+      .hw_wr_reject    (1'b0),
+      .hw_swap_overrun (1'b0),
+      .hw_n_coeff      (16'd0),
+      .csr             (obs_coeff_csr),
+      .pulse           (coeff_pulse)
+  );
+
   // The counters window as a bare register file. See the header for why the
   // hardware side is tied off here.
   reg_csr_block #(
@@ -290,6 +340,11 @@ module control_top
   // Invariants of the blocks with no writable and no pulse bits.
   assign obs_build_storage_zero = ~(|build_csr);
   assign obs_static_pulse_any   = |{id_pulse, build_pulse, scratch_pulse};
+
+  // COEFF_CTRL carries two RWP bits, so the coefficient window is deliberately
+  // NOT part of obs_static_pulse_any; its pulses are observed through the
+  // strobe ports above.
+  wire coeff_pulse_any_unused = |coeff_pulse;
 
   // ---------------------------------------------------------------------------
   // Second fabric: one block, which never answers.

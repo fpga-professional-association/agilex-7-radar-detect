@@ -22,20 +22,21 @@ package regmap_pkg;
   localparam int unsigned REGMAP_WINDOW_BYTES = 4096;
   localparam int unsigned REGMAP_WINDOW_W = 12;
   localparam int unsigned REGMAP_N_BLOCKS = 9;
-  localparam int unsigned REGMAP_N_BLOCKS_IMPL = 6;
-  localparam int unsigned REGMAP_N_REGS_TOTAL = 49;
-  localparam logic [31:0] REGMAP_BLOCK_MASK = 32'h0000009F;
+  localparam int unsigned REGMAP_N_BLOCKS_IMPL = 7;
+  localparam int unsigned REGMAP_N_REGS_TOTAL = 53;
+  localparam logic [31:0] REGMAP_BLOCK_MASK = 32'h000000BF;
 
   // ---- implemented block windows, in fabric port order ----
   // The fabric decodes one master port onto these windows; index i here is index i
   // on every per-block port array of rtl/control/reg_fabric.sv.
-  localparam logic [REGMAP_N_BLOCKS_IMPL*REGMAP_ADDR_W-1:0] REGMAP_IMPL_BASE = {16'h7000, 16'h4000, 16'h3000, 16'h2000, 16'h1000, 16'h0000};
+  localparam logic [REGMAP_N_BLOCKS_IMPL*REGMAP_ADDR_W-1:0] REGMAP_IMPL_BASE = {16'h7000, 16'h5000, 16'h4000, 16'h3000, 16'h2000, 16'h1000, 16'h0000};
   //   [0] id            base 0x0000  4 registers
   //   [1] build_params  base 0x1000  12 registers
   //   [2] ctrl          base 0x2000  4 registers
   //   [3] fault         base 0x3000  4 registers
   //   [4] scratch       base 0x4000  4 registers
-  //   [5] counters      base 0x7000  21 registers
+  //   [5] coeff         base 0x5000  4 registers
+  //   [6] counters      base 0x7000  21 registers
 
   // -------------------------------------------------------------------------
   // Block 0: id — implemented
@@ -127,9 +128,9 @@ package regmap_pkg;
 
   // reset value of the stored bits
   localparam logic [REGMAP_ID_N_REGS*32-1:0] REGMAP_ID_RESET = {
-      32'h0000009F,  // [3]
-      32'h10203109,  // [2]
-      32'h01010001,  // [1]
+      32'h000000BF,  // [3]
+      32'h10203509,  // [2]
+      32'h01020001,  // [1]
       32'h52414441  // [0]
   };
   // bits a software write may set or clear (RW)
@@ -818,17 +819,188 @@ package regmap_pkg;
   };
 
   // -------------------------------------------------------------------------
-  // Block 5: coeff — PLANNED (#10, #11, #12, #16)
+  // Block 5: coeff — implemented
   // SPEC 9 groups: Coefficient and weight programming; Active bank selection
-  // PLANNED. Coefficient and beam-weight programming with double buffering and an
-  // active-bank select. Declared here so the window is reserved and the address space
-  // cannot be reassigned by a later issue; unimplemented until its owning issues land,
-  // and every access to this window returns error=1 today.
+  // Coefficient and weight programming with double buffering and an active-bank select
+  // (SPEC 7.1, SPEC 9). Implemented for the polyphase FIR bank by issue #10; the FFT
+  // twiddles (#11), the beam weights (#12) and the per-antenna fan-out (#16) extend it
+  // inside the same reserved window. PROGRAMMING SEQUENCE: set COEFF_CTRL.BANK_SEL to
+  // the SPARE bank, write COEFF_ADDR once, then write COEFF_DATA per coefficient (the
+  // DATA write is what issues the transfer; AUTO_INC advances the index), then write
+  // COEFF_CTRL.SWAP_REQ. The swap takes effect at the next start-of-frame beat and not
+  // before, which is what makes a frame filtered by exactly one coefficient set. A
+  // write aimed at the bank that is currently ACTIVE is refused and raises
+  // COEFF_STATUS.WR_REJECT; it is never merged and never deferred. Every field here
+  // crosses a clock domain, because the register plane runs on cfg_clk and the bank on
+  // core_clk (rtl/pfb/coeff_bank.sv, issue #6 primitives): writes through a four-phase
+  // handshake, SWAP_REQ through a pulse synchronizer, and each status bit through its
+  // own flip-flop synchronizer. WR_BUSY and SWAP_BUSY are therefore flow control, not
+  // decoration.
   // -------------------------------------------------------------------------
   localparam logic [REGMAP_ADDR_W-1:0] REGMAP_COEFF_BASE = 16'h5000;
   localparam int unsigned REGMAP_COEFF_SIZE = 4096;
-  localparam int unsigned REGMAP_COEFF_N_REGS = 0;
-  // No registers in this build: every access to 0x5000..0x5FFF returns error=1.
+  localparam int unsigned REGMAP_COEFF_N_REGS = 4;
+  localparam int unsigned REGMAP_COEFF_INDEX = 5;  // fabric port index
+
+  // COEFF_CTRL @ 0x5000 (MIXED)
+  //   Bank selection and the swap request. BANK_SEL names the bank a COEFF_DATA write
+  //   targets; it is NOT the active bank, which changes only at a frame boundary and is
+  //   reported by COEFF_STATUS.ACTIVE_BANK.
+  //   [0:0] BANK_SEL (RW)
+  //       Target bank for coefficient writes. Resets to 1 because the active bank
+  //       resets to 0, so the reset state is already a legal programming state and
+  //       software can write without reading anything first.
+  //   [8:8] SWAP_REQ (RWP)
+  //       Writing 1 requests a bank swap. The swap happens at the next start-of-frame
+  //       beat, not here; poll COEFF_STATUS.SWAP_PENDING to watch it retire. Refused,
+  //       and flagged in SWAP_OVERRUN, while SWAP_BUSY is set.
+  //   [9:9] STATUS_CLEAR (RWP)
+  //       Writing 1 clears the sticky COEFF_STATUS.WR_REJECT and
+  //       COEFF_STATUS.SWAP_OVERRUN bits.
+  localparam int unsigned REGMAP_COEFF_COEFF_CTRL_INDEX = 0;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_COEFF_COEFF_CTRL_ADDR = 16'h5000;
+  localparam int unsigned REGMAP_COEFF_COEFF_CTRL_BANK_SEL_LSB = 0;
+  localparam int unsigned REGMAP_COEFF_COEFF_CTRL_BANK_SEL_WIDTH = 1;
+  localparam logic [31:0] REGMAP_COEFF_COEFF_CTRL_BANK_SEL_MASK = 32'h00000001;
+  localparam int unsigned REGMAP_COEFF_COEFF_CTRL_SWAP_REQ_LSB = 8;
+  localparam int unsigned REGMAP_COEFF_COEFF_CTRL_SWAP_REQ_WIDTH = 1;
+  localparam logic [31:0] REGMAP_COEFF_COEFF_CTRL_SWAP_REQ_MASK = 32'h00000100;
+  localparam int unsigned REGMAP_COEFF_COEFF_CTRL_STATUS_CLEAR_LSB = 9;
+  localparam int unsigned REGMAP_COEFF_COEFF_CTRL_STATUS_CLEAR_WIDTH = 1;
+  localparam logic [31:0] REGMAP_COEFF_COEFF_CTRL_STATUS_CLEAR_MASK = 32'h00000200;
+
+  // COEFF_ADDR @ 0x5004 (RW)
+  //   Coefficient index within the selected bank, phase-major and tap-minor: index =
+  //   phase*PFB_TAPS + tap (pfb_pkg::pfb_coeff_index). That is the order
+  //   scripts/generate_coefficients.py writes its files in, so a bank is loaded by
+  //   counting up from zero.
+  //   [15:0] INDEX (RW)
+  //       Coefficient index. 16 bits covers 8 phases x 16 taps across 16 antennas with
+  //       room to spare; an index beyond the elaborated bank is dropped and raises
+  //       WR_REJECT.
+  //   [31:31] AUTO_INC (RW)
+  //       When 1, the LIVE index advances by one after every accepted COEFF_DATA write,
+  //       so a whole bank is loaded by writing COEFF_ADDR once and COEFF_DATA
+  //       repeatedly. Note that INDEX above reads back the last value SOFTWARE wrote,
+  //       not the live index: reg_csr_block has no hardware-write path into an RW
+  //       field, and giving it one would hand every RW register in the design a side
+  //       channel. The live index lives in rtl/control/reg_block_coeff.sv, is reloaded
+  //       by any COEFF_ADDR write, and is what a transfer carries.
+  localparam int unsigned REGMAP_COEFF_COEFF_ADDR_INDEX = 1;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_COEFF_COEFF_ADDR_ADDR = 16'h5004;
+  localparam int unsigned REGMAP_COEFF_COEFF_ADDR_INDEX_LSB = 0;
+  localparam int unsigned REGMAP_COEFF_COEFF_ADDR_INDEX_WIDTH = 16;
+  localparam logic [31:0] REGMAP_COEFF_COEFF_ADDR_INDEX_MASK = 32'h0000FFFF;
+  localparam int unsigned REGMAP_COEFF_COEFF_ADDR_AUTO_INC_LSB = 31;
+  localparam int unsigned REGMAP_COEFF_COEFF_ADDR_AUTO_INC_WIDTH = 1;
+  localparam logic [31:0] REGMAP_COEFF_COEFF_ADDR_AUTO_INC_MASK = 32'h80000000;
+
+  // COEFF_DATA @ 0x5008 (RW)
+  //   One complex Q1.15 coefficient, packed {IM, RE} with the real part in the low half
+  //   - the same layout as fxp_pkg::fxp_complex_t and the coefficient files. WRITING
+  //   THIS REGISTER ISSUES THE TRANSFER; COEFF_CTRL and COEFF_ADDR only set it up.
+  //   Refused while COEFF_STATUS.WR_BUSY is set. Reads return the last value written,
+  //   not the bank contents: the bank lives in the core clock domain and a read-back
+  //   path would be a second crossing for no diagnostic gain the coefficient files do
+  //   not already provide.
+  //   [15:0] RE (RW)
+  //       Real part, Q1.15.
+  //   [31:16] IM (RW)
+  //       Imaginary part, Q1.15.
+  localparam int unsigned REGMAP_COEFF_COEFF_DATA_INDEX = 2;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_COEFF_COEFF_DATA_ADDR = 16'h5008;
+  localparam int unsigned REGMAP_COEFF_COEFF_DATA_RE_LSB = 0;
+  localparam int unsigned REGMAP_COEFF_COEFF_DATA_RE_WIDTH = 16;
+  localparam logic [31:0] REGMAP_COEFF_COEFF_DATA_RE_MASK = 32'h0000FFFF;
+  localparam int unsigned REGMAP_COEFF_COEFF_DATA_IM_LSB = 16;
+  localparam int unsigned REGMAP_COEFF_COEFF_DATA_IM_WIDTH = 16;
+  localparam logic [31:0] REGMAP_COEFF_COEFF_DATA_IM_MASK = 32'hFFFF0000;
+
+  // COEFF_STATUS @ 0x500C (ROHW)
+  //   Hardware-driven status for the coefficient plane. Every bit is synchronised out
+  //   of the core clock domain, so it is a snapshot of a free-running block rather than
+  //   a handshake - except the two BUSY bits, which are exactly the flow control.
+  //   [0:0] ACTIVE_BANK (ROHW)
+  //       The bank the datapath is filtering with. Changes only on a start-of-frame
+  //       beat (SPEC 7.1), which the RTL asserts as a_coeff_swap_at_sof.
+  //   [1:1] SWAP_PENDING (ROHW)
+  //       A swap has been requested and is waiting for the next frame boundary.
+  //   [2:2] WR_BUSY (ROHW)
+  //       A coefficient write is in flight across the clock-domain crossing. A
+  //       COEFF_DATA write issued while this is set is refused.
+  //   [3:3] SWAP_BUSY (ROHW)
+  //       A swap request is in flight across the crossing. A second SWAP_REQ while this
+  //       is set is refused and sets SWAP_OVERRUN.
+  //   [8:8] WR_REJECT (ROHW)
+  //       Sticky: at least one coefficient write since the last completed swap targeted
+  //       the ACTIVE bank, or an index outside the elaborated bank, and was dropped.
+  //       Cleared by COEFF_CTRL.STATUS_CLEAR.
+  //   [9:9] SWAP_OVERRUN (ROHW)
+  //       Sticky: a swap request was refused because one was already in flight. Cleared
+  //       by COEFF_CTRL.STATUS_CLEAR.
+  //   [31:16] N_COEFF (ROHW)
+  //       Coefficients per bank in the elaborated design (SAMPLES_PER_CYCLE *
+  //       PFB_TAPS), reported by hardware so software can size a load without a
+  //       build-time constant.
+  localparam int unsigned REGMAP_COEFF_COEFF_STATUS_INDEX = 3;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_COEFF_COEFF_STATUS_ADDR = 16'h500C;
+  localparam int unsigned REGMAP_COEFF_COEFF_STATUS_ACTIVE_BANK_LSB = 0;
+  localparam int unsigned REGMAP_COEFF_COEFF_STATUS_ACTIVE_BANK_WIDTH = 1;
+  localparam logic [31:0] REGMAP_COEFF_COEFF_STATUS_ACTIVE_BANK_MASK = 32'h00000001;
+  localparam int unsigned REGMAP_COEFF_COEFF_STATUS_SWAP_PENDING_LSB = 1;
+  localparam int unsigned REGMAP_COEFF_COEFF_STATUS_SWAP_PENDING_WIDTH = 1;
+  localparam logic [31:0] REGMAP_COEFF_COEFF_STATUS_SWAP_PENDING_MASK = 32'h00000002;
+  localparam int unsigned REGMAP_COEFF_COEFF_STATUS_WR_BUSY_LSB = 2;
+  localparam int unsigned REGMAP_COEFF_COEFF_STATUS_WR_BUSY_WIDTH = 1;
+  localparam logic [31:0] REGMAP_COEFF_COEFF_STATUS_WR_BUSY_MASK = 32'h00000004;
+  localparam int unsigned REGMAP_COEFF_COEFF_STATUS_SWAP_BUSY_LSB = 3;
+  localparam int unsigned REGMAP_COEFF_COEFF_STATUS_SWAP_BUSY_WIDTH = 1;
+  localparam logic [31:0] REGMAP_COEFF_COEFF_STATUS_SWAP_BUSY_MASK = 32'h00000008;
+  localparam int unsigned REGMAP_COEFF_COEFF_STATUS_WR_REJECT_LSB = 8;
+  localparam int unsigned REGMAP_COEFF_COEFF_STATUS_WR_REJECT_WIDTH = 1;
+  localparam logic [31:0] REGMAP_COEFF_COEFF_STATUS_WR_REJECT_MASK = 32'h00000100;
+  localparam int unsigned REGMAP_COEFF_COEFF_STATUS_SWAP_OVERRUN_LSB = 9;
+  localparam int unsigned REGMAP_COEFF_COEFF_STATUS_SWAP_OVERRUN_WIDTH = 1;
+  localparam logic [31:0] REGMAP_COEFF_COEFF_STATUS_SWAP_OVERRUN_MASK = 32'h00000200;
+  localparam int unsigned REGMAP_COEFF_COEFF_STATUS_N_COEFF_LSB = 16;
+  localparam int unsigned REGMAP_COEFF_COEFF_STATUS_N_COEFF_WIDTH = 16;
+  localparam logic [31:0] REGMAP_COEFF_COEFF_STATUS_N_COEFF_MASK = 32'hFFFF0000;
+
+  // reset value of the stored bits
+  localparam logic [REGMAP_COEFF_N_REGS*32-1:0] REGMAP_COEFF_RESET = {
+      32'h00000000,  // [3]
+      32'h00000000,  // [2]
+      32'h80000000,  // [1]
+      32'h00000001  // [0]
+  };
+  // bits a software write may set or clear (RW)
+  localparam logic [REGMAP_COEFF_N_REGS*32-1:0] REGMAP_COEFF_WMASK = {
+      32'h00000000,  // [3]
+      32'hFFFFFFFF,  // [2]
+      32'h8000FFFF,  // [1]
+      32'h00000001  // [0]
+  };
+  // bits cleared by writing 1, set by hardware (W1C)
+  localparam logic [REGMAP_COEFF_N_REGS*32-1:0] REGMAP_COEFF_W1CMASK = {
+      32'h00000000,  // [3]
+      32'h00000000,  // [2]
+      32'h00000000,  // [1]
+      32'h00000000  // [0]
+  };
+  // bits that pulse for one cycle and read 0 (RWP)
+  localparam logic [REGMAP_COEFF_N_REGS*32-1:0] REGMAP_COEFF_PULSEMASK = {
+      32'h00000000,  // [3]
+      32'h00000000,  // [2]
+      32'h00000000,  // [1]
+      32'h00000300  // [0]
+  };
+  // bits read from the hardware input, not from storage (ROHW)
+  localparam logic [REGMAP_COEFF_N_REGS*32-1:0] REGMAP_COEFF_HWMASK = {
+      32'hFFFF030F,  // [3]
+      32'h00000000,  // [2]
+      32'h00000000,  // [1]
+      32'h00000000  // [0]
+  };
 
   // -------------------------------------------------------------------------
   // Block 6: cfar — PLANNED (#14, #16)
@@ -860,7 +1032,7 @@ package regmap_pkg;
   localparam logic [REGMAP_ADDR_W-1:0] REGMAP_COUNTERS_BASE = 16'h7000;
   localparam int unsigned REGMAP_COUNTERS_SIZE = 4096;
   localparam int unsigned REGMAP_COUNTERS_N_REGS = 21;
-  localparam int unsigned REGMAP_COUNTERS_INDEX = 5;  // fabric port index
+  localparam int unsigned REGMAP_COUNTERS_INDEX = 6;  // fabric port index
 
   // TELEM_CTRL @ 0x7000 (MIXED)
   //   Measurement window and the three strobes. ENABLE gates every counter, so a window

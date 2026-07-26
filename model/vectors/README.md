@@ -117,3 +117,56 @@ draws at least 24 000 fresh pairs per seed — so this file stays a reviewable s
 
 A diff here is a change to the numerics. It must be accompanied by a NUMERICS.md change
 and a DECISIONS.md entry, and it invalidates every downstream expected value.
+
+## `pfb_<set>_p<P>t<T>.coeff` and `.vec` — polyphase FIR bank (issue #10)
+
+Produced by [`scripts/generate_coefficients.py`](../../scripts/generate_coefficients.py) from
+the independent NumPy model [`model/python/pfb_model.py`](../python/pfb_model.py), with master
+seed `20260727` and a per-set seed derived from `(set, phases, taps)` so that adding a set or
+a geometry does not perturb any other file. Regenerate, or verify without writing:
+
+```bash
+python3 scripts/generate_coefficients.py            # rewrite
+python3 scripts/generate_coefficients.py --check    # verify only; non-zero on drift
+```
+
+`make coeff-check` runs the `--check` form and is a prerequisite of `make sim-tiny`.
+
+Two geometries are committed: `p4t8`, the geometry
+[`sim/verilator/tops/pfb_top.sv`](../../sim/verilator/tops/pfb_top.sv) elaborates, and
+`p8t16`, the SPEC §7.1 nominal that the SPEC §18 calibration project compiles.
+
+Five sets per geometry:
+
+| Set | Prototype | Purpose |
+|---|---|---|
+| `proto` | windowed sinc, hann, real coefficients, L1-scaled to 0.98 | the real filter. Cannot clip on any legal input, so any saturation the RTL reports is a defect |
+| `mixed` | windowed sinc, hamming, mixed to a channel centre | genuinely complex coefficients. A real-coefficient set cannot catch a swapped real and imaginary partial product |
+| `ident` | per-phase unit impulse at maximum gain | every lane a pass-through: the one set whose expected output can be written down without running any model |
+| `random` | uniform full-range Q1.15 | saturates on most beats, on purpose |
+| `max` | every coefficient at a Q1.15 endpoint, alternating | the extreme case for the accumulator and for saturation in both directions, including `-1.0`, whose negation is not representable |
+
+### `.coeff` — the quantised coefficients
+
+```text
+# columns: index phase tap re im
+4 0 4 20196 0
+```
+
+Phase-major, tap-minor: `index = phase*taps + tap`, the order
+`rtl/pfb/coeff_bank.sv` addresses and `COEFF_ADDR.INDEX` counts through. The redundant
+`index` column is **checked** by the loader, so a file whose rows were reordered by a
+well-meaning edit fails rather than loading a silently different filter.
+
+### `.vec` — a golden input/output run
+
+```text
+# columns: beat x0_re x0_im .. y0_re y0_im .. f0_re f0_im ..
+```
+
+96 beats through the model from an all-zero history: zeros, a complex impulse, a constant, a
+complex sinusoid, both Q1.15 endpoints, then random. `f*` is the packed saturation flag word
+(`sat_pos<<1 | sat_neg`). Header keys `phases`, `taps`, `acc_w`, `coeff_file` and
+`rounding_mode` are all parsed and checked, so a file generated for a different geometry or a
+different rounding rule fails immediately rather than "passing" against whichever
+implementation happens to match.

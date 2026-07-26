@@ -32,6 +32,16 @@ rtl/packages/fxp_pkg.sv
 // field positions through it, as does the generated configuration mirror.
 rtl/packages/stream_pkg.sv
 
+// SPEC 8: the CDC parameter package (issue #6). Listed here because the
+// coefficient bank below instantiates the crossing primitives that use it.
+rtl/packages/cdc_pkg.sv
+
+// SPEC 7.1: the polyphase-FIR package (issue #10). Accumulator width, the
+// beat/cycle latency split, and the delay-line storage-style threshold, in one
+// place so the lane, the coefficient bank, the polyphase bank and the C++ model
+// cannot disagree.
+rtl/packages/pfb_pkg.sv
+
 // ---- protocol assertions (SPEC 14) -------------------------------------
 // Simulation-only. Instantiated inside every stream primitive under
 // `ifndef SYNTHESIS`, so the protocol is checked everywhere the primitives are
@@ -46,6 +56,13 @@ sim/assertions/stream_protocol_checker.sv
 // discontinuity").
 sim/assertions/telemetry_assertions.sv
 sim/assertions/seq_checker_assertions.sv
+
+// The same arrangement again for the polyphase bank (issue #10): rtl/pfb/
+// coeff_bank.sv and rtl/pfb/pfb_bank.sv each instantiate their checker under
+// `ifndef SYNTHESIS`, so the SPEC 7.1 frame-boundary rule and the block's
+// credit argument are checked wherever those modules are used.
+sim/assertions/pfb_assertions.sv
+sim/assertions/coeff_bank_checker.sv
 
 // ---- stream primitives (SPEC 5) ----------------------------------------
 rtl/stream/stream_skid_buffer.sv
@@ -80,6 +97,26 @@ rtl/common/seq_checker.sv
 // pipeline that consumes it arrives with issues #10-#12, and until then `make
 // lint` covers it here and sim/verilator/tops/cmult_top.sv verifies it.
 rtl/common/complex_multiplier.sv
+
+// ---- SPEC 8 CDC primitives (issue #6) ----------------------------------
+// Listed here because rtl/pfb/coeff_bank.sv builds its configuration-to-core
+// seam out of them. rtl/cdc/async_fifo.sv and rtl/cdc/stream_cdc.sv are not yet
+// instantiated by anything in this list and stay in files_cdc.f.
+rtl/cdc/cdc_sync2.sv
+rtl/cdc/cdc_pulse.sv
+rtl/cdc/cdc_handshake.sv
+
+// ---- the polyphase FIR bank (SPEC 7.1, SPEC 19 Phase 2, issue #10) -----
+// Design RTL: one complex FIR lane, the dual coefficient banks with their
+// frame-aligned swap, the parameterised delay line, and the polyphase bank that
+// puts SAMPLES_PER_CYCLE lanes behind one SPEC 5 stream interface. Not yet
+// instantiated by benchmark_sim_top; the pipeline that consumes it arrives with
+// the medium integration (issue #17), and until then `make lint` covers it here
+// and sim/verilator/tops/pfb_top.sv verifies it.
+rtl/pfb/delay_line.sv
+rtl/pfb/coeff_bank.sv
+rtl/pfb/fir_lane.sv
+rtl/pfb/pfb_bank.sv
 
 // ---- simulation top (SPEC 4.1) -----------------------------------------
 sim/verilator/tops/benchmark_sim_top.sv
