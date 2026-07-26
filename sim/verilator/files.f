@@ -256,6 +256,36 @@ rtl/cfar/cfar_core.sv
 rtl/memory/history_bank.sv
 rtl/memory/history_core.sv
 
+// ---- the frequency-bin alignment network (SPEC 7.4, issue #16) ---------
+// Design RTL, listed for the same reason. It comes after the history because it
+// consumes the history's read contract literally: rtl/align/align_pkg.sv imports
+// history_pkg for the response metadata layout and beamformer_pkg (listed
+// above) for the output beat width, and align_net checks both at elaboration.
+//
+// SPEC 7.4 requires two architectures, so BOTH are here. rtl/align/
+// align_switch.sv is the parameter that chooses between them and is the only
+// module the rest of the design ever names; a build selects one and the other
+// elaborates nowhere. Both are listed because both are design RTL, and RTL that
+// no lint ever sees is RTL that rots.
+//
+// Single-clock (history_clk), so it adds no crossing to the SPEC 8 inventory —
+// which `make cdc-inventory` checks over files_align.f with --strict rather than
+// leaving as a claim in a comment.
+//
+// Not yet instantiated by benchmark_sim_top — the pipeline that wires it to the
+// history and the beamformer arrives with issue #17 — so until then `make lint`
+// covers it here and sim/verilator/tops/align_top.sv verifies it. The
+// quartus/calibration/align_*_wrap.sv wrappers are deliberately NOT here: they
+// are SPEC 18 calibration harnesses, not design RTL, and files_align.f already
+// lints them.
+sim/assertions/align_assertions.sv
+rtl/align/align_pkg.sv
+rtl/align/align_xbar.sv
+rtl/align/align_clos.sv
+rtl/align/align_switch.sv
+rtl/align/align_collect.sv
+rtl/align/align_net.sv
+
 // ---- the packet network (SPEC 7.8, issue #18) --------------------------
 // Design RTL, listed here for the reason every kernel above is: this list is the
 // single definition of what "the design" is. packet_pkg must follow cfar_pkg,

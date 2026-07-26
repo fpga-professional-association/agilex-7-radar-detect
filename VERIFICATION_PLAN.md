@@ -526,6 +526,94 @@ that is issue #17's medium-pipeline integration, and it is where `REORDER = 0` u
 own behaviour is covered by `test_control_regs`, which walks the generated tables and
 therefore picked the new window up automatically.
 
+### 4.1.y Frequency-bin alignment network (issue #16)
+
+`sim/tests/test_align.cpp` over `sim/verilator/tops/align_top.sv`. Eleven passes, four
+DUTs. Oracle: `model/cpp/align/align_model.hpp`.
+
+**The organising principle is that the two architectures are never tested differently.**
+SPEC §7.4 requires two to be built and compared, and a comparison is only worth having if
+both were held to the same standard. One suite therefore runs, unchanged, against each of
+four elaborations, with identical pass criteria. Anything that differs between them is a
+*measurement*, not an expectation.
+
+| sel | architecture | BIN_PAR | MUX_STAGES | N_ANT | net stages | what it is for |
+|---|---|---|---|---|---|---|
+| 0 | direct crossbar | 4 | 1 | 2 | 2 | the narrow pair, |
+| 1 | omega | 4 | — | 2 | 2 | latency-matched |
+| 2 | direct crossbar | 8 | 2 | 4 | 3 | the wide pair, and the widest |
+| 3 | omega | 8 | — | 4 | 3 | beat `STREAM_MAX_DATA_W` allows |
+
+Latency matching is part of the fixture, not an accident: `algn_xbar_latency(1) = 2 =
+algn_clos_latency(4)` and `algn_xbar_latency(2) = 3 = algn_clos_latency(8)`. The geometry
+pass fails the run if a pair is ever un-matched, because a resource or throughput
+comparison across mismatched pipeline depths is a comparison of pipeline depths.
+
+**The test owns the history ports.** It accepts the block's `BIN_PAR` read requests and
+returns responses with whatever skew, loss, duplication or corruption the pass needs. The
+response value is a pure function of `(bin, antenna, frame_id)`, so a sample that arrives at
+the wrong beat position, in the wrong antenna slot, or from the wrong frame is a *different
+number* rather than a plausible one. It also checks every accepted request against
+`algn::port_of` — the rotating schedule is verified, not assumed by the response model.
+
+| Pass | What it does | What it proves |
+|---|---|---|
+| 1 geometry | reads every DUT's echoed geometry and both latencies before any stimulus | the model is configured for the DUT it is about to drive, and the pairs are latency-matched |
+| 2 in-order | zero skew, two frames per DUT | every beat bit-exact: `BIN_PAR × N_ANT` samples, `sof`/`eof`, `sequence`, `user` |
+| 3 skew | randomized per-port response delay, three independent seeds | the reassembly buffer absorbs skew, and ordinary skew produces **zero** timeouts — if it did not, the timeout bound would be reporting a stall as a loss |
+| 4 reorder stress | wide skew, 25% request-port stalls, light output backpressure | the case where two responses collide on one lane, which is the only thing that distinguishes the two architectures. Records each architecture's blocking count |
+| 5 missing | one response never returned | `missing_count == 1` and `timeout_count == 1` exactly, the beat carries `ALGN_USER_MISSING`, its absent lane is zeroed, and the sticky fault sets |
+| 6 duplicate | one response returned twice, with every other port held back so the copy provably arrives while the entry is still open | `dup_count == 1`, `missing_count == 0` — a duplicate must not cost a sample — and the **first** copy is the one in the beat |
+| 7 backpressure | the same stimulus at `none`/`light`/`heavy`/`bursty` | the first `2 × GROUPS_PER_FRAME` beats are **byte-identical** across all four, and every run's counters match the model |
+| 8 tag collision | SPEC §9 `cfg_force_unsafe`: one group's entry is opened under the wrong label | `orphan_count == BIN_PAR` and `missing_count == BIN_PAR` exactly, the injection fires exactly once, and the run recovers cleanly afterwards — an injection, not damage |
+| 9 frame identity | one response carries a different absolute frame id | it is rejected rather than assembled into the beat. This is the failure ARCHITECTURE.md calls "not detectably wrong from the output alone" |
+| 10 throughput | nothing stalled, four frames | sustained beats per cycle, measured and reported for both architectures; the run fails below 0.5 |
+| 11 coverage | reads the delivery census | the run actually exercised the network: at least one cycle delivered two lanes at once, and every lane was used. A run that failed this would have compared two idle networks |
+
+**Model synchronisation, and the two places it is subtle.** The model is functional, not
+cycle-accurate: the content of a beat is a pure function of which responses reached the
+collector, and re-implementing both architectures' arbitration in C++ would mean comparing a
+model of the crossbar against the crossbar. Two consequences the test must respect, and both
+were found by the test disagreeing with correct RTL:
+
+* **entries open on the FIRST accepted request of a group, not the last.** The block
+  allocates its entry at issue — all `BIN_PAR` requests are loaded in one cycle — so with
+  the request ports stalling independently, the answer to the first request can be back
+  before the last has been accepted.
+* **a cycle's responses are delivered to the model in LANE order.** When several reach one
+  entry before it has fixed a frame number, the RTL's reference is the lowest-numbered
+  lane; the rotating schedule makes port order and lane order differ on every group but the
+  first.
+* the model finds an entry by searching its open list **from the back**, because the output
+  elastic buffer means the RTL frees an entry when the beat is *pushed* and the test only
+  learns about it when the beat is *popped*.
+
+**Proof that the properties fire (SPEC §14).** One deliberate fault per architecture, run,
+then reverted:
+
+* `align_xbar`: the per-output request comparison changed to `a_dst[i] == (o+1) % N`, so
+  every word is delivered one lane away from where it belongs. `a_align_route_correct`
+  fired on the first delivered word: *"lane 0 was given a word belonging at beat position
+  1"*.
+* `align_clos`: a switch's routing bit changed from `src_dst[J0][RBIT]` to
+  `src_dst[J0][0]`, so the network routes on the LSB at every stage while the
+  elaboration-time `route_ok()` proof — which is written against the generic expression —
+  still passes. `a_clos_arrived_at_destination` fired: *"a word addressed to 1 was
+  presented at output 3"*. This is the case the elaboration proof cannot catch, which is
+  why the runtime property exists as well.
+
+Both edits were reverted and the suite passes on seeds 1, 2 and 3.
+
+**Runtime.** About 0.9 s per seed in the fast build — the whole eleven-pass suite across all
+four DUTs.
+
+**Not covered here, deliberately.** The block driven by real `history_core` instances rather
+than by the test's model of them: that is issue #17's medium-pipeline integration, and it is
+where independent history occupancies can produce a genuine cross-frame beat rather than an
+injected one. The block claims no register window of its own — its configuration reaches it
+as ports, and the window belongs to the integration issue that decides where the sweep is
+commanded from.
+
 #### Packet network (`packet_top`, issue #18)
 
 `sim/verilator/tops/packet_top.sv` holds the WHOLE SPEC §7.8 fabric at its nominal size in
@@ -1127,7 +1215,39 @@ inventory with an imaginary entry is worse than one with a missing entry.
 | `c_history_request_in_range`, `c_history_request_out_of_range` | (cover) both branches of the range check, so the error counter is proved reachable rather than merely present |
 | `c_history_forced_collision` | (cover) a request that reaches the in-flight slot under `FORCE_UNSAFE`. The collision counter is unreachable by construction in correct operation, so this cover is the only evidence that it can fire at all |
 
-### 5.16 Packet-network assertion set (SPEC §14, issue #18)
+### 5.16 Alignment-network assertion set (SPEC §14, issue #16)
+
+`sim/assertions/align_assertions.sv`, instantiated by `rtl/align/align_net.sv` under
+`` `ifndef SYNTHESIS ``, plus two properties inside `rtl/align/align_collect.sv`, one inside
+`rtl/align/align_clos.sv`, and a `stream_protocol_checker` on the block's master interface.
+Single clock, per issue #15's decision 14.
+
+**What is here and what is not.** The C++ scoreboard checks *values*. These check what a
+value comparison cannot localise, or cannot see at all — and the central one is the reason
+the set exists.
+
+| Assertion | Fires on |
+|---|---|
+| `a_align_route_correct` | a word presented on lane *l* whose own bin index says it belongs at a different beat position. **THE property of this issue.** A mis-routed word still produces a perfectly well-formed beat — `BIN_PAR` antenna vectors, right frame, right group — carrying two copies of one bin and none of another. The scoreboard catches that only because it happens to compare every sample; this catches it at the wire, on the cycle, in either architecture, and names the lane. It is deliberately checked *outside* both architectures |
+| `a_align_in_held` | the network's slave side withdrawing `valid` before it was accepted. `align_clos`'s ready depends on its own inputs' valids, so a producer that withdrew a request after losing an arbitration would deadlock the switch rather than fail visibly |
+| `a_align_in_dst_stable` | a destination index changing while its word is stalled |
+| `a_align_idle_when_disabled` | a lane accepted while the block is disabled — which `align_top` relies on, since three of its four DUTs are disabled at all times |
+| `a_clos_arrived_at_destination` | (inside `align_clos`) a word presented at output *i* that did not ask for *i*. The runtime companion to the elaboration-time `route_ok()` proof: that one shows the wiring is a permutation, this one shows no arbiter, stall or reset interaction ever moved a word off its route |
+| `a_align_emit_open` | (inside `align_collect`) a beat emitted from an entry that was not open |
+| `a_align_alloc_ptr` | (inside `align_collect`) an allocation whose entry index disagrees with the buffer's own tail — i.e. the arithmetic-index argument that replaces a CAM being false |
+| elaboration: `route_ok()` | (inside `align_clos`) any `(source, destination)` pair the omega wiring does not deliver, checked over the whole `N × N` space at time 0. A permutation network whose shuffle is off by one rotation otherwise passes every test in which the destination happens to equal the source — and at `BIN_PAR = 2` that is every test there is |
+| elaboration: `align_net` width checks | the output beat width disagreeing with `beamformer_pkg::bf_in_data_w`, or the bin and antenna-vector widths disagreeing with `history_pkg`. Two files, one contract, checked rather than believed |
+| elaboration: `align_switch` latency note | the two architectures not being latency-matched at the chosen parameters. A **note**, not a fatal — a caller may want a mismatched point deliberately — but it can never go unrecorded |
+
+The measured coverage this issue needs is deliberately *not* here: whether two lanes were
+ever delivered in one cycle, and whether every lane was used, are throughput statements
+about the two architectures that the pull request quotes, so they live on `align_net`'s
+telemetry ports and `test_align` fails a run in which either is trivial.
+
+**Proof that they fire.** See §4.1.y: one deliberate fault per architecture, each caught by
+the property named above, both reverted.
+
+### 5.17 Packet-network assertion set (SPEC §14, issue #18)
 
 Every assertion below is inline in the module it describes, under `` `ifndef SYNTHESIS`` — not
 bound from a test — so the fabric's contract holds wherever it is used: the unit-test top, a
@@ -1161,7 +1281,7 @@ inside all 192 buffers of the elaborated fabric at the same time.
 | `a_egr_dest` | `pkt_egress` | a packet arriving at a port that is not its destination — the routing function checked at its only observable end |
 | `a_egr_type` | `pkt_egress` | a delivered packet carrying a reserved type |
 
-### 5.17 Proof that the packet assertions fire (issue #18)
+### 5.18 Proof that the packet assertions fire (issue #18)
 
 `sim/tests/test_packet_assertions.cpp` drives the REAL fabric — the same
 `sim/verilator/tops/packet_top.sv` the positive suite uses, with no deliberately-broken copy

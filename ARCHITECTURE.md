@@ -265,6 +265,188 @@ The assertion set checks the observable consequences: `a_history_lane_onehot0` (
 lane enabled) and `c_history_write_enables_differ` (a cycle in which the antennas disagree
 about writing, which one shared enable could not produce).
 
+### 3.4a Frequency-bin alignment network (`rtl/align/`, issue #16)
+
+SPEC §7.4. The layer between the history's one-bin-per-cycle read port and the
+beamformer's `BIN_PAR × N_ANT` input beat. It preserves antenna, frequency-bin and frame
+identity, supports backpressure, detects missing and duplicated samples, and avoids one
+giant unregistered multiplexer — and it exists in **two interchangeable architectures**,
+because SPEC §7.4 requires two to be built and compared.
+
+#### What is left for this block to do, given #15 (NORMATIVE — read this first)
+
+The naive reading of SPEC §7.4 is "transpose antenna-sequential FFT output into
+bin-parallel antenna vectors". **That transpose is not here, and it is not here because
+§3.4 already did it, in memory, for free.** `history_pkg` chooses the bank dimension to be
+the antenna, so a read of bin *b* enables one bank per antenna and returns the whole
+antenna vector in one cycle with no multiplexer at all. The antenna axis arrives already
+aligned.
+
+What is *not* solved by that, and what this block is, is the **bin-parallel marshalling
+layer**:
+
+* **issue** `BIN_PAR` read requests per cycle across `BIN_PAR` independent history read
+  ports. §3.4 records that its port is deliberately one bin wide and that the headroom to
+  widen it exists; this block spends that headroom by instantiating the port `BIN_PAR`
+  times rather than by widening it, which leaves #15's correctness argument untouched;
+* **route** each response to the beat position it belongs to. The port a bin was requested
+  on is *not* the position it occupies in the beat (see the schedule below), so this is a
+  genuine `BIN_PAR × BIN_PAR` permutation that changes every beat — and it is the thing
+  the two architectures implement differently;
+* **reassemble** responses that arrive skewed, because `BIN_PAR` independent history
+  instances have independent occupancies and independent stalls;
+* **detect** a response that never arrives or arrives twice, which nothing upstream can do.
+
+#### The schedule, and why the routing is not the identity
+
+A **group** is one output beat: `BIN_PAR` consecutive bins of one frame. A **sweep** is one
+whole frame, `FFT_SIZE / BIN_PAR` groups, emitted as one SPEC §5 frame. Because `BIN_PAR`
+is a power of two,
+
+```text
+    lane  j = bin % BIN_PAR = bin[LANE_W-1:0]        a bit slice
+    group g = bin / BIN_PAR = bin[BIN_W-1:LANE_W]    a bit slice
+```
+
+If lane *j* were always requested on port *j*, the network would be `BIN_PAR` wires and the
+architecture comparison would be vacuous. It is not, and the reason is physical: #15's
+banking makes the memory lane of a bin the *high* bits of the bin index, so a fixed
+assignment would send a fixed residue class of bins to each port forever, pinning each port
+to one subset of memory lanes at a fixed duty cycle. The schedule therefore **rotates**:
+
+```text
+    port(g, j) = (j + g) mod BIN_PAR
+```
+
+so over `BIN_PAR` consecutive groups every port sees every beat position, and the inverse
+map — which lane a response arriving on port *p* belongs to — is a different cyclic
+permutation on every group.
+
+#### The routing key is the response's own identity, not a side-channel tag
+
+The obvious mechanism is a per-port FIFO of issued tags, popped one per response. It is
+**rejected**, and the reason is the failure mode SPEC §7.4 exists to catch: a tag FIFO is
+only correct while responses and tags stay in step, so the first dropped or duplicated
+response silently mis-labels every response after it. The detector would be the thing that
+breaks first.
+
+The key is instead recomputed from the response's own metadata, which §3.4 already carries
+inside `data`:
+
+```text
+    lane      j   = meta.bin[LANE_W-1:0]
+    group     g   = meta.bin[BIN_W-1:LANE_W]
+    entry   gid   = g mod GROUPS = g[GID_W-1:0]      (GROUPS is a power of two)
+```
+
+and the reassembly entry independently stores the `(group, frame_off, frame_id)` it was
+allocated for. Consequences, and they are why the mechanism was chosen: a response that
+never arrives is not mis-labelled as anything, it simply never sets its lane's present bit;
+a response that arrives twice hits a lane whose present bit is already set, whatever the
+skew; a response whose key does not match is an **orphan**, counted and dropped rather than
+written over a live beat; and **no ordering assumption at all** is made about the response
+streams, so a future out-of-order memory would not invalidate the network.
+
+`frame_id` is part of the key and is carried through the routing network at its full 32
+bits — about 6% of the routed word — because it is the only field that can answer "is every
+antenna vector in this beat from the *same* frame". `frame_off` cannot: it is relative to
+the newest complete frame, so two responses that both asked for offset 1 are from different
+absolute frames if a rotation happened between them. Every lane of a beat must agree; the
+first arrival fixes the value, and when several arrive in the same cycle before it is fixed
+the lowest-numbered lane is the reference.
+
+#### What an incomplete group emits
+
+A group whose responses do not all arrive within `TIMEOUT_CYCLES` **cycles of progress** is
+resolved rather than waited on forever. "Of progress" is load-bearing: the age counters
+advance only in cycles where the block could have retired a beat, so a stalled consumer
+never manufactures a missing-sample report.
+
+The obvious policy — drop the beat — is wrong, because SPEC §5 is normative too: deleting a
+beat breaks sequence continuity, and deleting the beat that carried `eof` leaves the frame
+open forever. **The beat is emitted, the data is not**: absent lanes are zeroed (the
+default), `ALGN_USER_MISSING` is set in the SPEC §5 `user` field, `stat_missing_count`
+advances by the exact number of absent lanes, and `sequence`, `sof` and `eof` are exactly
+what they would have been. `cfg_partial_pass = 1` keeps whatever did arrive, for diagnosis;
+both settings are modelled and both are tested.
+
+#### The `user` field of an output beat (NORMATIVE)
+
+Four bits, LSB first, so a consumer that decodes only the SPEC §5 bundle can tell a
+trustworthy beat from a repaired one: `MISSING` (0), `DUPLICATE` (1), `ORPHAN` (2), `HIST`
+(3, the OR of §3.4's own response flags over the beat). `|user[3:0]` is "something was wrong
+with this beat". The block's sticky `stat_fault` word is the same four bits in the same
+order.
+
+#### Modules
+
+| Path | Parameters | Issue | Function |
+|---|---|---|---|
+| `rtl/align/align_pkg.sv` | — | #16 | Geometry, the schedule, the routing-key algebra, the routed-word layout, the `user` encoding, the architecture selector and the latency arithmetic. The one place any of them is defined. |
+| `rtl/align/align_xbar.sv` | `N`, `DATA_W`, `MUX_STAGES` | #16 | **Architecture 1, direct registered crossbar.** One round-robin arbiter per output over every input, one registered mux tree per output over every input. `MUX_STAGES = 2` splits each mux into two levels of at most `ceil(sqrt(N)):1`, which is how SPEC §7.4's "no giant unregistered multiplexer" is met structurally rather than by argument. An output that stalls freezes its whole column, which is lossless by construction. |
+| `rtl/align/align_clos.sv` | `N`, `DATA_W` | #16 | **Architecture 2, multistage omega network.** `log2(N)` stages of `N/2` two-by-two switches, perfect shuffle between stages, self-routing on one address bit per stage, per-switch round-robin arbitration between its own two inputs. Every link is a register, so the latency is `log2(N)`. The wiring is proved at elaboration over the whole `N × N` space and again at run time on every delivered word. |
+| `rtl/align/align_switch.sv` | `N`, `DATA_W`, `NET_SEL`, `MUX_STAGES` | #16 | The one interface behind which the two are interchangeable. Nothing else in the design names either module. Checks the two architectures' latencies match and reports it when they do not. |
+| `rtl/align/align_collect.sv` | the geometry, `TIMEOUT_CYCLES`, the SPEC §5 field widths, `OUT_DEPTH` | #16 | The reassembly buffer and the SPEC §7.4 detector. Common to both architectures and containing no knowledge of either, which is what makes the comparison a comparison. |
+| `rtl/align/align_net.sv` | the geometry plus `NET_SEL`, `MUX_STAGES` | #16 | The block: scheduler, ingress decode, `align_switch`, `align_collect`, telemetry. Single clock (`history_clk`), so it adds no crossing to the SPEC §8 inventory — checked, not asserted. |
+| `sim/verilator/tops/align_top.sv` | none | #16 | Verification top holding **four** elaborations: both architectures at `BIN_PAR = 4` and at `BIN_PAR = 8`, latency-matched at each, behind one port set. |
+| `sim/assertions/align_assertions.sv` | `BIN_PAR`, `LANE_W`, `NET_DATA_W`, `BIN_W`, `VEC_W` | #16 | The SPEC §14 property set. `a_align_route_correct` is the central one: a word presented on lane *l* must be a word whose own bin index says it belongs at beat position *l*. |
+| `quartus/calibration/align_sw_wrap.sv` | the geometry plus `NET_SEL`, `MUX_STAGES` | #16 | SPEC §18 wrapper for the **routing fabric alone** — the thing the two architectures are. |
+| `quartus/calibration/align_net_wrap.sv` | as `align_net` | #16 | SPEC §18 wrapper for the **whole block**, which prices the part both builds share. |
+
+#### Which architecture the design uses (MEASURED — SPEC §7.4)
+
+**`ALGN_NET_CLOS`, the multistage omega network.** Both are built, both are verified by the
+same suite, and both were compiled at two widths on `AGMF039R47B1E1VC`; the full table and
+its caveats are in DECISIONS.md (issue #16). At the full-scale routing width — 8 lanes ×
+16 antennas, a 566-bit routed word, both architectures at latency 3:
+
+| | direct crossbar | multistage omega |
+|---|---|---|
+| ALMs | 18 492 | **13 946** (−24.6%) |
+| ALM registers | 33 502 | **22 976** (−31.4%) |
+| Fmax | 296.5 MHz | **≥ 624.6 MHz** |
+| peak long-haul / short interconnect demand | 109% / 103% | **76% / 0%** |
+| sustained throughput | 0.875 beats/cycle | 0.875 beats/cycle |
+
+The congestion column is the mechanism: the crossbar's estimated interconnect demand exceeds
+100% in its worst region, the router detours, and 2.128 ns of its critical path is wire
+against 0.834 ns of logic. At 296 MHz it misses both the SPEC §2 450 MHz target and the
+SPEC §8 400 MHz `history_clk`; the omega clears both. It blocks about 1.7× as often and
+sustains exactly the same throughput anyway, because the reassembly buffer absorbs it.
+
+`NET_SEL` is left at 0 — the SPEC §7.4 *reference* architecture — so that this issue's
+default is the thing being compared against rather than its own conclusion; issue #17 sets
+it to 1 when it instantiates the block in the pipeline. The crossbar stays in the tree
+because §7.4 requires the comparison to be reproducible, and because a second architecture
+behind one interface is what makes a later change cheap.
+
+**Two measured defects issue #17 must fix before either form meets 400 MHz**, neither a
+property of a topology and both in logic common to the two builds: the detector's verdict
+and its counter increment share a cycle (11 levels of logic from the fabric's output
+register into the duplicate counter), and `cfg_enable` is a single register driving most of
+the block — a SPEC §23 chip-wide control net, to be replaced by the registered fanout §3.4
+already demonstrates. DECISIONS.md findings 6 and 7 carry the numbers and the one-line
+changes.
+
+#### Flow control and the sustained rate
+
+The scheduler issues all `BIN_PAR` requests of a group in one cycle or none of them, when
+the block is enabled, a reassembly entry is free, and every request port can take a
+request. The sustained rate is therefore **one beat per cycle — `BIN_PAR` bins per cycle —**
+and every departure from it is one of those three conditions failing, which is what
+`stat_issue_stall_count` counts.
+
+`cfg_run` is the sweep gate and stops the block **at the next frame boundary**, never
+mid-frame; a sweep in progress ignores it. It is separate from `cfg_enable` because
+conflating them is a deadlock: `cfg_enable` low also stops the block accepting responses,
+so a block disabled with work in flight would strand its own entries and report them as
+missing samples.
+
+The lane ports into the reassembly buffer are always ready, and that is a deadlock argument
+rather than an optimisation: every word arriving on a lane belongs to an entry that is
+already open, so refusing it could not free anything. Backpressure is applied one level
+upstream, at group allocation, where refusing genuinely does bound the work in flight.
+
 ### 3.5 DSP kernels (`rtl/common/`, `rtl/pfb/`, `rtl/fft/`, `rtl/beamformer/`, `rtl/covariance/`, `rtl/cfar/`)
 
 The first Phase 2 kernel lives under `rtl/common/` rather than in one of the block

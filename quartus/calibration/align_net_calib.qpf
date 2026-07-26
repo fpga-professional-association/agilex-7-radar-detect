@@ -1,0 +1,21 @@
+# ---------------------------------------------------------------------------
+# align_net_calib.qpf — SPEC 18 / SPEC 7.4 resource-calibration project: the
+# WHOLE frequency-bin alignment network (issue #16).
+#
+# The companion to align_sw_calib. That project isolates the routing fabric, so
+# the difference between its records is the difference between the two SPEC 7.4
+# architectures and nothing else. This one measures the block around them — the
+# reassembly buffer, the detector, the scheduler and the counters — which is
+# identical in both builds and is what the full-scale projection needs as a
+# number rather than as a difference.
+#
+# One revision, same reasoning as every other calibration project here.
+#
+# Hand-maintained: do not let the GUI rewrite this file with tool metadata.
+# ---------------------------------------------------------------------------
+
+QUARTUS_VERSION = "26.1"
+
+# Revisions
+
+PROJECT_REVISION = "align_net_calib"

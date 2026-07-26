@@ -602,6 +602,144 @@ MATRICES: dict[str, dict] = {
             },
         ],
     },
+
+    # -----------------------------------------------------------------------
+    # SPEC 7.4, the mandated architecture comparison (issue #16).
+    #
+    # SPEC 7.4: "Compare at least two architectures: 1. Direct crossbar.
+    # 2. Multistage or Clos-style pipelined network. Record area, congestion,
+    # latency, and Fmax for both."
+    #
+    # THIS MATRIX IS THAT COMPARISON, and it measures the ROUTING FABRIC ALONE.
+    # Everything else in rtl/align/align_net.sv — the scheduler, the ingress
+    # decode, the reassembly buffer, the detector, the counters — is
+    # byte-for-byte identical in both builds, and the reassembly buffer alone is
+    # GROUPS x BIN_PAR x VEC_W flip-flops, which at the wide point is several
+    # times either fabric. Sweeping the whole block twice would report two
+    # numbers differing by a few percent, and the few percent would BE the
+    # answer. The `align_net` matrix below prices that common part separately,
+    # once per architecture, which is what the full-scale projection needs.
+    #
+    # FOUR POINTS: two architectures at two widths, and the widths are chosen so
+    # the pair is LATENCY-MATCHED at each, which is the condition under which a
+    # resource comparison means anything:
+    #
+    #     N = 4:  omega = log2(4) = 2 stages;  crossbar MUX_STAGES = 1 -> 2
+    #     N = 8:  omega = log2(8) = 3 stages;  crossbar MUX_STAGES = 2 -> 3
+    #
+    # rtl/align/align_switch.sv checks the match at elaboration and prints a NOTE
+    # if a caller ever breaks it, so a mismatched point cannot reach a table
+    # unnoticed.
+    #
+    # The narrow point is 4 antennas and the wide one is 16 — the SPEC 7.5
+    # maximum — so the wide point routes the full-scale 512-bit antenna vector
+    # plus its 54-bit identity. That width is reachable here and NOT in the
+    # block-level matrix, and the reason is in the align_net note below.
+    #
+    # NOT SWEPT, in the open: the crossbar's own MUX_STAGES axis (1 against 2 at
+    # one width), which would price registers against LUT depth INSIDE one
+    # architecture. It is a real question and it is deliberately left, because it
+    # is a second-order refinement of whichever architecture wins and this
+    # issue's budget is the head-to-head. GROUPS is not an axis either: it does
+    # not appear in the fabric at all, only in the block.
+    # -----------------------------------------------------------------------
+    "align_sw": {
+        "description": "SPEC 7.4 alignment routing fabric: direct registered "
+                       "crossbar against a multistage omega network, at two "
+                       "widths, latency-matched at both",
+        "top": "align_sw_wrap",
+        "axes": {
+            "architecture": {"0": "direct crossbar", "1": "multistage omega"},
+            "width": [4, 8],
+            "n_ant": [4, 16],
+            "mux_stages": [1, 2],
+        },
+        # Ordered so the two architectures ALTERNATE. A sweep stopped early then
+        # still holds a like-for-like comparison at every width it reached,
+        # instead of holding both crossbar points and no omega point.
+        "points": [
+            {
+                "id": "sw_xbar_n4",
+                "label": "crossbar, 4 lanes x 4 antennas (182-bit word)",
+                "params": {"N_ANT": 4, "FFT_SIZE": 1024, "LANES": 8,
+                           "FRAMES_MAX": 512, "SAMPLE_W": 16, "BIN_PAR": 4,
+                           "GROUPS": 8, "NET_SEL": 0, "MUX_STAGES": 1},
+            },
+            {
+                "id": "sw_clos_n4",
+                "label": "omega, 4 lanes x 4 antennas (182-bit word)",
+                "params": {"N_ANT": 4, "FFT_SIZE": 1024, "LANES": 8,
+                           "FRAMES_MAX": 512, "SAMPLE_W": 16, "BIN_PAR": 4,
+                           "GROUPS": 8, "NET_SEL": 1, "MUX_STAGES": 1},
+            },
+            {
+                "id": "sw_xbar_n8",
+                "label": "crossbar, 8 lanes x 16 antennas (566-bit word)",
+                "params": {"N_ANT": 16, "FFT_SIZE": 1024, "LANES": 8,
+                           "FRAMES_MAX": 512, "SAMPLE_W": 16, "BIN_PAR": 8,
+                           "GROUPS": 8, "NET_SEL": 0, "MUX_STAGES": 2},
+            },
+            {
+                "id": "sw_clos_n8",
+                "label": "omega, 8 lanes x 16 antennas (566-bit word)",
+                "params": {"N_ANT": 16, "FFT_SIZE": 1024, "LANES": 8,
+                           "FRAMES_MAX": 512, "SAMPLE_W": 16, "BIN_PAR": 8,
+                           "GROUPS": 8, "NET_SEL": 1, "MUX_STAGES": 2},
+            },
+        ],
+    },
+
+    # -----------------------------------------------------------------------
+    # SPEC 7.4, the block around the fabric (issue #16).
+    #
+    # TWO POINTS, one per architecture, at 8 bins x 4 antennas. What they price
+    # is exactly what the fabric points exclude: the GROUPS x BIN_PAR x VEC_W
+    # reassembly buffer, the BIN_PAR identity comparators against it, the
+    # scheduler's rotating bin arithmetic and its request holds, the five
+    # saturating counters and the output elastic buffer. Both architectures
+    # rather than one because the Fitter is allowed to place shared logic
+    # differently around different neighbours, and "the fixed cost is
+    # context-free" is a claim worth checking rather than assuming — the same
+    # discipline, for the same reason, as history_core's two points.
+    #
+    # 8 x 4 x 32 IS 1024 BITS, WHICH IS THE POINT. The output beat must fit
+    # stream_pkg::STREAM_MAX_DATA_W, raised to 1024 by issue #12 and deliberately
+    # not to 4096. That bound is what stops this matrix from using the 16
+    # antennas the fabric matrix does, and raising it belongs to issue #20 with
+    # these measurements in hand: it multiplies the working type of every
+    # stream_pack/stream_unpack in the design by four, for a geometry nothing yet
+    # verifies. The full-scale block figure is this fixed cost plus the
+    # full-scale fabric cost the align_sw matrix measures — arithmetic rather
+    # than another compile.
+    # -----------------------------------------------------------------------
+    "align_net": {
+        "description": "SPEC 7.4 alignment network, whole block: reassembly "
+                       "buffer, detector, scheduler and counters around each "
+                       "of the two routing fabrics",
+        "top": "align_net_wrap",
+        "axes": {
+            "architecture": {"0": "direct crossbar", "1": "multistage omega"},
+            "bin_par": [8],
+            "n_ant": [4],
+            "groups": [8],
+        },
+        "points": [
+            {
+                "id": "net_xbar",
+                "label": "whole block, crossbar, 8 bins x 4 antennas",
+                "params": {"N_ANT": 4, "FFT_SIZE": 1024, "LANES": 8,
+                           "FRAMES_MAX": 512, "SAMPLE_W": 16, "BIN_PAR": 8,
+                           "GROUPS": 8, "NET_SEL": 0, "MUX_STAGES": 2},
+            },
+            {
+                "id": "net_clos",
+                "label": "whole block, omega, 8 bins x 4 antennas",
+                "params": {"N_ANT": 4, "FFT_SIZE": 1024, "LANES": 8,
+                           "FRAMES_MAX": 512, "SAMPLE_W": 16, "BIN_PAR": 8,
+                           "GROUPS": 8, "NET_SEL": 1, "MUX_STAGES": 2},
+            },
+        ],
+    },
     # -----------------------------------------------------------------------
     # SPEC 18 item 9: "one packet-switch stage" (issue #18).
     #
@@ -686,6 +824,7 @@ MATRICES: dict[str, dict] = {
             },
         ],
     },
+
 
 }
 
@@ -802,6 +941,29 @@ PRUNING_NOTES: dict[str, str] = {
         "verifies 2 and the 8-lane configuration belongs to issue #20, and "
         "calibrating an unverified geometry would be measuring something the "
         "design does not yet claim. See scripts/run_calibration.py."),
+    "align_sw": (
+        "Four points: the two SPEC 7.4 architectures at two widths, "
+        "latency-matched at each (omega has log2(N) stages, so the crossbar is "
+        "given MUX_STAGES = 1 at N = 4 and 2 at N = 8). Left out, in the open: "
+        "the crossbar's own MUX_STAGES axis, which prices registers against LUT "
+        "depth INSIDE one architecture and is a second-order refinement of "
+        "whichever architecture wins; and GROUPS, which does not appear in the "
+        "routing fabric at all. The block-level cost that both architectures "
+        "share is not measured here on purpose — it is several times either "
+        "fabric and would reduce the comparison to a few percent — it is the "
+        "align_net matrix. See scripts/run_calibration.py."),
+    "align_net": (
+        "Two points, one per architecture, at 8 bins x 4 antennas. The width is "
+        "bounded by stream_pkg::STREAM_MAX_DATA_W = 1024, which 8 x 4 x 32 hits "
+        "exactly; the full-scale 8 x 16 beat is 4096 bits and raising that bound "
+        "quadruples the working type of every stream_pack in the design for a "
+        "geometry nothing yet verifies, so it belongs to issue #20. The "
+        "full-scale block figure is this fixed cost plus the full-scale ROUTING "
+        "cost, which the align_sw matrix does measure at 16 antennas because the "
+        "fabric carries no SPEC 5 payload. Width and GROUPS are not axes here: "
+        "what this matrix exists to measure is the fixed cost, and a second "
+        "geometry would price the same structure twice. See "
+        "scripts/run_calibration.py."),
 }
 
 
