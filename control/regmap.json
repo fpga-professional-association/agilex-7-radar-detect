@@ -45,7 +45,7 @@
   ],
   "regmap_version": {
     "major": 1,
-    "minor": 5,
+    "minor": 6,
     "patch": 0,
     "description": "Bump on any change to this file. major: incompatible layout change; minor: registers or fields added; patch: documentation only."
   },
@@ -775,6 +775,136 @@
           "description": "Count of saturation events, highest across the block's accumulators. Saturates at all-ones rather than wrapping: a wrapped counter can read zero on a permanently clamping datapath, which is the one reading that must never be produced.",
           "fields": [
             {"name": "VALUE", "lsb": 0, "width": 32, "access": "ROHW", "description": "Saturation-event count."}
+          ]
+        }
+      ]
+    },
+    {
+      "name": "packet",
+      "base": "0xB000",
+      "size": "0x1000",
+      "implemented": true,
+      "spec_groups": ["Fault injection", "Stall counters", "FIFO high-water marks"],
+      "description": "The SPEC 7.8 packet network (rtl/packet/, issue #18): the fabric's geometry and packet format reported by hardware, the SPEC 9 fault-injection hooks, the sticky reassembly-error bits from both ends of the network, and the per-stage and per-port telemetry. The window is at 0xB000 and NOT at the next free address (0xA000), deliberately: issue #15 was building the history-memory window concurrently with this one, and two blocks landing on one base is a merge conflict that neither side would see until the generator ran. Leaving a window between them costs nothing - the space is 16 windows wide and 12 are in use - and the alternative costs a re-gate.\n\nWhat this window does NOT contain is the CONTENT that rides over the network: the snapshot records, the aggregated telemetry payloads and the error-event bodies belong to issue #19, which owns the debug window at 0x8000. This block owns the fabric, not its traffic.",
+      "registers": [
+        {
+          "name": "PACKET_CTRL",
+          "offset": "0x000",
+          "description": "Master controls. TEL_CLEAR is write-1-pulse and reads back zero, because it is an event rather than a mode.",
+          "fields": [
+            {"name": "ENABLE",    "lsb": 0, "width": 1, "access": "RW",  "reset": "0x1", "description": "Global fabric enable. Reserved for the multi-domain integration (issue #19), which is where an enable can be lowered safely: a fabric disabled with packets in flight would strand them, so the sequencing belongs to the block that owns the producers."},
+            {"name": "TEL_CLEAR", "lsb": 8, "width": 1, "access": "RWP", "description": "Clear every telemetry counter, every buffer high-water mark and every sticky error bit in the fabric, in one cycle across all stages and ports. One strobe rather than a per-counter clear, so a measurement window opens at one edge everywhere - the same argument rtl/common/perf_counter.sv makes for its snapshot strobe."}
+          ]
+        },
+        {
+          "name": "PACKET_STATUS",
+          "offset": "0x004",
+          "description": "Elaborated topology, reported by hardware. Software sizing its own buffers reads this rather than carrying build-time constants, exactly as the build-parameter block serves the rest of the design.",
+          "fields": [
+            {"name": "N_PORTS", "lsb": 0,  "width": 8, "access": "ROHW", "description": "Ingress and egress port count, RADIX**STAGES."},
+            {"name": "N_VC",    "lsb": 8,  "width": 8, "access": "ROHW", "description": "Virtual channels per port."},
+            {"name": "RADIX",   "lsb": 16, "width": 8, "access": "ROHW", "description": "Ports per switch stage."},
+            {"name": "STAGES",  "lsb": 24, "width": 8, "access": "ROHW", "description": "Switch stages between ingress and egress."}
+          ]
+        },
+        {
+          "name": "PACKET_GEOMETRY",
+          "offset": "0x008",
+          "description": "Flit geometry, reported by hardware because PACKET_W is a SPEC 11 sized parameter and a register map that baked it in would be a different map at every configuration.",
+          "fields": [
+            {"name": "PACKET_W", "lsb": 0,  "width": 16, "access": "ROHW", "description": "Flit payload width in bits."},
+            {"name": "FLIT_W",   "lsb": 16, "width": 16, "access": "ROHW", "description": "Total flit width including the parity, VC, SOF and EOF control bits."}
+          ]
+        },
+        {
+          "name": "PACKET_FORMAT",
+          "offset": "0x00C",
+          "description": "Packet-header geometry. Every field here is a CONSTANT of rtl/packages/packet_pkg.sv rather than an elaboration parameter, so a captured packet decodes identically at every SPEC 11 size; it is reported anyway so that a decoder needs no build-time header at all.",
+          "fields": [
+            {"name": "HDR_W",     "lsb": 0,  "width": 8, "access": "ROHW", "description": "Header width in bits, occupying the low bits of the header flit's data field."},
+            {"name": "MAX_FLITS", "lsb": 8,  "width": 8, "access": "ROHW", "description": "Longest legal packet in flits, header included."},
+            {"name": "SEQ_W",     "lsb": 16, "width": 8, "access": "ROHW", "description": "Per (source, VC) packet sequence-number width."},
+            {"name": "DEST_W",    "lsb": 24, "width": 4, "access": "ROHW", "description": "Destination field width."},
+            {"name": "SRC_W",     "lsb": 28, "width": 4, "access": "ROHW", "description": "Source field width."}
+          ]
+        },
+        {
+          "name": "PACKET_FAULT",
+          "offset": "0x010",
+          "description": "SPEC 9 fault injection for the fabric (SPEC 7.8 'error injection hook'). Two independent hooks. FLIP corrupts payload bits of the flits one ingress port is emitting: one bit is caught by the per-flit parity at the next hop, two are not - parity is blind to an even error count by construction - and are caught by the payload scoreboard instead, so the limits of the parity scheme are exercised rather than assumed. KILL withholds the credit one switch buffer would have returned upstream, which stops that virtual channel dead while producing no wrong data at all. The withheld credits are HELD and released when KILL_EN clears, not dropped, so the injection can be reverted and the fabric proved to recover; a dropped credit would be a one-way trip.",
+          "fields": [
+            {"name": "FLIP_MASK",  "lsb": 0,  "width": 2, "access": "RW", "reset": "0x0", "description": "Bit 0 flips one payload bit of the flit being emitted, bit 1 flips a second. Header flits are never corrupted: a flipped destination is a misroute the fabric would deliver correctly, which tests nothing."},
+            {"name": "FLIP_PORT",  "lsb": 4,  "width": 5, "access": "RW", "reset": "0x00", "description": "Ingress port the FLIP hook applies to."},
+            {"name": "KILL_EN",    "lsb": 12, "width": 1, "access": "RW", "reset": "0x0", "description": "Enable the credit-return hook."},
+            {"name": "KILL_STAGE", "lsb": 16, "width": 4, "access": "RW", "reset": "0x0", "description": "Switch stage whose credit return is withheld."},
+            {"name": "KILL_PORT",  "lsb": 20, "width": 5, "access": "RW", "reset": "0x00", "description": "Global port index within that stage."},
+            {"name": "KILL_VC",    "lsb": 28, "width": 2, "access": "RW", "reset": "0x0", "description": "Virtual channel whose credit return is withheld."}
+          ]
+        },
+        {
+          "name": "PACKET_ERROR",
+          "offset": "0x014",
+          "description": "Sticky reassembly and framing errors, from BOTH ends of the network. Write 1 to clear; also cleared by PACKET_CTRL.TEL_CLEAR. The ingress bits describe what a SOURCE handed over and the egress bits what the FABRIC delivered, and they are kept apart because they are different questions: an ingress length error is a producer defect, an egress one is a transport defect, and a single 'length error' bit would make the two indistinguishable.",
+          "fields": [
+            {"name": "ING_LENGTH",    "lsb": 0,  "width": 1, "access": "W1C", "description": "A source's declared packet length disagreed with the flits it framed (SPEC 14 packet length consistency, checked at the producer)."},
+            {"name": "ING_TYPE",      "lsb": 1,  "width": 1, "access": "W1C", "description": "A source declared a reserved packet type."},
+            {"name": "ING_VC",        "lsb": 2,  "width": 1, "access": "W1C", "description": "A source moved the VC field mid packet."},
+            {"name": "ING_LEN_RANGE", "lsb": 3,  "width": 1, "access": "W1C", "description": "A source declared a length outside 1..MAX_FLITS."},
+            {"name": "EGR_PARITY",    "lsb": 8,  "width": 1, "access": "W1C", "description": "A delivered flit failed its parity check."},
+            {"name": "EGR_LENGTH",    "lsb": 9,  "width": 1, "access": "W1C", "description": "A delivered packet's flit count disagreed with its header (SPEC 14 packet length consistency, checked at the consumer)."},
+            {"name": "EGR_VC",        "lsb": 10, "width": 1, "access": "W1C", "description": "A delivered flit's VC tag disagreed with its packet's header."},
+            {"name": "EGR_DEST",      "lsb": 11, "width": 1, "access": "W1C", "description": "A packet arrived at a port that is not its destination: the routing function checked at its only observable end."},
+            {"name": "EGR_TYPE",      "lsb": 12, "width": 1, "access": "W1C", "description": "A delivered packet carried a reserved type."}
+          ]
+        },
+        {
+          "name": "PACKET_FLITS",
+          "offset": "0x018",
+          "description": "Flits switched by the observed stage. Saturating rather than wrapping, for the reason every error-adjacent counter in this map saturates: a wrapped counter can read small on a fabric that has been busy for a long time.",
+          "fields": [
+            {"name": "VALUE", "lsb": 0, "width": 32, "access": "ROHW", "description": "Flit count."}
+          ]
+        },
+        {
+          "name": "PACKET_STALLS",
+          "offset": "0x01C",
+          "description": "Cycles on which the observed stage held a buffered flit it could not move.",
+          "fields": [
+            {"name": "VALUE", "lsb": 0, "width": 32, "access": "ROHW", "description": "Stall-cycle count."}
+          ]
+        },
+        {
+          "name": "PACKET_WATERMARK",
+          "offset": "0x020",
+          "description": "The two numbers that size the next revision of the fabric's buffering and bound its arbitration. MAX_WAIT is the fairness metric: for every buffered head flit it counts the cycles on which the output that flit wanted granted somebody else, and reports the maximum ever observed. Counting overtakes rather than idle cycles is what makes it a property of the ARBITER rather than of the traffic - a head that waits because the whole network is backpressured has not been treated unfairly.",
+          "fields": [
+            {"name": "MAX_WAIT", "lsb": 0,  "width": 16, "access": "ROHW", "description": "Longest observed overtake run, in cycles."},
+            {"name": "HIWATER",  "lsb": 16, "width": 8,  "access": "ROHW", "description": "Deepest observed switch input-buffer occupancy."}
+          ]
+        },
+        {
+          "name": "PACKET_PKT_IN",
+          "offset": "0x024",
+          "description": "Packets accepted by the observed ingress port.",
+          "fields": [
+            {"name": "VALUE", "lsb": 0, "width": 32, "access": "ROHW", "description": "Packet count."}
+          ]
+        },
+        {
+          "name": "PACKET_PKT_OUT",
+          "offset": "0x028",
+          "description": "Packets delivered by the observed egress port. Compared against PACKET_PKT_IN summed over the sources addressing it, this is the loss and duplication check expressed in registers rather than in a scoreboard.",
+          "fields": [
+            {"name": "VALUE", "lsb": 0, "width": 32, "access": "ROHW", "description": "Packet count."}
+          ]
+        },
+        {
+          "name": "PACKET_OBSERVE",
+          "offset": "0x02C",
+          "description": "Which port and which stage the counters above report. One observation window multiplexed by software rather than 16 ports x 2 counters x 32 bits of register space: the counters are free-running in hardware and only the READ is multiplexed, so nothing is lost by moving the selector instead of the storage.",
+          "fields": [
+            {"name": "PORT",  "lsb": 0, "width": 5, "access": "RW", "reset": "0x00", "description": "Ingress and egress port index for PACKET_PKT_IN and PACKET_PKT_OUT."},
+            {"name": "STAGE", "lsb": 8, "width": 4, "access": "RW", "reset": "0x0",  "description": "Switch stage index for PACKET_FLITS, PACKET_STALLS and PACKET_WATERMARK."}
           ]
         }
       ]

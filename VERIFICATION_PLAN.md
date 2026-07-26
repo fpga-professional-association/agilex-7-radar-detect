@@ -466,6 +466,67 @@ also makes the buffer depth independent of the window geometry; at the SPEC §11
 size `D` is 36, and a buffer sized to cover it would have been an M20K's worth of storage
 bought to solve an accounting problem.
 
+#### Packet network (`packet_top`, issue #18)
+
+`sim/verilator/tops/packet_top.sv` holds the WHOLE SPEC §7.8 fabric at its nominal size in
+one elaboration — 16 ingress adapters, two stages of four radix-4 switches wired as a
+butterfly, 16 egress reassembly points, four virtual channels, `PACKET_W` from the
+configuration — driven by `sim/tests/test_packet.cpp` against
+`model/cpp/packet/packet_model.hpp`. Every delivered packet is compared FIELD FOR FIELD and
+WORD FOR WORD, in order within its (source, VC, destination) triple.
+
+**The model is functional, not cycle accurate,** and for a stronger version of the reason the
+CFAR model is (§4.1): the fabric's subject is DELIVERY — which packets come out, at which
+port, in what order, with what contents — while its cycle-by-cycle behaviour is a function of
+arbitration state, credit round trips and the testbench's own stall profile, all three of
+which SPEC §23 invites changing for timing closure. The model states four properties and
+checks them exactly: routing determinism, ordering within a triple (and explicitly NOT across
+VCs), payload integrity word for word, and conservation — every injected packet delivered
+exactly once, with loss and duplication counted apart because they have different causes.
+
+**Credit conservation is checked in the RTL, on every cycle, not in the model.** Credits are a
+per-link invariant with no end-to-end observable, so the honest place for them is inside the
+design: `a_pkt_credit_bound`, `a_pkt_credit_no_underflow`, `a_sw_credit_bound`,
+`a_sw_credit_held`, `a_sw_no_overrun` and `a_egr_no_overrun` run on every cycle of every pass
+below. What the model contributes to the same question is the consequence: a credit lost
+anywhere means a packet never delivered, and `finish()` names which one.
+
+| Pass | What it drives | What would have to be wrong for it to pass anyway |
+|---|---|---|
+| 1 geometry | the RTL's `cfg_*` echo against the C++ mirror: every field width, both the FLIT control offsets and the HEADER field offsets, the detection-event flit count derived from `cfar_pkg`, and every (source, destination) pair's route | nothing — the run stops here if they disagree, so no later comparison can be silently wrong. The routing check is exhaustive over all 256 pairs, not sampled |
+| 2 directed | one packet of every SPEC §7.8 type at MINIMUM length (1 flit, header only, both SOF and EOF) and at MAXIMUM length (`PKT_MAX_FLITS` = 32), plus a detection-event-sized packet | the two length extremes are where framing breaks: a header-only packet has no body state to fall through, and a 32-flit one is where a length counter one bit too narrow wraps |
+| 3 random | 96 packets per profile of random sources, destinations, VCs, lengths and types, run dense and again at 40% stalls on both sides | zero loss, zero duplication, zero corruption, in-order within every triple. A fabric that dropped one flit in a thousand fails here and nowhere else |
+| 4 hotspot | all 16 sources sending equal-length packets to ONE egress port | starvation. The per-source delivered share is a DELTA against a baseline taken at the start of the pass — without that it would report the whole run's history and pass whatever this pass did — and the switch's own overtake metric is checked against the arbitration bound `2·RADIX·N_VC·MAX_FLITS` |
+| 5 VC isolation | VC0 disabled at one egress while even ports drive VC0 and odd ports drive VC1 at that port | a jammed VC0 consuming the shared link. Every VC1 packet must be delivered WHILE VC0 is stuck. The sources are SPLIT deliberately: an ingress port has one message interface, so a source half-way through a VC0 packet could not offer VC1 either, and an unsplit test would measure the testbench's head-of-line blocking rather than the fabric's |
+| 6 backpressure invariance | the same 48-packet plan dense, then again at 45% stalls on both sides | any dependence of the delivered sequence on when beats happened to arrive. Compared PER TRIPLE, because stalls may legally reorder across triples and a flat comparison would fail a correct fabric |
+| 7 fault injection | the credit return of one (stage, port, VC) withheld, then restored; then a TWO-BIT payload corruption | see below |
+| 8 telemetry | the RTL's per-ingress and per-egress packet counters against an independent tally kept by the test | a counter that counts something adjacent to packets. Checked per port, not in aggregate |
+
+**Fault injection, and why the credit hook HOLDS rather than DROPS.** The hook withholds the
+credits a switch buffer would have returned upstream and releases them when it clears. Dropping
+them would be more literal and would make the injection a one-way trip: the upstream counter
+never gets them back, that virtual channel is dead for the rest of the run, and "revert and
+prove a full recovery" becomes impossible. Holding produces the same stall with a defined end.
+The pass requires VC0 to stop making progress, VC1 not to, the fabric to drain completely once
+the hook clears, and the scoreboard to find nothing lost.
+
+The second injection is the one that measures the parity scheme's limit rather than asserting
+it. A ONE-bit payload flip is caught by `a_sw_parity` at the first hop (that is the negative
+suite, below). A TWO-bit flip passes parity by construction — an even error count always does —
+and the pass fails unless the payload comparison catches it AND the parity counters stay at
+zero. Both halves matter: a run in which the two-bit flip raised a parity error would mean the
+parity scheme was not what `packet_pkg` §3 says it is.
+
+**A defect this suite found in its own testbench, twice, and what it changed.** The
+VC-isolation pass first drove VC0 and VC1 from every source and reported 44 of 64 VC1 packets
+delivered. The fabric was correct; the DRIVER was blocking, because an ingress port hands over
+one packet at a time and a VC0 packet stuck mid-handover holds the port. That produced two
+changes rather than a fudge: the driver now keeps one queue per (port, VC) and switches
+channels when a packet's first beat goes unaccepted, which is what a real producer with per-VC
+queues does; and the pass splits the sources, so what it measures is unambiguously the shared
+LINK rather than the shared PORT. The distinction is recorded in ARCHITECTURE.md §3.6 as a
+property of the design, not hidden in the test.
+
 ### 4.2 Metamorphic tests (SPEC §13.2)
 
 Populated progressively by issues #10–#14; #10 and #12 have landed.
@@ -972,6 +1033,68 @@ a design intent.
 | `a_cfar_mask_count` | `cfar_window` (inline) — the reference masks selecting a different number of cells from the one the register plane asked for. Fires on EVERY cycle a guard-index off-by-one is present, not only on the cycles where the wrong cell happened to matter (§4.1, variant A) |
 | `a_cfar_bands_disjoint` | `cfar_window` (inline) — the two reference bands overlapping each other, or either of them containing the cell under test. A guard count of zero must still keep the cell out of its own reference window |
 | `a_cfar_guards_valid` | `cfar_window` (inline) — the claim that lets the guard cells go unchecked: whenever both reference bands are complete, every slot between the outermost reference cells is valid too |
+
+### 5.15 Packet-network assertion set (SPEC §14, issue #18)
+
+Every assertion below is inline in the module it describes, under `` `ifndef SYNTHESIS`` — not
+bound from a test — so the fabric's contract holds wherever it is used: the unit-test top, a
+future pipeline integration, and the SPEC §18 calibration wrappers that no testbench ever
+drives. `sync_fifo`'s own overflow, underflow, occupancy-shadow and high-water proofs run
+inside all 192 buffers of the elaborated fabric at the same time.
+
+| Assertion | Module | Fires on |
+|---|---|---|
+| `a_pkt_len_matches` | `pkt_ingress` | SPEC §14 packet length consistency, at the PRODUCER: the declared length disagreeing with the flits actually framed — a short packet, a long one, or an EOF on a header that declared more than one flit |
+| `a_pkt_len_legal` | `pkt_ingress` | a declared length outside 1..`PKT_MAX_FLITS` |
+| `a_pkt_vc_stable` | `pkt_ingress` | the VC field moving mid packet — the "no VC-mixing mid-packet" property |
+| `a_pkt_type_legal` | `pkt_ingress` | a reserved packet type. Reserved encodings are an error, not a don't-care |
+| `a_pkt_no_nested_sof` | `pkt_ingress` | a start-of-packet beat arriving inside an open packet |
+| `a_pkt_credit_bound` / `a_pkt_credit_no_underflow` | `pkt_ingress` | a credit counter above the credits the port was elaborated with, or a flit sent with none. The two halves of "credits are conserved", stated where they can be checked every cycle |
+| `a_pkt_egress_parity` | `pkt_ingress` | an emitted flit with wrong parity, excluding one the fault hook was asked to corrupt — which it knows from a REGISTERED dirty flag, because `fi_flip` describes the cycle the flit was loaded and not the cycle it is observed |
+| `a_sw_no_overrun` | `pkt_switch_stage` | an arriving flit finding no room. This is the credit scheme's whole claim, asserted at the buffer rather than argued for at the sender |
+| `a_sw_parity` | `pkt_switch_stage` | a buffered flit with wrong parity. Per hop, which is the localisation claim per-flit parity is chosen for |
+| `a_sw_vc_match` | `pkt_switch_stage` | a flit sitting in buffer (i,v) whose own VC tag is not v — the input demux is BY that field, so a mismatch means it moved in flight |
+| `a_sw_credit_bound` / `a_sw_credit_held` | `pkt_switch_stage` | a downstream credit count above its elaborated maximum, or the fault hook holding more credits than the buffer can contain |
+| `a_sw_grant_locked` | `pkt_switch_stage` | switch allocation granting an output VC that virtual-channel allocation never locked — the register between the two levels being bypassed |
+| `a_sw_sa_onehot` | `pkt_switch_stage` | a switch grant that is not one-hot. The crossbar mux depends on it, so it is restated rather than assumed |
+| `a_rr_grant_onehot` | `pkt_rr_arb` | a grant that is not one-hot |
+| `a_rr_grant_requested` | `pkt_rr_arb` | a grant to a requester that did not request |
+| `a_rr_grant_when_req` | `pkt_rr_arb` | no grant while somebody asked. Round robin's liveness half, which the starvation argument rests on |
+| `a_rr_ptr_range` | `pkt_rr_arb` | the priority pointer leaving 0..N−1 |
+| `a_egr_no_overrun` | `pkt_egress` | the egress buffer overrunning — the far end of the same credit claim |
+| `a_egr_length` | `pkt_egress` | SPEC §14 packet length consistency, at the CONSUMER: a delivered packet's flit count disagreeing with its header, a body flit with no open packet, or a SOF inside one. A different statement from `a_pkt_len_matches`: eight switch stages of buffers, arbiters and crossbars lie between them |
+| `a_egr_parity` | `pkt_egress` | a delivered flit failing parity |
+| `a_egr_vc` | `pkt_egress` | a delivered flit's VC tag disagreeing with its packet's header |
+| `a_egr_dest` | `pkt_egress` | a packet arriving at a port that is not its destination — the routing function checked at its only observable end |
+| `a_egr_type` | `pkt_egress` | a delivered packet carrying a reserved type |
+
+### 5.16 Proof that the packet assertions fire (issue #18)
+
+`sim/tests/test_packet_assertions.cpp` drives the REAL fabric — the same
+`sim/verilator/tops/packet_top.sv` the positive suite uses, with no deliberately-broken copy
+of anything — through the SPEC §7.8 error-injection hooks, and requires each mode to provoke
+the property it names:
+
+| Mode | Injection | Must fire |
+|---|---|---|
+| 0 clean | ordinary traffic with stalls on both sides | nothing |
+| 1 length | a header declaring four flits on a packet framed in two | `a_pkt_len_matches` AND `a_egr_length` |
+| 2 parity | one payload bit flipped in flight | `a_sw_parity` |
+
+**There is no violator module, and that is the difference from §5.2 and §5.6.** Those suites
+need a knowingly wrong copy of the RTL because a correct stream stage cannot be made to
+violate its own protocol from the outside. A packet fabric can: SPEC §7.8 asks for an
+error-injection hook, the design has one, it is wired to the `PACKET_FAULT` register, and
+injecting through the production path means the negative test ALSO proves the hook works —
+with no second copy of the fabric to keep in step.
+
+Mode 1 requiring BOTH labels is the point of the pass. The producer-side and consumer-side
+length checks are separate statements about separate things, and a suite that accepted either
+one would pass a fabric in which the transport-side check had been deleted.
+
+Expected-failure semantics are as §5.2: `Verilated::fatalOnError(false)`, stdout captured per
+mode at the file-descriptor level, the captured text searched for the label by name and then
+reprinted so the transcript shows what fired. An unexpectedly clean mode is the failure.
 
 ## 6. Coverage strategy
 

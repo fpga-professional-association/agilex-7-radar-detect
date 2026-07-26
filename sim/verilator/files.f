@@ -211,5 +211,26 @@ rtl/covariance/covar_engine.sv
 rtl/cfar/cfar_window.sv
 rtl/cfar/cfar_core.sv
 
+// ---- the packet network (SPEC 7.8, issue #18) --------------------------
+// Design RTL, listed here for the reason every kernel above is: this list is the
+// single definition of what "the design" is. packet_pkg must follow cfar_pkg,
+// because it states the detection-event payload width by reference to it rather
+// than by copy — a detection event is the network's primary payload and its flit
+// count has to move when cfar_pkg's event layout moves.
+//
+// The modules are listed bottom-up: the arbiter, then the endpoints and the
+// switch that instantiate it, then the fabric that wires them into a butterfly.
+// All are built on rtl/common/sync_fifo.sv and rtl/common/perf_counter.sv,
+// already listed above. Not yet instantiated by benchmark_sim_top — the
+// multi-domain integration that consumes it arrives with issue #19 — so until
+// then `make lint` covers it here and sim/verilator/tops/packet_top.sv verifies
+// it.
+rtl/packages/packet_pkg.sv
+rtl/packet/pkt_rr_arb.sv
+rtl/packet/pkt_ingress.sv
+rtl/packet/pkt_switch_stage.sv
+rtl/packet/pkt_egress.sv
+rtl/packet/pkt_fabric.sv
+
 // ---- simulation top (SPEC 4.1) -----------------------------------------
 sim/verilator/tops/benchmark_sim_top.sv

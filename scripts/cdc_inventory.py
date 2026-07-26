@@ -536,6 +536,23 @@ def main() -> int:
         action="store_true",
         help="exit 1 when any crossing could not be classified",
     )
+    # --allow-empty (issue #18). The empty-inventory guard below exists to catch
+    # a report that came out empty BY ACCIDENT — a broken scan, a wrong file
+    # list, an attribute spelling that changed. For a build that is
+    # deliberately single-clock, "zero crossings" is the claim being proved
+    # rather than a symptom, and refusing to run the inventory over such a build
+    # would leave the one place a crossing might be added silently uncovered.
+    #
+    # The protection that matters is not weakened: the catalog check above still
+    # fails if no (* cdc_primitive *) declarations were found anywhere, and
+    # --strict still fails on any crossing that could not be classified. This
+    # flag only says "an empty result is an expected result for THIS top".
+    p.add_argument(
+        "--allow-empty",
+        action="store_true",
+        help="accept a report with zero crossings (a deliberately single-clock "
+             "build); --strict still applies to anything it does find",
+    )
     args = p.parse_args()
 
     if shutil.which(args.verilator) is None:
@@ -576,12 +593,17 @@ def main() -> int:
         )
     )
 
-    if report["counts"]["crossings"] == 0:
+    if report["counts"]["crossings"] == 0 and not args.allow_empty:
         print(
             "ERROR: the inventory is empty; the design has no tagged crossings",
             file=sys.stderr,
         )
         return 1
+    if report["counts"]["crossings"] == 0 and args.allow_empty:
+        print(
+            "[cdc-inventory] zero crossings, as declared by --allow-empty: "
+            "this top is single clock"
+        )
     if args.strict and report["counts"]["unknown"] != 0:
         print(
             "ERROR: {} crossing(s) could not be classified; see the 'unknown' "

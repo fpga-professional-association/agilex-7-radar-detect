@@ -1,0 +1,70 @@
+# ---------------------------------------------------------------------------
+# pkt_slice_calib.qsf — SPEC 18 calibration project settings for a two-stage
+# packet-fabric slice (issue #18, SPEC 18 item 9).
+#
+# SAME DEVICE as the benchmark project and as pkt_switch_calib.qsf:
+# AGMF039R47B1E1VC, same speed grade, same junction-temperature range. The two
+# packet points differ only in what is instantiated, so that the difference
+# between them is the cost of a HOP and nothing else.
+#
+# HAND MAINTAINED. quartus/scripts/calibrate.tcl lets Quartus export the
+# in-memory assignment database over this file and then restores these exact
+# bytes afterwards, so the sweep leaves no parameter, no seed and no tool
+# bookkeeping behind. Do not open the project in the GUI and save it.
+#
+# All paths are relative to this directory (quartus/calibration/).
+# ---------------------------------------------------------------------------
+
+# --- device (SPEC.md 2, 15) -------------------------------------------------
+set_global_assignment -name FAMILY "Agilex 7"
+set_global_assignment -name DEVICE AGMF039R47B1E1VC
+set_global_assignment -name TOP_LEVEL_ENTITY pkt_slice_wrap
+
+set_global_assignment -name MIN_CORE_JUNCTION_TEMP 0
+set_global_assignment -name MAX_CORE_JUNCTION_TEMP 100
+
+# --- project output ---------------------------------------------------------
+set_global_assignment -name PROJECT_OUTPUT_DIRECTORY output_files
+set_global_assignment -name NUM_PARALLEL_PROCESSORS ALL
+
+# --- simulation-only code exclusion -----------------------------------------
+# See pkt_switch_calib.qsf for why this is defined explicitly. It matters more
+# here than anywhere else in the sweep: this project holds THIRTY-TWO sync_fifo
+# instances, each of which carries two free-running 32-bit shadow counters under
+# an `ifndef SYNTHESIS guard.
+set_global_assignment -name VERILOG_MACRO "SYNTHESIS=1"
+
+# --- design source ----------------------------------------------------------
+# Order matters: packages first. Every file is the SAME FILE the simulation
+# builds and lints.
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/packages/fxp_pkg.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/packages/covar_pkg.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/packages/cfar_pkg.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/packages/packet_pkg.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/common/perf_counter.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/common/sync_fifo.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/packet/pkt_rr_arb.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/packet/pkt_switch_stage.sv
+set_global_assignment -name SYSTEMVERILOG_FILE pkt_slice_core.sv
+set_global_assignment -name SYSTEMVERILOG_FILE pkt_slice_wrap.sv
+
+# --- timing constraints -----------------------------------------------------
+set_global_assignment -name SDC_FILE pkt_slice_calib.sdc
+
+# ---------------------------------------------------------------------------
+# Virtual pins
+# ---------------------------------------------------------------------------
+# Same rationale as pkt_switch_calib.qsf. clk and rst_n stay real pins.
+set_instance_assignment -name VIRTUAL_PIN ON -to "in_valid[*]"
+set_instance_assignment -name VIRTUAL_PIN ON -to "in_flit[*]"
+set_instance_assignment -name VIRTUAL_PIN ON -to "out_credit_in[*]"
+set_instance_assignment -name VIRTUAL_PIN ON -to "fi_credit_kill_a[*]"
+set_instance_assignment -name VIRTUAL_PIN ON -to "fi_credit_kill_b[*]"
+set_instance_assignment -name VIRTUAL_PIN ON -to tel_clear
+
+set_instance_assignment -name VIRTUAL_PIN ON -to "in_credit_out[*]"
+set_instance_assignment -name VIRTUAL_PIN ON -to "out_valid[*]"
+set_instance_assignment -name VIRTUAL_PIN ON -to "out_flit[*]"
+set_instance_assignment -name VIRTUAL_PIN ON -to "tel_flits[*]"
+set_instance_assignment -name VIRTUAL_PIN ON -to "tel_stall[*]"
+set_instance_assignment -name VIRTUAL_PIN ON -to "tel_max_wait[*]"

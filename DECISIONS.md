@@ -2859,3 +2859,222 @@ geometry and 4 161 at the SPEC 11 full-scale geometry, which is where a running-
 rewrite (decision 5) would start to pay. Both are measurements waiting to be made, not results. Issue #10's decision 13 is
 the standing warning that applies here too: lint clean is not the same as synthesizable, and
 this kernel has not yet been through Quartus.
+
+## 2026-07-26 — Packet network: an R-ary butterfly, two arbitration levels split by a register, per-flit parity, credits everywhere  (issue #18)
+
+SPEC §7.8 asks for a packet network carrying detections, power and covariance summaries, error
+events, performance counters and optional raw capture across "16 or more ingress ports,
+512-bit packet width, 4 virtual channels, pipelined arbitration, credit or ready/valid flow
+control", built as a pipelined multistage fabric and explicitly NOT as "one unregistered,
+monolithic crossbar". It also says the block "is expected to create substantial ALM and
+routing pressure", which makes it the first block in this design whose cost question is about
+WIRES rather than about arithmetic.
+
+**Decision 1 — the topology is an R-ary butterfly, 16 ports as two stages of radix 4, and the
+crossbar was rejected on routability rather than on taste.** A 16x16 crossbar at 512-bit flits
+is 256 crosspoints, each a 517-bit-wide mux input, with all sixteen output muxes reaching all
+sixteen inputs: 16 x 16 x 517 = 132 k wires converging on sixteen points. On Agilex 7 that is a
+routing-congestion problem before it is an ALM problem, and SPEC §7.8's prohibition is that
+observation written as a rule. The two-stage radix-4 butterfly is eight switches of sixteen
+crosspoints — 128 crosspoints total, each mux reaching four inputs — and the inter-stage wiring
+is a FIXED PERMUTATION of sixteen point-to-point flit buses rather than an all-to-all. Same
+bisection bandwidth, half the crosspoints, and a registered hop between the halves, which is
+where SPEC §23's "keep pipeline stages latency-insensitive" gets its opportunity.
+
+A fat tree was the other candidate and is not built. It buys path diversity, which buys nothing
+for this workload: the traffic is aggregation — many sources, few sinks — and adaptive routing
+would destroy the in-order-per-(source, VC, destination) property that lets the egress be
+checked with a sequence number instead of a reorder buffer. Determinism is worth more than
+diversity here, and it is a decision, so it is written down rather than assumed.
+
+**Decision 2 — the topology is ONE FUNCTION, not a wiring table.** `pkt_bfly_insert()` in
+`packet_pkg` inserts a base-R digit at a digit position. At stage `s` a switch is named by the
+port index with digit `STAGES-1-s` deleted and a port's position inside it is that digit, so
+the global index of switch `j`'s position `k` and the global index that switch's output `o`
+drives in stage `s+1` are the same function evaluated twice. There is no table to get wrong,
+adding a stage changes one parameter, and the C++ model reproduces the same arithmetic
+independently — `test_packet` checks that all 256 (source, destination) pairs have a
+deterministic path, exhaustively rather than by sampling.
+
+**Decision 3 — the two arbitration levels are separated by a REGISTER, and that is the whole
+answer to "pipelined arbitration".** Virtual-channel allocation (which input owns each output
+VC) runs in cycle N and latches into the lock register; switch allocation (which of an output
+port's locked VCs transmits) reads those registers in cycle N+1. Nothing in the VC allocator
+reaches the switch allocator combinationally.
+
+The failure mode SPEC §7.8 is aiming at is an iSLIP-style request/grant/accept loop resolved
+inside one cycle, whose cone grows with RADIX x N_VC and which no amount of Hyper-Register
+retiming can break, because the loop CLOSES within the cycle (SPEC §23: "treat feedback-loop
+latency as an architectural constraint, not merely a placement problem"). Splitting the levels
+makes the longest arbitration cone exactly one `pkt_rr_arb` and lets the two retime
+independently. The cost is one cycle of latency per hop on a packet's FIRST flit only: the lock
+persists for the rest of the packet, so flits 2..L are switched one per cycle with no
+re-arbitration.
+
+**Decision 4 — `pkt_rr_arb` takes `update` as an INPUT rather than deriving it from its own
+grant.** The two levels do not both commit in the cycle they decide: VC allocation commits when
+the lock register takes the grant, switch allocation when the flit leaves the buffer. Deriving
+the pointer advance from `|grant` inside the arbiter would rotate on a decision the caller then
+discarded — which is how a round robin quietly becomes a random-looking scheduler that still
+passes every "somebody got a grant" test. The egress output arbiter is the case that proves the
+point: it rotates only on a beat the consumer actually took, so a channel selected during a
+stall does not lose its turn.
+
+**Decision 5 — flow control is CREDITS, and every loop is one hop long.** SPEC §7.8 allows
+either. A returned `ready` would be a combinational path from a downstream buffer's full flag,
+across a port boundary, into an upstream output mux — precisely the ready chain SPEC §5 forbids
+and SPEC §23 asks to be broken with elastic buffers. A credit counter replaces it with a
+registered pulse in the opposite direction, so nothing downstream is in an upstream sender's
+timing cone at all.
+
+The property that matters more than the mechanism is that no backward signal crosses more than
+ONE hop: ingress to stage 0, stage s to stage s+1, last stage to egress, each closed locally.
+That is what makes the fabric's timing independent of its depth, so `STAGES` can grow without
+re-closing timing on anything but the new stage. The buffer-dependency graph is acyclic because
+every flit moves strictly forward through the butterfly, so the network is deadlock-free
+without VC remapping or escape channels — which is why input VC index equals output VC index
+and there is no renaming table.
+
+**Decision 6 — PARITY PER FLIT, not a CRC per packet, and the limit is measured rather than
+footnoted.** Each flit carries one ODD parity bit over its own data and control bits. Three
+structural reasons, in order of weight:
+
+* a per-flit check is verifiable AT EVERY HOP. A packet CRC can only be checked at reassembly,
+  so a flit corrupted in stage 0 is indistinguishable from one corrupted in stage 1 — which is
+  exactly the question a fabric failure report has to answer.
+* it is combinational and stateless: one XOR tree of `PACKET_W + 4` inputs per checked point,
+  roughly `PACKET_W/3` ALMs at 512 bits, with no per-(input, VC) CRC accumulator at every hop.
+  A packet CRC computed across flits that a virtual-channel fabric is ENTITLED to interleave
+  needs exactly that, which is the cost of the buffering again for a weaker property.
+* the dominant on-die failure this benchmark can express — a stuck bit, a mis-wired mux, a flit
+  written into the wrong VC — flips a small number of bits in one flit.
+
+ODD rather than even, so an all-zero word — what an undriven or reset link presents — is not a
+legal flit: "the link is dead" and "the link carries an empty flit" become different
+observations.
+
+What parity does NOT catch is stated in `packet_pkg` §3 and then MEASURED: an even number of
+bit errors in one flit passes. `test_packet` injects a two-bit payload flip and requires the
+payload scoreboard to catch it AND the parity counters to stay at zero, while
+`test_packet_assertions` injects a one-bit flip and requires `a_sw_parity` to fire at the first
+hop. Both halves matter — a run in which the two-bit flip raised a parity error would mean the
+scheme is not what the header says it is.
+
+**Decision 7 — the source DECLARES its packet length, and the declaration is checked twice.**
+The header flit carries the length and goes out first, so a module that MEASURED the length
+would have to buffer the whole packet before emitting anything: store-and-forward, one
+packet-sized buffer per virtual channel per ingress port, 32 x 512 bits x 4 VC x 16 ports of
+storage bought to avoid asking the producer a question it already knows the answer to.
+Declaring makes the ingress a virtual-cut-through adapter with a flit-sized critical resource.
+
+The price is that the declaration can be wrong, and that is exactly why it is the right shape:
+`a_pkt_len_matches` compares it against the flits actually framed, which is SPEC §14's "packet
+length consistency" as a live check on real traffic rather than an invariant that holds by
+construction and therefore tests nothing. `a_egr_length` states the same property about what
+the NETWORK delivered — a different claim, with eight switch stages of buffers, arbiters and
+crossbars between the two — and the negative suite requires BOTH to fire, because a suite that
+accepted either one would pass a fabric whose transport-side check had been deleted.
+
+The length field is the TOTAL flit count including the header, not the payload count, because
+the invariant a checker wants to state is "the flits between SOF and EOF inclusive equal the
+header's length" and a payload-only field makes that an arithmetic identity with an off-by-one
+in it.
+
+**Decision 8 — one message beat per flit, and the version that saved a cycle was removed.**
+The first ingress protocol folded the header into the first payload beat: beat 0 carried
+`s_sof` and payload word 0, the adapter emitted the header flit without consuming it, and
+consumed the same beat as a body flit next cycle. It saved one beat per packet and made the
+framing rule unstateable — `s_sof` was then true on a beat that IS a body flit, so "SOF may not
+arrive inside an open packet" had no expression, and the producer had to know when the adapter
+had latched the header in order to lower it. One beat of throughput per packet is a small price
+for a framing rule a checker can state in one line, and the negative test depends on being able
+to state it.
+
+**Decision 9 — the packet HEADER is configuration-independent, and the FLIT control bits sit at
+constant offsets while the data field moves.** Every header field width is a constant of
+`packet_pkg`; none is an elaboration parameter. That is `cfar_pkg`'s argument for its 176-bit
+event applied one level up: a header that changed shape with `FFT_SIZE` or with `PACKET_W`
+would be renegotiated at every SPEC §11 size, and software decoding a captured packet would
+need a build-time header to do it. The `PACKET_FORMAT` register reports the same numbers so it
+needs none at all.
+
+The flit layout inverts `stream_pkg`'s field-order rule for the same reason stated the other
+way round. `stream_pkg` puts its variable-width `data` at the TOP so that widening it moves no
+other field. Here the CONTROL bits — parity, VC, SOF, EOF — are what must not move when
+`PACKET_W` changes, because every checker, every buffer tap and the C++ mirror address them by
+constant offset, so they go at the bottom and `data` goes on top.
+
+**Decision 10 — the fault-injection hook HOLDS credits rather than dropping them, and the flip
+hook never corrupts a header.** Dropping a credit is more literal and makes the injection a
+one-way trip: the upstream counter never gets it back, that virtual channel is dead for the
+rest of the run, and "inject, watch the checks fire, revert, prove a full recovery" becomes
+impossible. Holding them in a per-buffer counter and releasing them when the hook clears
+produces the same stall with a defined end. The counter can never exceed the buffer's depth —
+only that many flits can be in it — and `a_sw_credit_held` asserts it.
+
+The flip hook is gated to non-header flits. Corrupting a header's destination is not a fabric
+fault: the fabric would deliver the packet exactly where the header now says, which is correct
+behaviour on corrupted input and tests nothing. The interesting injected fault is a bit that
+changes in flight and must be caught.
+
+**Decision 11 — the fairness metric counts OVERTAKES, not idle cycles.** Round robin at both
+levels is starvation-free by construction, but "starvation-free eventually" is not a number.
+`tel_max_wait` is the number: for every buffered head flit it counts the cycles on which THE
+OUTPUT THAT FLIT WANTED GRANTED SOMEBODY ELSE, and reports the maximum ever observed. A head
+that waits because the whole network is backpressured has not been treated unfairly, and a
+metric that counted those cycles would grow with the testbench's stall profile and measure the
+testbench. This one grows only when the arbiter chose against the flit, so it is bounded by the
+arbitration policy alone and `test_packet`'s hotspot pass checks it against
+`2 x RADIX x N_VC x PKT_MAX_FLITS`.
+
+**Decision 12 — the C++ model is FUNCTIONAL, and credit conservation is deliberately NOT in
+it.** The fabric's subject is delivery: which packets come out, at which port, in what order,
+with what contents. Its cycle-by-cycle behaviour is a function of arbitration state, credit
+round trips and the testbench's stall profile, all three of which SPEC §23 invites changing for
+timing closure, so a cycle-accurate model would be re-derived every time a register moved — and
+each such edit is a chance to make the model agree with a bug. This is issue #14's decision 11
+applied to a bigger block, with a stronger justification.
+
+Credits have no end-to-end observable, so modelling them would mean reimplementing the fabric.
+They are checked where they live instead — six assertions across the three modules, on every
+cycle of every pass — and what the model contributes to the same question is the consequence:
+a credit lost anywhere means a packet never delivered, and `finish()` names which one. ORDERING
+is claimed only within a (source, VC, destination) triple; a scoreboard that demanded global
+order would fail a correct fabric, and saying so in the model is what stops someone
+"strengthening" it later.
+
+**Decision 13 — the register window is at 0xB000 and NOT at the next free address.** Issue #15
+was building the history-memory window concurrently with this one, and two blocks landing on
+0xA000 is a merge conflict neither side would see until the generator ran. Leaving a window
+between them costs nothing — the space is sixteen windows wide and twelve are now in use — and
+the alternative costs a re-gate. `rtl/control/reg_block_packet.sv` implements it: the
+elaborated topology and the packet format reported by hardware, the two fault-injection hooks,
+nine sticky reassembly-error bits kept apart by END (an ingress length error is a producer
+defect, an egress one is a transport defect, and one shared bit would make them
+indistinguishable), and a multiplexed observation window over the per-stage and per-port
+telemetry. What rides OVER the network — snapshot records, aggregated telemetry payloads, error
+event bodies — stays with issue #19, which owns the debug window; this block owns the fabric,
+not its traffic.
+
+**Decision 14 — `cdc_inventory.py` gained `--allow-empty`, narrowly.** SPEC §8 gives the fabric
+its own clock domain, and the fabric AS BUILT is single-clock: every credit loop closes inside
+one domain and the crossings into it belong to issue #19. The inventory's empty-report guard
+exists to catch a report that came out empty by ACCIDENT — a broken scan, a wrong file list, a
+changed attribute spelling — and for a deliberately single-clock build "zero crossings" is the
+claim being proved rather than a symptom. Refusing to run the inventory over such a build would
+leave the one place a crossing might be added silently uncovered. The protections that matter
+are untouched: the catalog check still fails if no `(* cdc_primitive *)` declarations were
+found anywhere, and `--strict` still fails on any crossing that could not be classified.
+
+**Decision 15 — a testbench defect worth recording, because the fix changed the DESIGN
+documentation rather than the test.** The VC-isolation pass first drove VC0 and VC1 from every
+source and reported 44 of 64 VC1 packets delivered with VC0 jammed. The fabric was correct; the
+DRIVER was blocking, because an ingress port hands over one packet at a time and a VC0 packet
+stuck mid-handover holds the port. Two changes followed rather than a tolerance: the driver now
+keeps one queue per (port, VC) and switches channels when a packet's first beat goes unaccepted
+— which is what a real producer with per-VC queues does — and the pass splits the sources, even
+ports on VC0 and odd on VC1, so what it measures is unambiguously the shared LINK rather than
+the shared PORT. The distinction is now stated in ARCHITECTURE.md §3.6 as a property of the
+design: virtual channels isolate inside the fabric and do not isolate an ingress port's own
+serial message interface, and the fix for that — if a later integration needs one — is a per-VC
+message interface per port, not a change to the fabric.

@@ -21,15 +21,15 @@ package regmap_pkg;
   localparam int unsigned REGMAP_STRB_W = 4;
   localparam int unsigned REGMAP_WINDOW_BYTES = 4096;
   localparam int unsigned REGMAP_WINDOW_W = 12;
-  localparam int unsigned REGMAP_N_BLOCKS = 10;
-  localparam int unsigned REGMAP_N_BLOCKS_IMPL = 9;
-  localparam int unsigned REGMAP_N_REGS_TOTAL = 75;
-  localparam logic [31:0] REGMAP_BLOCK_MASK = 32'h000002FF;
+  localparam int unsigned REGMAP_N_BLOCKS = 11;
+  localparam int unsigned REGMAP_N_BLOCKS_IMPL = 10;
+  localparam int unsigned REGMAP_N_REGS_TOTAL = 87;
+  localparam logic [31:0] REGMAP_BLOCK_MASK = 32'h000006FF;
 
   // ---- implemented block windows, in fabric port order ----
   // The fabric decodes one master port onto these windows; index i here is index i
   // on every per-block port array of rtl/control/reg_fabric.sv.
-  localparam logic [REGMAP_N_BLOCKS_IMPL*REGMAP_ADDR_W-1:0] REGMAP_IMPL_BASE = {16'h9000, 16'h7000, 16'h6000, 16'h5000, 16'h4000, 16'h3000, 16'h2000, 16'h1000, 16'h0000};
+  localparam logic [REGMAP_N_BLOCKS_IMPL*REGMAP_ADDR_W-1:0] REGMAP_IMPL_BASE = {16'hB000, 16'h9000, 16'h7000, 16'h6000, 16'h5000, 16'h4000, 16'h3000, 16'h2000, 16'h1000, 16'h0000};
   //   [0] id            base 0x0000  4 registers
   //   [1] build_params  base 0x1000  12 registers
   //   [2] ctrl          base 0x2000  4 registers
@@ -39,6 +39,7 @@ package regmap_pkg;
   //   [6] cfar          base 0x6000  9 registers
   //   [7] counters      base 0x7000  21 registers
   //   [8] covar         base 0x9000  7 registers
+  //   [9] packet        base 0xB000  12 registers
 
   // -------------------------------------------------------------------------
   // Block 0: id — implemented
@@ -130,9 +131,9 @@ package regmap_pkg;
 
   // reset value of the stored bits
   localparam logic [REGMAP_ID_N_REGS*32-1:0] REGMAP_ID_RESET = {
-      32'h000002FF,  // [3]
-      32'h10204B0A,  // [2]
-      32'h01050001,  // [1]
+      32'h000006FF,  // [3]
+      32'h1020570B,  // [2]
+      32'h01060001,  // [1]
       32'h52414441  // [0]
   };
   // bits a software write may set or clear (RW)
@@ -2342,6 +2343,389 @@ package regmap_pkg;
       32'h00000000,  // [3]
       32'h00000000,  // [2]
       32'h00000000,  // [1]
+      32'h00000000  // [0]
+  };
+
+  // -------------------------------------------------------------------------
+  // Block 10: packet — implemented
+  // SPEC 9 groups: Fault injection; Stall counters; FIFO high-water marks
+  // The SPEC 7.8 packet network (rtl/packet/, issue #18): the fabric's geometry and
+  // packet format reported by hardware, the SPEC 9 fault-injection hooks, the sticky
+  // reassembly-error bits from both ends of the network, and the per-stage and per-port
+  // telemetry. The window is at 0xB000 and NOT at the next free address (0xA000),
+  // deliberately: issue #15 was building the history-memory window concurrently with
+  // this one, and two blocks landing on one base is a merge conflict that neither side
+  // would see until the generator ran. Leaving a window between them costs nothing -
+  // the space is 16 windows wide and 12 are in use - and the alternative costs a
+  // re-gate. What this window does NOT contain is the CONTENT that rides over the
+  // network: the snapshot records, the aggregated telemetry payloads and the
+  // error-event bodies belong to issue #19, which owns the debug window at 0x8000. This
+  // block owns the fabric, not its traffic.
+  // -------------------------------------------------------------------------
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_PACKET_BASE = 16'hB000;
+  localparam int unsigned REGMAP_PACKET_SIZE = 4096;
+  localparam int unsigned REGMAP_PACKET_N_REGS = 12;
+  localparam int unsigned REGMAP_PACKET_INDEX = 9;  // fabric port index
+
+  // PACKET_CTRL @ 0xB000 (MIXED)
+  //   Master controls. TEL_CLEAR is write-1-pulse and reads back zero, because it is an
+  //   event rather than a mode.
+  //   [0:0] ENABLE (RW)
+  //       Global fabric enable. Reserved for the multi-domain integration (issue #19),
+  //       which is where an enable can be lowered safely: a fabric disabled with
+  //       packets in flight would strand them, so the sequencing belongs to the block
+  //       that owns the producers.
+  //   [8:8] TEL_CLEAR (RWP)
+  //       Clear every telemetry counter, every buffer high-water mark and every sticky
+  //       error bit in the fabric, in one cycle across all stages and ports. One strobe
+  //       rather than a per-counter clear, so a measurement window opens at one edge
+  //       everywhere - the same argument rtl/common/perf_counter.sv makes for its
+  //       snapshot strobe.
+  localparam int unsigned REGMAP_PACKET_PACKET_CTRL_INDEX = 0;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_PACKET_PACKET_CTRL_ADDR = 16'hB000;
+  localparam int unsigned REGMAP_PACKET_PACKET_CTRL_ENABLE_LSB = 0;
+  localparam int unsigned REGMAP_PACKET_PACKET_CTRL_ENABLE_WIDTH = 1;
+  localparam logic [31:0] REGMAP_PACKET_PACKET_CTRL_ENABLE_MASK = 32'h00000001;
+  localparam int unsigned REGMAP_PACKET_PACKET_CTRL_TEL_CLEAR_LSB = 8;
+  localparam int unsigned REGMAP_PACKET_PACKET_CTRL_TEL_CLEAR_WIDTH = 1;
+  localparam logic [31:0] REGMAP_PACKET_PACKET_CTRL_TEL_CLEAR_MASK = 32'h00000100;
+
+  // PACKET_STATUS @ 0xB004 (ROHW)
+  //   Elaborated topology, reported by hardware. Software sizing its own buffers reads
+  //   this rather than carrying build-time constants, exactly as the build-parameter
+  //   block serves the rest of the design.
+  //   [7:0] N_PORTS (ROHW)
+  //       Ingress and egress port count, RADIX**STAGES.
+  //   [15:8] N_VC (ROHW)
+  //       Virtual channels per port.
+  //   [23:16] RADIX (ROHW)
+  //       Ports per switch stage.
+  //   [31:24] STAGES (ROHW)
+  //       Switch stages between ingress and egress.
+  localparam int unsigned REGMAP_PACKET_PACKET_STATUS_INDEX = 1;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_PACKET_PACKET_STATUS_ADDR = 16'hB004;
+  localparam int unsigned REGMAP_PACKET_PACKET_STATUS_N_PORTS_LSB = 0;
+  localparam int unsigned REGMAP_PACKET_PACKET_STATUS_N_PORTS_WIDTH = 8;
+  localparam logic [31:0] REGMAP_PACKET_PACKET_STATUS_N_PORTS_MASK = 32'h000000FF;
+  localparam int unsigned REGMAP_PACKET_PACKET_STATUS_N_VC_LSB = 8;
+  localparam int unsigned REGMAP_PACKET_PACKET_STATUS_N_VC_WIDTH = 8;
+  localparam logic [31:0] REGMAP_PACKET_PACKET_STATUS_N_VC_MASK = 32'h0000FF00;
+  localparam int unsigned REGMAP_PACKET_PACKET_STATUS_RADIX_LSB = 16;
+  localparam int unsigned REGMAP_PACKET_PACKET_STATUS_RADIX_WIDTH = 8;
+  localparam logic [31:0] REGMAP_PACKET_PACKET_STATUS_RADIX_MASK = 32'h00FF0000;
+  localparam int unsigned REGMAP_PACKET_PACKET_STATUS_STAGES_LSB = 24;
+  localparam int unsigned REGMAP_PACKET_PACKET_STATUS_STAGES_WIDTH = 8;
+  localparam logic [31:0] REGMAP_PACKET_PACKET_STATUS_STAGES_MASK = 32'hFF000000;
+
+  // PACKET_GEOMETRY @ 0xB008 (ROHW)
+  //   Flit geometry, reported by hardware because PACKET_W is a SPEC 11 sized parameter
+  //   and a register map that baked it in would be a different map at every
+  //   configuration.
+  //   [15:0] PACKET_W (ROHW)
+  //       Flit payload width in bits.
+  //   [31:16] FLIT_W (ROHW)
+  //       Total flit width including the parity, VC, SOF and EOF control bits.
+  localparam int unsigned REGMAP_PACKET_PACKET_GEOMETRY_INDEX = 2;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_PACKET_PACKET_GEOMETRY_ADDR = 16'hB008;
+  localparam int unsigned REGMAP_PACKET_PACKET_GEOMETRY_PACKET_W_LSB = 0;
+  localparam int unsigned REGMAP_PACKET_PACKET_GEOMETRY_PACKET_W_WIDTH = 16;
+  localparam logic [31:0] REGMAP_PACKET_PACKET_GEOMETRY_PACKET_W_MASK = 32'h0000FFFF;
+  localparam int unsigned REGMAP_PACKET_PACKET_GEOMETRY_FLIT_W_LSB = 16;
+  localparam int unsigned REGMAP_PACKET_PACKET_GEOMETRY_FLIT_W_WIDTH = 16;
+  localparam logic [31:0] REGMAP_PACKET_PACKET_GEOMETRY_FLIT_W_MASK = 32'hFFFF0000;
+
+  // PACKET_FORMAT @ 0xB00C (ROHW)
+  //   Packet-header geometry. Every field here is a CONSTANT of
+  //   rtl/packages/packet_pkg.sv rather than an elaboration parameter, so a captured
+  //   packet decodes identically at every SPEC 11 size; it is reported anyway so that a
+  //   decoder needs no build-time header at all.
+  //   [7:0] HDR_W (ROHW)
+  //       Header width in bits, occupying the low bits of the header flit's data field.
+  //   [15:8] MAX_FLITS (ROHW)
+  //       Longest legal packet in flits, header included.
+  //   [23:16] SEQ_W (ROHW)
+  //       Per (source, VC) packet sequence-number width.
+  //   [27:24] DEST_W (ROHW)
+  //       Destination field width.
+  //   [31:28] SRC_W (ROHW)
+  //       Source field width.
+  localparam int unsigned REGMAP_PACKET_PACKET_FORMAT_INDEX = 3;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_PACKET_PACKET_FORMAT_ADDR = 16'hB00C;
+  localparam int unsigned REGMAP_PACKET_PACKET_FORMAT_HDR_W_LSB = 0;
+  localparam int unsigned REGMAP_PACKET_PACKET_FORMAT_HDR_W_WIDTH = 8;
+  localparam logic [31:0] REGMAP_PACKET_PACKET_FORMAT_HDR_W_MASK = 32'h000000FF;
+  localparam int unsigned REGMAP_PACKET_PACKET_FORMAT_MAX_FLITS_LSB = 8;
+  localparam int unsigned REGMAP_PACKET_PACKET_FORMAT_MAX_FLITS_WIDTH = 8;
+  localparam logic [31:0] REGMAP_PACKET_PACKET_FORMAT_MAX_FLITS_MASK = 32'h0000FF00;
+  localparam int unsigned REGMAP_PACKET_PACKET_FORMAT_SEQ_W_LSB = 16;
+  localparam int unsigned REGMAP_PACKET_PACKET_FORMAT_SEQ_W_WIDTH = 8;
+  localparam logic [31:0] REGMAP_PACKET_PACKET_FORMAT_SEQ_W_MASK = 32'h00FF0000;
+  localparam int unsigned REGMAP_PACKET_PACKET_FORMAT_DEST_W_LSB = 24;
+  localparam int unsigned REGMAP_PACKET_PACKET_FORMAT_DEST_W_WIDTH = 4;
+  localparam logic [31:0] REGMAP_PACKET_PACKET_FORMAT_DEST_W_MASK = 32'h0F000000;
+  localparam int unsigned REGMAP_PACKET_PACKET_FORMAT_SRC_W_LSB = 28;
+  localparam int unsigned REGMAP_PACKET_PACKET_FORMAT_SRC_W_WIDTH = 4;
+  localparam logic [31:0] REGMAP_PACKET_PACKET_FORMAT_SRC_W_MASK = 32'hF0000000;
+
+  // PACKET_FAULT @ 0xB010 (RW)
+  //   SPEC 9 fault injection for the fabric (SPEC 7.8 'error injection hook'). Two
+  //   independent hooks. FLIP corrupts payload bits of the flits one ingress port is
+  //   emitting: one bit is caught by the per-flit parity at the next hop, two are not -
+  //   parity is blind to an even error count by construction - and are caught by the
+  //   payload scoreboard instead, so the limits of the parity scheme are exercised
+  //   rather than assumed. KILL withholds the credit one switch buffer would have
+  //   returned upstream, which stops that virtual channel dead while producing no wrong
+  //   data at all. The withheld credits are HELD and released when KILL_EN clears, not
+  //   dropped, so the injection can be reverted and the fabric proved to recover; a
+  //   dropped credit would be a one-way trip.
+  //   [1:0] FLIP_MASK (RW)
+  //       Bit 0 flips one payload bit of the flit being emitted, bit 1 flips a second.
+  //       Header flits are never corrupted: a flipped destination is a misroute the
+  //       fabric would deliver correctly, which tests nothing.
+  //   [8:4] FLIP_PORT (RW)
+  //       Ingress port the FLIP hook applies to.
+  //   [12:12] KILL_EN (RW)
+  //       Enable the credit-return hook.
+  //   [19:16] KILL_STAGE (RW)
+  //       Switch stage whose credit return is withheld.
+  //   [24:20] KILL_PORT (RW)
+  //       Global port index within that stage.
+  //   [29:28] KILL_VC (RW)
+  //       Virtual channel whose credit return is withheld.
+  localparam int unsigned REGMAP_PACKET_PACKET_FAULT_INDEX = 4;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_PACKET_PACKET_FAULT_ADDR = 16'hB010;
+  localparam int unsigned REGMAP_PACKET_PACKET_FAULT_FLIP_MASK_LSB = 0;
+  localparam int unsigned REGMAP_PACKET_PACKET_FAULT_FLIP_MASK_WIDTH = 2;
+  localparam logic [31:0] REGMAP_PACKET_PACKET_FAULT_FLIP_MASK_MASK = 32'h00000003;
+  localparam int unsigned REGMAP_PACKET_PACKET_FAULT_FLIP_PORT_LSB = 4;
+  localparam int unsigned REGMAP_PACKET_PACKET_FAULT_FLIP_PORT_WIDTH = 5;
+  localparam logic [31:0] REGMAP_PACKET_PACKET_FAULT_FLIP_PORT_MASK = 32'h000001F0;
+  localparam int unsigned REGMAP_PACKET_PACKET_FAULT_KILL_EN_LSB = 12;
+  localparam int unsigned REGMAP_PACKET_PACKET_FAULT_KILL_EN_WIDTH = 1;
+  localparam logic [31:0] REGMAP_PACKET_PACKET_FAULT_KILL_EN_MASK = 32'h00001000;
+  localparam int unsigned REGMAP_PACKET_PACKET_FAULT_KILL_STAGE_LSB = 16;
+  localparam int unsigned REGMAP_PACKET_PACKET_FAULT_KILL_STAGE_WIDTH = 4;
+  localparam logic [31:0] REGMAP_PACKET_PACKET_FAULT_KILL_STAGE_MASK = 32'h000F0000;
+  localparam int unsigned REGMAP_PACKET_PACKET_FAULT_KILL_PORT_LSB = 20;
+  localparam int unsigned REGMAP_PACKET_PACKET_FAULT_KILL_PORT_WIDTH = 5;
+  localparam logic [31:0] REGMAP_PACKET_PACKET_FAULT_KILL_PORT_MASK = 32'h01F00000;
+  localparam int unsigned REGMAP_PACKET_PACKET_FAULT_KILL_VC_LSB = 28;
+  localparam int unsigned REGMAP_PACKET_PACKET_FAULT_KILL_VC_WIDTH = 2;
+  localparam logic [31:0] REGMAP_PACKET_PACKET_FAULT_KILL_VC_MASK = 32'h30000000;
+
+  // PACKET_ERROR @ 0xB014 (W1C)
+  //   Sticky reassembly and framing errors, from BOTH ends of the network. Write 1 to
+  //   clear; also cleared by PACKET_CTRL.TEL_CLEAR. The ingress bits describe what a
+  //   SOURCE handed over and the egress bits what the FABRIC delivered, and they are
+  //   kept apart because they are different questions: an ingress length error is a
+  //   producer defect, an egress one is a transport defect, and a single 'length error'
+  //   bit would make the two indistinguishable.
+  //   [0:0] ING_LENGTH (W1C)
+  //       A source's declared packet length disagreed with the flits it framed (SPEC 14
+  //       packet length consistency, checked at the producer).
+  //   [1:1] ING_TYPE (W1C)
+  //       A source declared a reserved packet type.
+  //   [2:2] ING_VC (W1C)
+  //       A source moved the VC field mid packet.
+  //   [3:3] ING_LEN_RANGE (W1C)
+  //       A source declared a length outside 1..MAX_FLITS.
+  //   [8:8] EGR_PARITY (W1C)
+  //       A delivered flit failed its parity check.
+  //   [9:9] EGR_LENGTH (W1C)
+  //       A delivered packet's flit count disagreed with its header (SPEC 14 packet
+  //       length consistency, checked at the consumer).
+  //   [10:10] EGR_VC (W1C)
+  //       A delivered flit's VC tag disagreed with its packet's header.
+  //   [11:11] EGR_DEST (W1C)
+  //       A packet arrived at a port that is not its destination: the routing function
+  //       checked at its only observable end.
+  //   [12:12] EGR_TYPE (W1C)
+  //       A delivered packet carried a reserved type.
+  localparam int unsigned REGMAP_PACKET_PACKET_ERROR_INDEX = 5;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_PACKET_PACKET_ERROR_ADDR = 16'hB014;
+  localparam int unsigned REGMAP_PACKET_PACKET_ERROR_ING_LENGTH_LSB = 0;
+  localparam int unsigned REGMAP_PACKET_PACKET_ERROR_ING_LENGTH_WIDTH = 1;
+  localparam logic [31:0] REGMAP_PACKET_PACKET_ERROR_ING_LENGTH_MASK = 32'h00000001;
+  localparam int unsigned REGMAP_PACKET_PACKET_ERROR_ING_TYPE_LSB = 1;
+  localparam int unsigned REGMAP_PACKET_PACKET_ERROR_ING_TYPE_WIDTH = 1;
+  localparam logic [31:0] REGMAP_PACKET_PACKET_ERROR_ING_TYPE_MASK = 32'h00000002;
+  localparam int unsigned REGMAP_PACKET_PACKET_ERROR_ING_VC_LSB = 2;
+  localparam int unsigned REGMAP_PACKET_PACKET_ERROR_ING_VC_WIDTH = 1;
+  localparam logic [31:0] REGMAP_PACKET_PACKET_ERROR_ING_VC_MASK = 32'h00000004;
+  localparam int unsigned REGMAP_PACKET_PACKET_ERROR_ING_LEN_RANGE_LSB = 3;
+  localparam int unsigned REGMAP_PACKET_PACKET_ERROR_ING_LEN_RANGE_WIDTH = 1;
+  localparam logic [31:0] REGMAP_PACKET_PACKET_ERROR_ING_LEN_RANGE_MASK = 32'h00000008;
+  localparam int unsigned REGMAP_PACKET_PACKET_ERROR_EGR_PARITY_LSB = 8;
+  localparam int unsigned REGMAP_PACKET_PACKET_ERROR_EGR_PARITY_WIDTH = 1;
+  localparam logic [31:0] REGMAP_PACKET_PACKET_ERROR_EGR_PARITY_MASK = 32'h00000100;
+  localparam int unsigned REGMAP_PACKET_PACKET_ERROR_EGR_LENGTH_LSB = 9;
+  localparam int unsigned REGMAP_PACKET_PACKET_ERROR_EGR_LENGTH_WIDTH = 1;
+  localparam logic [31:0] REGMAP_PACKET_PACKET_ERROR_EGR_LENGTH_MASK = 32'h00000200;
+  localparam int unsigned REGMAP_PACKET_PACKET_ERROR_EGR_VC_LSB = 10;
+  localparam int unsigned REGMAP_PACKET_PACKET_ERROR_EGR_VC_WIDTH = 1;
+  localparam logic [31:0] REGMAP_PACKET_PACKET_ERROR_EGR_VC_MASK = 32'h00000400;
+  localparam int unsigned REGMAP_PACKET_PACKET_ERROR_EGR_DEST_LSB = 11;
+  localparam int unsigned REGMAP_PACKET_PACKET_ERROR_EGR_DEST_WIDTH = 1;
+  localparam logic [31:0] REGMAP_PACKET_PACKET_ERROR_EGR_DEST_MASK = 32'h00000800;
+  localparam int unsigned REGMAP_PACKET_PACKET_ERROR_EGR_TYPE_LSB = 12;
+  localparam int unsigned REGMAP_PACKET_PACKET_ERROR_EGR_TYPE_WIDTH = 1;
+  localparam logic [31:0] REGMAP_PACKET_PACKET_ERROR_EGR_TYPE_MASK = 32'h00001000;
+
+  // PACKET_FLITS @ 0xB018 (ROHW)
+  //   Flits switched by the observed stage. Saturating rather than wrapping, for the
+  //   reason every error-adjacent counter in this map saturates: a wrapped counter can
+  //   read small on a fabric that has been busy for a long time.
+  //   [31:0] VALUE (ROHW)
+  //       Flit count.
+  localparam int unsigned REGMAP_PACKET_PACKET_FLITS_INDEX = 6;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_PACKET_PACKET_FLITS_ADDR = 16'hB018;
+  localparam int unsigned REGMAP_PACKET_PACKET_FLITS_VALUE_LSB = 0;
+  localparam int unsigned REGMAP_PACKET_PACKET_FLITS_VALUE_WIDTH = 32;
+  localparam logic [31:0] REGMAP_PACKET_PACKET_FLITS_VALUE_MASK = 32'hFFFFFFFF;
+
+  // PACKET_STALLS @ 0xB01C (ROHW)
+  //   Cycles on which the observed stage held a buffered flit it could not move.
+  //   [31:0] VALUE (ROHW)
+  //       Stall-cycle count.
+  localparam int unsigned REGMAP_PACKET_PACKET_STALLS_INDEX = 7;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_PACKET_PACKET_STALLS_ADDR = 16'hB01C;
+  localparam int unsigned REGMAP_PACKET_PACKET_STALLS_VALUE_LSB = 0;
+  localparam int unsigned REGMAP_PACKET_PACKET_STALLS_VALUE_WIDTH = 32;
+  localparam logic [31:0] REGMAP_PACKET_PACKET_STALLS_VALUE_MASK = 32'hFFFFFFFF;
+
+  // PACKET_WATERMARK @ 0xB020 (ROHW)
+  //   The two numbers that size the next revision of the fabric's buffering and bound
+  //   its arbitration. MAX_WAIT is the fairness metric: for every buffered head flit it
+  //   counts the cycles on which the output that flit wanted granted somebody else, and
+  //   reports the maximum ever observed. Counting overtakes rather than idle cycles is
+  //   what makes it a property of the ARBITER rather than of the traffic - a head that
+  //   waits because the whole network is backpressured has not been treated unfairly.
+  //   [15:0] MAX_WAIT (ROHW)
+  //       Longest observed overtake run, in cycles.
+  //   [23:16] HIWATER (ROHW)
+  //       Deepest observed switch input-buffer occupancy.
+  localparam int unsigned REGMAP_PACKET_PACKET_WATERMARK_INDEX = 8;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_PACKET_PACKET_WATERMARK_ADDR = 16'hB020;
+  localparam int unsigned REGMAP_PACKET_PACKET_WATERMARK_MAX_WAIT_LSB = 0;
+  localparam int unsigned REGMAP_PACKET_PACKET_WATERMARK_MAX_WAIT_WIDTH = 16;
+  localparam logic [31:0] REGMAP_PACKET_PACKET_WATERMARK_MAX_WAIT_MASK = 32'h0000FFFF;
+  localparam int unsigned REGMAP_PACKET_PACKET_WATERMARK_HIWATER_LSB = 16;
+  localparam int unsigned REGMAP_PACKET_PACKET_WATERMARK_HIWATER_WIDTH = 8;
+  localparam logic [31:0] REGMAP_PACKET_PACKET_WATERMARK_HIWATER_MASK = 32'h00FF0000;
+
+  // PACKET_PKT_IN @ 0xB024 (ROHW)
+  //   Packets accepted by the observed ingress port.
+  //   [31:0] VALUE (ROHW)
+  //       Packet count.
+  localparam int unsigned REGMAP_PACKET_PACKET_PKT_IN_INDEX = 9;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_PACKET_PACKET_PKT_IN_ADDR = 16'hB024;
+  localparam int unsigned REGMAP_PACKET_PACKET_PKT_IN_VALUE_LSB = 0;
+  localparam int unsigned REGMAP_PACKET_PACKET_PKT_IN_VALUE_WIDTH = 32;
+  localparam logic [31:0] REGMAP_PACKET_PACKET_PKT_IN_VALUE_MASK = 32'hFFFFFFFF;
+
+  // PACKET_PKT_OUT @ 0xB028 (ROHW)
+  //   Packets delivered by the observed egress port. Compared against PACKET_PKT_IN
+  //   summed over the sources addressing it, this is the loss and duplication check
+  //   expressed in registers rather than in a scoreboard.
+  //   [31:0] VALUE (ROHW)
+  //       Packet count.
+  localparam int unsigned REGMAP_PACKET_PACKET_PKT_OUT_INDEX = 10;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_PACKET_PACKET_PKT_OUT_ADDR = 16'hB028;
+  localparam int unsigned REGMAP_PACKET_PACKET_PKT_OUT_VALUE_LSB = 0;
+  localparam int unsigned REGMAP_PACKET_PACKET_PKT_OUT_VALUE_WIDTH = 32;
+  localparam logic [31:0] REGMAP_PACKET_PACKET_PKT_OUT_VALUE_MASK = 32'hFFFFFFFF;
+
+  // PACKET_OBSERVE @ 0xB02C (RW)
+  //   Which port and which stage the counters above report. One observation window
+  //   multiplexed by software rather than 16 ports x 2 counters x 32 bits of register
+  //   space: the counters are free-running in hardware and only the READ is
+  //   multiplexed, so nothing is lost by moving the selector instead of the storage.
+  //   [4:0] PORT (RW)
+  //       Ingress and egress port index for PACKET_PKT_IN and PACKET_PKT_OUT.
+  //   [11:8] STAGE (RW)
+  //       Switch stage index for PACKET_FLITS, PACKET_STALLS and PACKET_WATERMARK.
+  localparam int unsigned REGMAP_PACKET_PACKET_OBSERVE_INDEX = 11;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_PACKET_PACKET_OBSERVE_ADDR = 16'hB02C;
+  localparam int unsigned REGMAP_PACKET_PACKET_OBSERVE_PORT_LSB = 0;
+  localparam int unsigned REGMAP_PACKET_PACKET_OBSERVE_PORT_WIDTH = 5;
+  localparam logic [31:0] REGMAP_PACKET_PACKET_OBSERVE_PORT_MASK = 32'h0000001F;
+  localparam int unsigned REGMAP_PACKET_PACKET_OBSERVE_STAGE_LSB = 8;
+  localparam int unsigned REGMAP_PACKET_PACKET_OBSERVE_STAGE_WIDTH = 4;
+  localparam logic [31:0] REGMAP_PACKET_PACKET_OBSERVE_STAGE_MASK = 32'h00000F00;
+
+  // reset value of the stored bits
+  localparam logic [REGMAP_PACKET_N_REGS*32-1:0] REGMAP_PACKET_RESET = {
+      32'h00000000,  // [11]
+      32'h00000000,  // [10]
+      32'h00000000,  // [9]
+      32'h00000000,  // [8]
+      32'h00000000,  // [7]
+      32'h00000000,  // [6]
+      32'h00000000,  // [5]
+      32'h00000000,  // [4]
+      32'h00000000,  // [3]
+      32'h00000000,  // [2]
+      32'h00000000,  // [1]
+      32'h00000001  // [0]
+  };
+  // bits a software write may set or clear (RW)
+  localparam logic [REGMAP_PACKET_N_REGS*32-1:0] REGMAP_PACKET_WMASK = {
+      32'h00000F1F,  // [11]
+      32'h00000000,  // [10]
+      32'h00000000,  // [9]
+      32'h00000000,  // [8]
+      32'h00000000,  // [7]
+      32'h00000000,  // [6]
+      32'h00000000,  // [5]
+      32'h31FF11F3,  // [4]
+      32'h00000000,  // [3]
+      32'h00000000,  // [2]
+      32'h00000000,  // [1]
+      32'h00000001  // [0]
+  };
+  // bits cleared by writing 1, set by hardware (W1C)
+  localparam logic [REGMAP_PACKET_N_REGS*32-1:0] REGMAP_PACKET_W1CMASK = {
+      32'h00000000,  // [11]
+      32'h00000000,  // [10]
+      32'h00000000,  // [9]
+      32'h00000000,  // [8]
+      32'h00000000,  // [7]
+      32'h00000000,  // [6]
+      32'h00001F0F,  // [5]
+      32'h00000000,  // [4]
+      32'h00000000,  // [3]
+      32'h00000000,  // [2]
+      32'h00000000,  // [1]
+      32'h00000000  // [0]
+  };
+  // bits that pulse for one cycle and read 0 (RWP)
+  localparam logic [REGMAP_PACKET_N_REGS*32-1:0] REGMAP_PACKET_PULSEMASK = {
+      32'h00000000,  // [11]
+      32'h00000000,  // [10]
+      32'h00000000,  // [9]
+      32'h00000000,  // [8]
+      32'h00000000,  // [7]
+      32'h00000000,  // [6]
+      32'h00000000,  // [5]
+      32'h00000000,  // [4]
+      32'h00000000,  // [3]
+      32'h00000000,  // [2]
+      32'h00000000,  // [1]
+      32'h00000100  // [0]
+  };
+  // bits read from the hardware input, not from storage (ROHW)
+  localparam logic [REGMAP_PACKET_N_REGS*32-1:0] REGMAP_PACKET_HWMASK = {
+      32'h00000000,  // [11]
+      32'hFFFFFFFF,  // [10]
+      32'hFFFFFFFF,  // [9]
+      32'h00FFFFFF,  // [8]
+      32'hFFFFFFFF,  // [7]
+      32'hFFFFFFFF,  // [6]
+      32'h00000000,  // [5]
+      32'h00000000,  // [4]
+      32'hFFFFFFFF,  // [3]
+      32'hFFFFFFFF,  // [2]
+      32'hFFFFFFFF,  // [1]
       32'h00000000  // [0]
   };
 
