@@ -3100,3 +3100,184 @@ asks. `calibrate.tcl` now also captures the Fitter RAM Summary panel verbatim as
 and samples `-src_unregistered_ram`, which is the closest thing this repo has to a
 purpose-built "were the RAM registers absorbed into the hard block?" measurement — SPEC §23's
 rule for M20Ks, and one of SPEC §18's seven named axes.
+
+### Measured calibration data (SPEC §18 item 8, seed 1)
+
+Seed 1, `AGMF039R47B1E1VC`, Quartus Prime Pro 26.1.0 Build 110, probe constraint 600.24 MHz —
+the same device, the same tool and the same deliberately-unreachable probe that issues #9,
+#10, #11 and #12 used, so all five sets of numbers are comparable. 6 successful points. Full records in
+`results/synthesis/calibration_history_bank.json` and `calibration_history_core.json`
+(generated, not committed); per-point evidence, including the verbatim RAM Summary panel, under
+`results/synthesis/calibration/`.
+
+### One M20K history bank — SPEC §18 item 8
+
+Three of the four points hold the logical capacity constant at **16 384 bits** and vary only
+the aspect ratio, so the block count is a measurement of packing and of nothing else.
+
+| point | geometry | M20K | RAM bits | MLAB | ALM (total / kernel) | regs | Hyper | Fmax MHz | fit s |
+|---|---|---|---|---|---|---|---|---|---|
+| `bank_512x32` | 512 × 32, one complex sample per word | **1** | 16 384 | 0 | 111 / 13.7 | 141 | 34 | 956.9\* | 555 |
+| `bank_1024x16` | 1K × 16, half a sample per word | **1** | 16 384 | 0 | 104 / 10.2 | 97 | 18 | 905.8\* | 457 |
+| `bank_256x64` | 256 × 64, two samples per word | **2** | 16 384 | 0 | 126 / 21.2 | 233 | 66 | 824.4\* | 471 |
+| `bank_512x32_noreg` | 512 × 32, `IN_REG = OUT_REG = 0` | 1 | 16 384 | 0 | 101 / **0.5** | 56 | 2 | 858.4\* | 460 |
+
+`*` every bank point MET the 600 MHz probe (slack +0.62, +0.56, +0.45, +0.50 ns), so these
+Fmax figures are lower bounds rather than measured limits. The worst register-to-register path
+is inside `u_kernel` for all four. No DSPs, no MLABs, `unregistered_ram_paths = 0` everywhere.
+
+**Finding 1 — aspect ratio is free until it is not, and the cliff is depth, not width.**
+512 × 32 and 1K × 16 both cost exactly one M20K for the same 16 384 bits: Quartus reshapes the
+array into whichever native mode fits, and the two are the same memory seen from two
+directions. **256 × 64 costs two blocks for the same capacity** — 8 192 bits in each, 40 %
+occupancy — because 64 bits exceeds the widest native word and the array is split across two
+blocks that each use half their depth. Shallower-and-wider is strictly worse at fixed
+capacity, and it costs +15 ALMs, +136 registers and −132 MHz as well. **The history bank
+should be one complex sample per word and as deep as the geometry allows.** That is what
+`history_core` already builds; the sweep confirms the default rather than changing it.
+
+**Finding 2 — the registers ARE absorbed, and SPEC §23's rule is worth 98.6 MHz here.** The
+worst path of every point ends inside the hard block:
+
+```text
+  u_kernel|mem_v_q
+    -> u_kernel|g_store.mem_rtl_0|auto_generated|altera_syncram_impl1|ram_block2a31~reg1
+```
+
+`ram_block*~reg*` is the M20K's own input register, and `reg2reg_logic_depth = 0` with
+`cell_delay = 0.000 ns` says there is no fabric logic on that path at all — it is a register,
+a wire and a hard-block register. Removing the bank's own input and output registers
+(`bank_512x32_noreg`) drops the kernel from 13.7 ALMs to **0.5**, and drops Fmax from
+**956.9 to 858.4 MHz**, and — the part that matters — changes the Fitter's retiming limit
+reason from `Path Limit` to **`Insufficient Registers`**: the Hyper-Retimer wants registers to
+move and there are none. Thirteen ALMs per bank against 98.6 MHz is not a trade-off, it is a
+rounding error against a real gain, and at the full-scale 128 banks it is 1 754 ALMs, 0.13 %
+of the device.
+
+This is the direct answer to the question SPEC §18 asks by naming "input and output register
+choices" as an axis, and it is why `history_core` fixes `IN_REG = OUT_REG = 1` and does not
+expose them.
+
+**Finding 3 — a 32-bit word can only ever fill 80 % of an M20K.** Every point stores 16 384
+bits in a block that holds 20 480. The M20K's parity-carrying modes are ×40, ×20, ×10 and ×5;
+32 is 80 % of 40 and 16 is 80 % of 20, so no aspect ratio of a 32-bit-word memory reaches the
+parity bits. This is not a defect and not fixable by reshaping — it is the constant that the
+full-scale projection below has to be built on, and measuring it was the point of holding the
+capacity fixed.
+
+### A four-bank corner-turn slice
+
+| point | geometry | M20K | RAM bits | ALM (total / kernel) | regs | Hyper | Fmax MHz | depth | fit s |
+|---|---|---|---|---|---|---|---|---|---|
+| `core_a4_l1` | 4 antennas × 1 lane = 4 banks, 64 bins, 4 frames | 4 | 32 768 | 2 024 / 1 496.4 | 4 694 | 1 266 | **444.6** | 4 | 474 |
+| `core_a2_l2` | 2 antennas x 2 lanes = 4 banks, 64 bins, 4 frames, bit-reversed | 4 | 16384 | 1619 / 1112.4 | 3359 | 554 | **475.737** | 3 | 462 |
+
+**Finding 4 — the banks are not the limiter; the frame barrier is.** `core_a4_l1` is the only
+point in this sweep that did NOT meet the probe, so **444.6 MHz is a genuine measured limit**
+(WNS −0.583 ns against 1.666 ns), and the path is not in a memory:
+
+```text
+  u_kernel|frame_q[3][9]~RTM_104  ->  u_kernel|frame_q[2][0]~RTM_28DUPLICATE
+  logic depth 4, cell 0.799 ns, routing 1.213 ns
+```
+
+`frame_q` is the per-antenna 32-bit absolute frame counter, and the path between two of them
+is the **frame barrier**: `all_past_barrier` compares every antenna's counter against
+`frames_done`, and the skew test computes `frame_q[a] − frames_done ≥ depth`, both across the
+full 32 bits and all N_ANT antennas. The `~RTM_` and `~RTM_*DUPLICATE` suffixes say the
+Hyper-Retimer already retimed and duplicated those registers and still ran out — the limit
+reason is `Path Limit`.
+
+444.6 MHz clears the SPEC §8 `history_clk` of 400 MHz with 11 % margin. It misses `core_clk`'s
+450 MHz by **1.2 %**, and the barrier is in `core_clk`.
+
+**The second core point corroborates it, and that is why two shapes of the same bank count
+were compiled.** `core_a2_l2` has the SAME four banks as `core_a4_l1` and half the antennas,
+and it comes out **475.7 MHz against 444.6** — 7 % faster — with the kernel at 1 112 ALMs
+against 1 496 and logic depth 3 against 4. Same memory count, fewer antennas, faster and
+smaller: the limiter tracks N_ANT through the barrier's comparator tree and not the bank
+count, which is the claim finding 4 makes and which one point alone could only have
+suggested.
+
+A caveat on the M20K column of this table, stated so it is not read as a density result:
+both core points report 4 M20Ks for four banks, but `core_a2_l2` holds 16 384 bits against
+`core_a4_l1`'s 32 768. At a four-frame slice every bank is far smaller than one block, so the
+count is a FLOOR of one block per bank rather than a measurement of packing. That is exactly
+why the bank sweep above holds capacity at a full 16 384 bits — the two tables answer
+different questions on purpose.
+
+**The structural answer, and why it is not made here.** The barrier does not need 32-bit
+comparisons. `frames_done` and `frame_q` are compared only for equality and for a
+"more than `depth` ahead" test, and both are correct on a counter of a few bits more than
+`log2(FRAMES_MAX)` — the 32-bit absolute number is needed only for the published `frame_id`,
+which is off the critical path and moves once per frame. Narrowing the barrier's counters to
+`SLOT_W + 2` bits would cut the comparison from 32 bits to 5 and leave the datapath untouched.
+
+Per SPEC §20 that change is not made in this PR: it is one hypothesis, it needs its own
+correctness re-proof and its own compile, and the number to beat is now on record — **444.6
+MHz, path named above, target 450**. It is exactly the shape of edit the issue #22 closure loop
+exists to make, and it is written into DECISIONS.md so that loop inherits a hypothesis rather
+than a search.
+
+**Finding 5 — the corner turn's fixed cost is about 1 500 ALMs at four banks**, against
+4 × 13.7 ≈ 55 ALMs for the banks themselves. That is the write sequencers, the barrier, the
+rotation and readable-set arithmetic, the registered read fanout, the three CDC crossings, six
+saturating counters and the output FIFO with its credit gate — and it is dominated by things
+that do NOT grow with the bank count. The 1 266 Hyper-Registers say the Fitter found a great
+deal to retime, which is what the latency-insensitive shape was for.
+
+### Full-scale M20K projection (SPEC §2, SPEC §11 `full_agmf039`)
+
+At `N_ANTENNAS=16, SAMPLES_PER_CYCLE=8, FFT_SIZE=1024, HISTORY_FRAMES=512, SAMPLE_W=16`,
+computed by `model/cpp/history/history_model.hpp` from the same geometry the RTL elaborates:
+
+```text
+  LANES      = 8                     M = FFT_SIZE / LANES  = 128 beats/frame
+  banks      = 16 x 8                = 128
+  words/bank = 512 x 128             = 65 536
+  bits/bank  = 65 536 x 32           = 2 097 152          (2 Mibit)
+  TOTAL      = 128 x 2 097 152       = 268 435 456 bits   (256 Mibit)
+
+  device     = 18 960 M20K x 20 480  = 388 300 800 bits   (370 Mibit)
+```
+
+The payload is **69.1 % of the device's raw M20K bits**, inside SPEC §2's 55-80 % band. The
+BLOCK count is not, and finding 3 is why: **the sweep measured 16 384 bits in a block that
+holds 20 480**, at every aspect ratio, so the projection has to be built on 16 384 and not on
+20 480.
+
+```text
+  268 435 456 / 16 384  =  16 384 M20K  =  86.4 % of 18 960     <- over the target
+  268 435 456 / 20 480  =  13 108 M20K  =  69.1 %               <- unreachable at a 32-bit word
+```
+
+**A power-of-two `HISTORY_FRAMES` cannot land in the band.** The projection scales linearly:
+
+| `HISTORY_FRAMES` | M20K | % of 18 960 | |
+|---|---|---|---|
+| 256 | 8 192 | 43.2 % | under |
+| **384** | **12 288** | **64.8 %** | **in band** |
+| 448 | 14 336 | 75.6 % | in band |
+| 512 | 16 384 | 86.4 % | over, and leaves nothing for FIFOs, the packet network or telemetry |
+
+**The structural answer, and why it is not made here.** `history_pkg` requires `FRAMES_MAX` to
+be a power of two, and that requirement is one line stronger than the algebra needs.
+`ADDR(s, k) = s*M + k` is a concatenation because **`M`** is a power of two, not because
+`FRAMES_MAX` is; the only thing the stronger condition buys is that `{slot, beat}` fills the
+address space exactly, and it is enforced by a single elaboration check
+(`ADDR_W == SLOT_W + BEAT_W`). Dropping `hist_is_pow2(g.frames_max)` from `hist_geom_ok` and
+sizing each bank at `FRAMES_MAX * M` words unlocks 384 and 448 with no change to the datapath,
+no new arithmetic and no change to the read decode.
+
+Not made in this PR, per SPEC §20: it is a change to a verified geometry invariant made for a
+resource reason, the parameter freeze is issue #20's job, and the number that freeze needs is
+now measured rather than assumed. The one-line change and its exact effect are named here so
+#20 can make it with the measurement in hand.
+
+**A second projection finding, for issue #20 and for issue #22.** At full scale each bank is
+65 536 words deep, which is a **128-block cascade** with a 128-way output mux per antenna-lane.
+The four-frame slice cannot show that, and it is a plausible `history_clk` limiter on top of
+the barrier path finding 4 already names. The banking scheme contains the fix and it costs
+nothing structurally: the frame-slot dimension can be split into further banks exactly as the
+lane dimension is, by moving high address bits into the bank index, and `history_pkg`'s
+mapping supports it unchanged.
