@@ -1,0 +1,74 @@
+# ---------------------------------------------------------------------------
+# history_bank_calib.qsf — SPEC 18 calibration project settings for one M20K
+# history bank (issue #15, SPEC 18 item 8).
+#
+# SAME DEVICE as the benchmark project (quartus/project/agilex7_wideband.qsf):
+# AGMF039R47B1E1VC, same speed grade, same junction-temperature range. A
+# calibration number measured on a different device or a different operating
+# range is not calibration data for this benchmark, so the two files state the
+# device identically and the exported record repeats it for every point.
+#
+# HAND MAINTAINED. quartus/scripts/calibrate.tcl lets Quartus export the
+# in-memory assignment database over this file — it has to, because that export
+# is how the swept `set_parameter` values reach quartus_syn — and then restores
+# these exact bytes afterwards. So the sweep leaves no parameter, no seed and no
+# tool bookkeeping behind. Do not open the project in the GUI and save it.
+#
+# All paths are relative to this directory (quartus/calibration/).
+# ---------------------------------------------------------------------------
+
+# --- device (SPEC.md 2, 15) -------------------------------------------------
+set_global_assignment -name FAMILY "Agilex 7"
+set_global_assignment -name DEVICE AGMF039R47B1E1VC
+set_global_assignment -name TOP_LEVEL_ENTITY history_bank_wrap
+
+set_global_assignment -name MIN_CORE_JUNCTION_TEMP 0
+set_global_assignment -name MAX_CORE_JUNCTION_TEMP 100
+
+# --- project output ---------------------------------------------------------
+set_global_assignment -name PROJECT_OUTPUT_DIRECTORY output_files
+set_global_assignment -name NUM_PARALLEL_PROCESSORS ALL
+
+# --- simulation-only code exclusion -----------------------------------------
+# Every module in rtl/memory/ guards its elaboration checks and its proof
+# assertions with `ifndef SYNTHESIS, the convention every primitive in this
+# repository uses. Quartus does not define SYNTHESIS on its own, so the
+# calibration project defines it explicitly rather than relying on the tool
+# silently ignoring an `initial` block. Without this line the measured resource
+# counts would include simulation scaffolding — and in a memory kernel that
+# scaffolding is a shadow array exactly as large as the bank being measured,
+# which is the one thing this sweep must not count.
+set_global_assignment -name VERILOG_MACRO "SYNTHESIS=1"
+
+# --- design source ----------------------------------------------------------
+# Order matters: packages first. Every file is the SAME FILE the simulation
+# builds and lints — there is no synthesis-only copy, which is the property that
+# makes the calibration numbers apply to the verified design.
+#
+# history_bank imports no package, so this list is the bank and its wrapper and
+# nothing else. Anything more would be measured along with it.
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/memory/history_bank.sv
+set_global_assignment -name SYSTEMVERILOG_FILE history_bank_wrap.sv
+
+# --- timing constraints -----------------------------------------------------
+set_global_assignment -name SDC_FILE history_bank_calib.sdc
+
+# ---------------------------------------------------------------------------
+# Virtual pins
+# ---------------------------------------------------------------------------
+# Same rationale as the benchmark project: this is a FABRIC measurement, not a
+# pinout exercise. Every data and handshake port is a virtual pin so the Fitter
+# places no I/O buffers and the register-to-register paths inside the wrapper are
+# what gets measured. clk and rst_n stay real pins so they get genuine global
+# networks — a kernel measured on a local clock tree would report an Fmax the
+# real design can never reproduce.
+set_instance_assignment -name VIRTUAL_PIN ON -to vld_in
+set_instance_assignment -name VIRTUAL_PIN ON -to wr_en_in
+set_instance_assignment -name VIRTUAL_PIN ON -to "wr_addr_in[*]"
+set_instance_assignment -name VIRTUAL_PIN ON -to "wr_data_in[*]"
+set_instance_assignment -name VIRTUAL_PIN ON -to rd_en_in
+set_instance_assignment -name VIRTUAL_PIN ON -to "rd_addr_in[*]"
+
+set_instance_assignment -name VIRTUAL_PIN ON -to vld_out
+set_instance_assignment -name VIRTUAL_PIN ON -to dv_out
+set_instance_assignment -name VIRTUAL_PIN ON -to "rd_data_out[*]"

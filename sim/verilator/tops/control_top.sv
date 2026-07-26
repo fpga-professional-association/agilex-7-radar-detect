@@ -90,6 +90,8 @@ module control_top
     output wire [REGMAP_COVAR_N_REGS*32-1:0]    obs_covar_pulse,
     output wire [REGMAP_CFAR_N_REGS*32-1:0]     obs_cfar_csr,
     output wire [REGMAP_CFAR_N_REGS*32-1:0]     obs_cfar_pulse,
+    output wire [REGMAP_HISTORY_N_REGS*32-1:0]  obs_history_csr,
+    output wire [REGMAP_HISTORY_N_REGS*32-1:0]  obs_history_pulse,
     output wire [REGMAP_PACKET_N_REGS*32-1:0]   obs_packet_csr,
     output wire [REGMAP_PACKET_N_REGS*32-1:0]   obs_packet_pulse,
 
@@ -503,6 +505,64 @@ module control_top
       .hw_fault         (6'd0),
       .csr              (obs_cfar_csr),
       .pulse            (obs_cfar_pulse)
+  );
+
+  // ---------------------------------------------------------------------------
+  // The SPEC 7.3 history window (issue #15), at 0xA000.
+  //
+  // Hardware inputs TIED OFF, the same arrangement and the same reason as the
+  // coefficient, covariance and CFAR windows above (issue #7, decision 5): this
+  // top exercises the register PLANE, and test_control_regs predicts every
+  // response from the generated tables alone. A block that put a live kernel
+  // value where the plane's model expects a tied-off input would turn a plane
+  // failure into a kernel-shaped mystery. The live wiring to
+  // rtl/memory/history_core.sv lands with the medium-pipeline integration
+  // (issue #17).
+  // ---------------------------------------------------------------------------
+  wire        hist_cfg_enable_unused, hist_cfg_unsafe_unused;
+  wire        hist_cfg_apply_unused, hist_cfg_clear_unused, hist_cfg_sticky_unused;
+  wire [15:0] hist_cfg_depth_unused;
+
+  reg_block_history #(
+      .IDX_W (IDX_W)
+  ) u_history (
+      .clk                 (clk),
+      .rst_n               (rst_n),
+      .sel                 (blk_sel[REGMAP_HISTORY_INDEX]),
+      .write_enable        (blk_write_enable),
+      .read_enable         (blk_read_enable),
+      .index               (blk_index),
+      .write_data          (blk_write_data),
+      .byte_enable         (blk_byte_enable),
+      .read_data           (blk_read_data[REGMAP_HISTORY_INDEX*REG_DATA_W +: REG_DATA_W]),
+      .ready               (blk_ready[REGMAP_HISTORY_INDEX]),
+      .error               (blk_error[REGMAP_HISTORY_INDEX]),
+      .cfg_enable          (hist_cfg_enable_unused),
+      .cfg_depth           (hist_cfg_depth_unused),
+      .cfg_depth_apply     (hist_cfg_apply_unused),
+      .cfg_counter_clear   (hist_cfg_clear_unused),
+      .cfg_sticky_clear    (hist_cfg_sticky_unused),
+      .cfg_force_unsafe    (hist_cfg_unsafe_unused),
+      .hw_depth_active     ('0),
+      .hw_occupancy        ('0),
+      .hw_epoch            (8'd0),
+      .hw_depth_pending    (1'b0),
+      .hw_n_ant            (8'd0),
+      .hw_lanes            (8'd0),
+      .hw_frames_max       ('0),
+      .hw_bit_reversed     (1'b0),
+      .hw_fft_size         (16'd0),
+      .hw_n_banks          (16'd0),
+      .hw_frames_done      (32'd0),
+      .hw_overwrite_count  (32'd0),
+      .hw_collision_count  (32'd0),
+      .hw_error_count      (32'd0),
+      .hw_read_count       (32'd0),
+      .hw_write_beat_count (32'd0),
+      .hw_skew_count       (32'd0),
+      .hw_fault            (4'd0),
+      .csr                 (obs_history_csr),
+      .pulse               (obs_history_pulse)
   );
 
   // ---------------------------------------------------------------------------

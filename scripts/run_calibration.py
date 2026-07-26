@@ -82,6 +82,12 @@ SCHEMA_VERSION = 1
 DEVICE = "AGMF039R47B1E1VC"
 TOTAL_ALMS = 1_305_600
 TOTAL_DSP = 12_300
+# M20K blocks on this device. Needed from issue #15 onward: the history sweep is
+# the first kernel whose headline number is a memory count, and SPEC 2 states the
+# M20K budget as a PERCENTAGE (55-80%), which a bare block count cannot be
+# checked against. Same value as scripts/parse_quartus.py and
+# quartus/scripts/common.tcl, repeated here for the reason given above.
+TOTAL_M20K = 18_960
 
 
 # ---------------------------------------------------------------------------
@@ -472,6 +478,131 @@ MATRICES: dict[str, dict] = {
     },
 
     # -----------------------------------------------------------------------
+    # SPEC 18 item 8: "One M20K history bank" (issue #15).
+    #
+    # THE MEMORY GEOMETRY EXPERIMENT. All four points hold the SAME LOGICAL
+    # CAPACITY, 16384 bits, so the aspect ratios are directly comparable and the
+    # only thing varying between the first three is the SHAPE of the request.
+    # That is the whole design of the experiment: an M20K holds 20480 bits, but
+    # only at the widths its modes support, so "how many blocks does 16 kbit
+    # cost" has a different answer at 512x32 than at 1Kx16 or 256x64, and the
+    # answer decides the full-scale corner-turn M20K budget that SPEC 2 wants
+    # held between 55% and 80%.
+    #
+    #   512x32   one complex sample per word — the history bank's natural shape,
+    #            and the one the rest of the design would use by default.
+    #   1024x16  half a sample per word. Deeper and narrower: does Quartus still
+    #            spend one block, or does the narrower word let it pack better?
+    #   256x64   two samples per word. Wider than any single M20K mode on this
+    #            device, so this point measures what WIDTH STITCHING costs — the
+    #            case where the tool must gang blocks side by side.
+    #
+    # The fourth point is the REGISTER-PLACEMENT axis, not a geometry: 512x32
+    # again, with the bank's input and output registers removed. SPEC 18 names
+    # "input and output register choices" as an axis and SPEC 23 requires
+    # registers around M20Ks, so what this point prices is what that requirement
+    # buys and what it costs — whether the registers are absorbed into the hard
+    # block for free (in which case IN_REG/OUT_REG=1 is free and the no-reg point
+    # is strictly worse) or paid for in ALM registers and a longer fabric path.
+    # calibrate.tcl's unregistered_ram_paths and the reg2reg endpoint names are
+    # the evidence; a `ram_block*~reg*` endpoint means absorbed.
+    #
+    # MEM_SEL is forced to 1 (m20k) at every point. The comparison is between
+    # geometries inside one storage style; letting the tool choose would mean
+    # comparing a geometry against a different decision.
+    # -----------------------------------------------------------------------
+    "history_bank": {
+        "description": "SPEC 7.3 history bank: one memory at fixed 16384-bit "
+                       "capacity across three aspect ratios, plus register "
+                       "placement",
+        "top": "history_bank_wrap",
+        "axes": {
+            "geometry": {
+                "512x32": "512 words x 32 bits, one complex sample per word",
+                "1024x16": "1024 words x 16 bits, half a sample per word",
+                "256x64": "256 words x 64 bits, two samples per word",
+            },
+            "regs": [0, 1],
+            "mem_sel": {"1": "M20K"},
+        },
+        "points": [
+            {
+                "id": "bank_512x32",
+                "label": "512 x 32 (one complex sample/word)",
+                "params": {"WIDTH": 32, "DEPTH": 512, "IN_REG": 1,
+                           "OUT_REG": 1, "MEM_SEL": 1},
+            },
+            {
+                "id": "bank_1024x16",
+                "label": "1K x 16 (half a sample/word)",
+                "params": {"WIDTH": 16, "DEPTH": 1024, "IN_REG": 1,
+                           "OUT_REG": 1, "MEM_SEL": 1},
+            },
+            {
+                "id": "bank_256x64",
+                "label": "256 x 64 (two samples/word)",
+                "params": {"WIDTH": 64, "DEPTH": 256, "IN_REG": 1,
+                           "OUT_REG": 1, "MEM_SEL": 1},
+            },
+            {
+                "id": "bank_512x32_noreg",
+                "label": "512 x 32, no input/output regs",
+                "params": {"WIDTH": 32, "DEPTH": 512, "IN_REG": 0,
+                           "OUT_REG": 0, "MEM_SEL": 1},
+            },
+        ],
+    },
+
+    # -----------------------------------------------------------------------
+    # SPEC 18 item 8, the block: a slice of the SPEC 7.3 corner turn (issue #15).
+    #
+    # The bank points above price the ATOM. These two price THE BLOCK'S FIXED
+    # COST: the per-antenna write sequencers, the frame barrier, the rotation and
+    # readable-set arithmetic, the registered read fanout, the three CDC
+    # crossings and the counters — everything that exists once no matter how many
+    # banks there are. The projection the pull request needs is then per-bank cost
+    # times a count, plus this fixed number, which is arithmetic rather than
+    # another compile.
+    #
+    # Both points are FOUR BANKS at 64 bins and 4 frames, arrived at two
+    # different ways, and that is deliberate: 4 antennas x 1 lane and 2 antennas
+    # x 2 lanes instantiate the same amount of memory but a different amount of
+    # control, so the difference between the two records isolates what LANES
+    # costs from what N_ANT costs. The second point also runs bit-reversed input,
+    # which prices the address permutation the FFT would otherwise pay a reorder
+    # buffer for (see fft_core's REORDER axis, which is the other half of that
+    # trade).
+    # -----------------------------------------------------------------------
+    "history_core": {
+        "description": "SPEC 7.3 corner-turn slice: four history banks with the "
+                       "write sequencers, frame barrier, read fanout and CDC "
+                       "crossings around them",
+        "top": "history_core_wrap",
+        "axes": {
+            "shape": {"4x1": "4 antennas x 1 lane", "2x2": "2 antennas x 2 lanes"},
+            "bit_reversed": [0, 1],
+            "fft_size": [64],
+            "frames_max": [4],
+        },
+        "points": [
+            {
+                "id": "core_a4_l1",
+                "label": "4 antennas x 1 lane = 4 banks, 64 bins, 4 frames",
+                "params": {"N_ANT": 4, "FFT_SIZE": 64, "LANES": 1,
+                           "FRAMES_MAX": 4, "SAMPLE_W": 16,
+                           "BIT_REVERSED": 0, "MEM_SEL": 1},
+            },
+            {
+                "id": "core_a2_l2",
+                "label": "2 antennas x 2 lanes = 4 banks, 64 bins, 4 frames, "
+                         "bit-reversed",
+                "params": {"N_ANT": 2, "FFT_SIZE": 64, "LANES": 2,
+                           "FRAMES_MAX": 4, "SAMPLE_W": 16,
+                           "BIT_REVERSED": 1, "MEM_SEL": 1},
+            },
+        ],
+    },
+    # -----------------------------------------------------------------------
     # SPEC 18 item 9: "one packet-switch stage" (issue #18).
     #
     # rtl/packet/pkt_switch_stage.sv at the SPEC 7.8 NOMINAL SCALE: radix 4,
@@ -555,6 +686,7 @@ MATRICES: dict[str, dict] = {
             },
         ],
     },
+
 }
 
 # Per-kernel note recorded in the exported JSON, explaining what was left out of
@@ -637,6 +769,32 @@ PRUNING_NOTES: dict[str, str] = {
         "machinery in the measured design. A wider slice would be a multiple of "
         "this one plus the same fixed block cost. See "
         "scripts/run_calibration.py."),
+    "history_bank": (
+        "Four points, all at the same 16384-bit logical capacity so the three "
+        "aspect ratios are directly comparable, plus one register-placement "
+        "variant at 512x32. Left out, in the open: TRUE DUAL PORT banks, which "
+        "are not a different geometry but a different correctness argument — a "
+        "second write port changes what the corner turn has to prove about "
+        "read/write collisions, and that belongs to the verification, not to a "
+        "resource sweep. MLAB and register storage at these depths, because a "
+        "512-word by 32-bit bank in MLABs is known in advance to be absurd and "
+        "measuring it would buy a large number nobody will use; the question "
+        "that IS open, where the MLAB/M20K crossover falls, belongs to a "
+        "shallower sweep whose depths straddle it. And the full-scale "
+        "FRAMES_MAX=512 geometry, because it is hours of Fitter time for a "
+        "number that is per-bank cost times a count — which is what these four "
+        "points measure. See scripts/run_calibration.py."),
+    "history_core": (
+        "Two points, both four banks at 64 bins and 4 frames, reached as 4 "
+        "antennas x 1 lane and as 2 antennas x 2 lanes so that the same memory "
+        "with different control isolates the per-lane cost from the per-antenna "
+        "one. The bank geometry axis is not repeated here: it was swept at the "
+        "atom, and repeating it around a whole block would be four copies of an "
+        "answered question at several times the compile cost. Full scale — SPEC "
+        "11's 16 antennas x 1024 bins x 512 frames — is deliberately not a "
+        "point: it is most of the device's M20K budget and hours of Fitter time "
+        "for a figure that is this fixed cost plus the measured per-bank cost "
+        "times a count. See scripts/run_calibration.py."),
     "fft_core": (
         "Three points. The scaling schedule is deliberately NOT an axis: it "
         "changes which quantisations saturate, not what they cost, and the "
@@ -855,6 +1013,19 @@ def build_record(kernel: str, point: dict, pdir: Path) -> dict:
 
     alm = as_num(c.get("alm_used"))
     dsp = as_num(c.get("dsp_used"))
+    m20k = as_num(c.get("m20k_used"))
+
+    # Memory BITS, added for SPEC 18 item 8 (issue #15). A block count cannot
+    # distinguish one M20K used at full occupancy from one used at a twentieth of
+    # it, and the history sweep asks exactly that question. `ram_bits` is the
+    # total wherever it landed — the same quantity SPEC 17 calls "RAM bits" and
+    # the same null-safe sum quartus/scripts/report_utilization.tcl computes: if
+    # both halves are missing it stays None rather than becoming a misleading 0.
+    m20k_bits = as_num(c.get("m20k_bits"))
+    mlab_bits = as_num(c.get("mlab_bits"))
+    ram_bits = None
+    if m20k_bits is not None or mlab_bits is not None:
+        ram_bits = (m20k_bits or 0) + (mlab_bits or 0)
 
     rec: dict = {
         "schema_version": SCHEMA_VERSION,
@@ -890,8 +1061,13 @@ def build_record(kernel: str, point: dict, pdir: Path) -> dict:
             "dsp_used": dsp,
             "dsp_percent": (round(100.0 * dsp / TOTAL_DSP, 6)
                             if dsp is not None else None),
-            "m20k_used": as_num(c.get("m20k_used")),
+            "m20k_used": m20k,
+            "m20k_percent": (round(100.0 * m20k / TOTAL_M20K, 6)
+                             if m20k is not None else None),
             "mlab_used": as_num(c.get("mlab_used")),
+            "m20k_bits": m20k_bits,
+            "mlab_bits": mlab_bits,
+            "ram_bits": ram_bits,
             "pins_used": as_num(c.get("pins_used")),
             "virtual_pins": as_num(c.get("virtual_pins")),
             "source_stage": as_text(c.get("resource_source_stage")),
@@ -909,6 +1085,24 @@ def build_record(kernel: str, point: dict, pdir: Path) -> dict:
             "detail_file": "dsp.txt",
         },
 
+        # --- SPEC 18 M20K mapping -------------------------------------------
+        # The memory counterpart of the dsp{} object above, and for the history
+        # kernels it is the headline rather than a footnote. `blocks` and `bits`
+        # together answer "how much of each block did Quartus actually fill",
+        # which neither answers alone; `detail_file` points at the verbatim
+        # Fitter RAM Summary rows, which are where per-memory depth x width,
+        # memory mode and block type live and are the primary evidence for the
+        # aspect-ratio sweep.
+        "memory": {
+            "m20k_blocks": m20k,
+            "mlab_blocks": as_num(c.get("mlab_used")),
+            "m20k_bits": m20k_bits,
+            "mlab_bits": mlab_bits,
+            "ram_bits": ram_bits,
+            "panel": as_text(c.get("ram_panel")),
+            "detail_file": "ram.txt",
+        },
+
         # --- the kernel instance alone, without the wrapper's boundary regs ---
         "kernel_entity": {
             "alm_used": as_num(c.get("kernel_alm_used")),
@@ -916,6 +1110,7 @@ def build_record(kernel: str, point: dict, pdir: Path) -> dict:
             "combinational_aluts": as_num(c.get("kernel_comb_aluts")),
             "dsp_used": as_num(c.get("kernel_dsp_used")),
             "m20k_used": as_num(c.get("kernel_m20k_used")),
+            "mlab_used": as_num(c.get("kernel_mlab_used")),
             "row": as_text(c.get("kernel_entity_row")),
         },
 
@@ -960,6 +1155,16 @@ def build_record(kernel: str, point: dict, pdir: Path) -> dict:
             "kernel_sync_reset_registers": as_num(t.get("kernel_sync_reset")),
             "kernel_async_reset_registers": as_num(t.get("kernel_async_reset")),
             "kernel_clock_enable_registers": as_num(t.get("kernel_clock_enable")),
+            # Paths in the sampled set whose SOURCE is a memory output that did
+            # NOT have a register absorbed into the hard block. SPEC 23 requires
+            # registers around M20Ks and SPEC 18 names input/output register
+            # choices as an axis, and this is the repository's one purpose-built
+            # measurement of whether the tool actually took them: zero means
+            # absorbed, non-zero means the read data came out into the fabric raw
+            # and is being registered in ALMs. `ram_paths_sampled` is the
+            # denominator, so the number is never read as a rate it is not.
+            "unregistered_ram_paths": as_num(t.get("unregistered_ram_paths")),
+            "ram_paths_sampled": as_num(t.get("ram_paths_sampled")),
             "detail_files": ["retiming.txt", "retiming_limits.txt"],
         },
 
@@ -1072,11 +1277,15 @@ def print_table(records: list[dict]) -> str:
     parameters themselves are in the JSON record.
 
     M20K and MLAB are columns because SPEC 18 asks for "M20K mapping" and the FFT
-    is the first kernel in this database with memories at all.
+    is the first kernel in this database with memories at all. M20Kbits sits
+    beside the block count for the reason issue #15 added it: one M20K at full
+    occupancy and one M20K at a twentieth of it are the same block count and a
+    twentyfold difference in what the full-scale design will cost, and the
+    history sweep's whole question is which of the two a given geometry got.
     """
-    cols = ("point", "DSP", "18x18", "M20K", "MLAB", "ALM", "ALM(kern)",
-            "regs", "hyper", "Fmax MHz", "depth", "fit s")
-    widths = (26, 4, 6, 5, 5, 7, 9, 6, 6, 9, 5, 6)
+    cols = ("point", "DSP", "18x18", "M20K", "M20Kbits", "MLAB", "ALM",
+            "ALM(kern)", "regs", "hyper", "Fmax MHz", "depth", "fit s")
+    widths = (26, 4, 6, 5, 9, 5, 7, 9, 6, 6, 9, 5, 6)
     lines = []
     lines.append("  ".join(c.ljust(w) for c, w in zip(cols, widths)).rstrip())
     lines.append("  ".join("-" * w for w in widths))
@@ -1097,6 +1306,7 @@ def print_table(records: list[dict]) -> str:
             fmt(u.get("dsp_used")),
             fmt(sum2),
             fmt(u.get("m20k_used")),
+            fmt(u.get("m20k_bits")),
             fmt(u.get("mlab_used")),
             fmt(u.get("alm_used")),
             fmt(k.get("alm_used")),

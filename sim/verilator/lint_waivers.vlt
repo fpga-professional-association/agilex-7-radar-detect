@@ -39,8 +39,10 @@
 // current phase happens to use, which would make the package's content depend on
 // build order and would silently drop a parameter whenever RTL is removed. The
 // unused parameters are consumed as the pipeline is built out: FFT_SIZE and
-// PFB_TAPS by issues #10-#11, N_BEAMS by #12, HISTORY_FRAMES by #15, PACKET_W
-// and N_VIRTUAL_CHANS by #18.
+// PFB_TAPS by issues #10-#11, N_BEAMS by #12, HISTORY_FRAMES by #15 (consumed:
+// sim/verilator/tops/history_top.sv checks its DUT 0 against it at time zero),
+// PACKET_W and N_VIRTUAL_CHANS by #18. The waiver stays until the last of them
+// lands; it is the FILE that is waived, not any one parameter.
 //
 // Scope: the generated package file only, and only this message text. Verified
 // narrow — with this waiver in place, adding an unused parameter to

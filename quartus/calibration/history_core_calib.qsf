@@ -1,0 +1,101 @@
+# ---------------------------------------------------------------------------
+# history_core_calib.qsf — SPEC 18 calibration project settings for a slice of
+# the SPEC 7.3 corner turn (issue #15, SPEC 18 item 8).
+#
+# SAME DEVICE as the benchmark project (quartus/project/agilex7_wideband.qsf):
+# AGMF039R47B1E1VC, same speed grade, same junction-temperature range. A
+# calibration number measured on a different device or a different operating
+# range is not calibration data for this benchmark, so the two files state the
+# device identically and the exported record repeats it for every point.
+#
+# HAND MAINTAINED. quartus/scripts/calibrate.tcl lets Quartus export the
+# in-memory assignment database over this file — it has to, because that export
+# is how the swept `set_parameter` values reach quartus_syn — and then restores
+# these exact bytes afterwards. So the sweep leaves no parameter, no seed and no
+# tool bookkeeping behind. Do not open the project in the GUI and save it.
+#
+# All paths are relative to this directory (quartus/calibration/).
+# ---------------------------------------------------------------------------
+
+# --- device (SPEC.md 2, 15) -------------------------------------------------
+set_global_assignment -name FAMILY "Agilex 7"
+set_global_assignment -name DEVICE AGMF039R47B1E1VC
+set_global_assignment -name TOP_LEVEL_ENTITY history_core_wrap
+
+set_global_assignment -name MIN_CORE_JUNCTION_TEMP 0
+set_global_assignment -name MAX_CORE_JUNCTION_TEMP 100
+
+# --- project output ---------------------------------------------------------
+set_global_assignment -name PROJECT_OUTPUT_DIRECTORY output_files
+set_global_assignment -name NUM_PARALLEL_PROCESSORS ALL
+
+# --- simulation-only code exclusion -----------------------------------------
+# Every module in rtl/memory/ and rtl/cdc/ guards its elaboration checks and its
+# proof assertions with `ifndef SYNTHESIS, the convention every primitive in this
+# repository uses. Quartus does not define SYNTHESIS on its own, so the
+# calibration project defines it explicitly rather than relying on the tool
+# silently ignoring an `initial` block.
+#
+# HERE THAT MACRO IS LOAD-BEARING, not merely tidy. history_core instantiates
+# the two sim/assertions/history_*_assertions.sv checkers inside an `ifndef SYNTHESIS block, and
+# that file is deliberately ABSENT from the source list below. With the macro
+# defined the instantiation does not exist and the list is complete; without it
+# Quartus would fail elaboration on a missing module rather than silently
+# mismeasure. So this one line is what makes the file list below correct — do not
+# remove it without adding the assertion file, which would then be measured as
+# part of the block.
+set_global_assignment -name VERILOG_MACRO "SYNTHESIS=1"
+
+# --- design source ----------------------------------------------------------
+# Order matters: packages first, then the primitives, then the block. Every file
+# is the SAME FILE the simulation builds and lints — there is no synthesis-only
+# copy, which is the property that makes the calibration numbers apply to the
+# verified design.
+#
+# history_bank.sv appears here as well as in history_bank_calib.qsf, and that is
+# the point of the pair: the atom is priced alone in one project and in context
+# in this one, and the difference between the two records is the corner turn's
+# fixed cost measured rather than argued.
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/packages/fxp_pkg.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/packages/stream_pkg.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/packages/cdc_pkg.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/packages/history_pkg.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/cdc/cdc_sync2.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/cdc/cdc_handshake.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/cdc/cdc_pulse.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/common/sync_fifo.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/common/perf_counter.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/memory/history_bank.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/memory/history_core.sv
+set_global_assignment -name SYSTEMVERILOG_FILE history_core_wrap.sv
+
+# --- timing constraints -----------------------------------------------------
+set_global_assignment -name SDC_FILE history_core_calib.sdc
+
+# ---------------------------------------------------------------------------
+# Virtual pins
+# ---------------------------------------------------------------------------
+# Same rationale as the benchmark project: this is a FABRIC measurement, not a
+# pinout exercise. Every data and handshake port is a virtual pin so the Fitter
+# places no I/O buffers and the register-to-register paths inside the wrapper are
+# what gets measured. clk and rst_n stay real pins so they get genuine global
+# networks — a kernel measured on a local clock tree would report an Fmax the
+# real design can never reproduce.
+set_instance_assignment -name VIRTUAL_PIN ON -to "wr_valid_in[*]"
+set_instance_assignment -name VIRTUAL_PIN ON -to "wr_payload_in[*]"
+set_instance_assignment -name VIRTUAL_PIN ON -to cfg_enable_in
+set_instance_assignment -name VIRTUAL_PIN ON -to "cfg_depth_in[*]"
+set_instance_assignment -name VIRTUAL_PIN ON -to cfg_apply_in
+set_instance_assignment -name VIRTUAL_PIN ON -to cfg_clear_in
+set_instance_assignment -name VIRTUAL_PIN ON -to cfg_unsafe_in
+set_instance_assignment -name VIRTUAL_PIN ON -to req_valid_in
+set_instance_assignment -name VIRTUAL_PIN ON -to "req_bin_in[*]"
+set_instance_assignment -name VIRTUAL_PIN ON -to "req_off_in[*]"
+set_instance_assignment -name VIRTUAL_PIN ON -to m_ready_in
+
+set_instance_assignment -name VIRTUAL_PIN ON -to "wr_ready_out[*]"
+set_instance_assignment -name VIRTUAL_PIN ON -to req_ready_out
+set_instance_assignment -name VIRTUAL_PIN ON -to m_valid_out
+set_instance_assignment -name VIRTUAL_PIN ON -to "m_vec_out[*]"
+set_instance_assignment -name VIRTUAL_PIN ON -to "m_meta_out[*]"
+set_instance_assignment -name VIRTUAL_PIN ON -to "stat_fold_out[*]"

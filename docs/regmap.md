@@ -7,10 +7,10 @@ for the register and control plane ([SPEC.md](../SPEC.md) §9, issue #7). Edit t
 and re-run the generator; `make regmap-check` fails the build on any hand edit here or
 on a source change that was never regenerated.
 
-- Register-map version: **1.6.0** (schema 1)
+- Register-map version: **1.7.0** (schema 1)
 - Interface: 32-bit data, 16-bit byte address, 4 byte enables
 - Window per block: `0x1000` bytes
-- Blocks declared: 11 (10 implemented), registers implemented: 87
+- Blocks declared: 12 (11 implemented), registers implemented: 100
 
 ## Access types
 
@@ -39,6 +39,7 @@ the non-writable bits (`error=0`).
 | `counters` | `0x7000`–`0x7FFF` | 21 | implemented | Stream counters; Stall counters; FIFO high-water marks; Overflow and saturation counts; Frame counts; Sequence errors; CDC errors; Snapshot and debug control |
 | `debug` | `0x8000`–`0x8FFF` | 0 | planned (#19) | Snapshot and debug control |
 | `covar` | `0x9000`–`0x9FFF` | 7 | implemented | Integration settings |
+| `history` | `0xA000`–`0xAFFF` | 13 | implemented | Active bank selection; Frame counts |
 | `packet` | `0xB000`–`0xBFFF` | 12 | implemented | Fault injection; Stall counters; FIFO high-water marks |
 
 Any address outside every implemented window, any address inside a window but beyond
@@ -54,9 +55,9 @@ Fixed identification of the control plane itself. Every field is a constant fold
 | Offset | Address | Register | Access | Reset | Description |
 |---|---|---|---|---|---|
 | `0x000` | `0x0000` | `MAGIC` | RO | `0x52414441` | Constant marker. Reading 0x52414441 ('RADA') at block base proves a control plane is present and the address decode is alive. |
-| `0x004` | `0x0004` | `VERSION` | RO | `0x01060001` | Register-map version, from regmap_version in the source of truth. Static build data, deliberately not a git describe: the same source tree must produce the same register contents on any machine, and a VCS-derived value would make the generated artefacts depend on checkout state. |
-| `0x008` | `0x0008` | `GEOMETRY` | RO | `0x1020570B` | Shape of the register plane, so a discovery walk needs no compiled-in constants. |
-| `0x00C` | `0x000C` | `CAPABILITY` | RO | `0x000006FF` | One bit per declared block, set when that block is implemented in this build. Bit i is block i in declaration order; a planned block reads 0 and its window returns error. |
+| `0x004` | `0x0004` | `VERSION` | RO | `0x01070001` | Register-map version, from regmap_version in the source of truth. Static build data, deliberately not a git describe: the same source tree must produce the same register contents on any machine, and a VCS-derived value would make the generated artefacts depend on checkout state. |
+| `0x008` | `0x0008` | `GEOMETRY` | RO | `0x1020640C` | Shape of the register plane, so a discovery walk needs no compiled-in constants. |
+| `0x00C` | `0x000C` | `CAPABILITY` | RO | `0x00000EFF` | One bit per declared block, set when that block is implemented in this build. Bit i is block i in declaration order; a planned block reads 0 and its window returns error. |
 
 ### `ID.MAGIC` — `0x0000`
 
@@ -69,7 +70,7 @@ Fixed identification of the control plane itself. Every field is a constant fold
 | Bits | Field | Access | Reset | Source | Description |
 |---|---|---|---|---|---|
 | `31:24` | `MAJOR` | RO | `0x1` | — | Incompatible layout change. |
-| `23:16` | `MINOR` | RO | `0x6` | — | Registers or fields added. |
+| `23:16` | `MINOR` | RO | `0x7` | — | Registers or fields added. |
 | `15:8` | `PATCH` | RO | `0x0` | — | Documentation-only change. |
 | `7:0` | `SCHEMA` | RO | `0x1` | — | Source-of-truth schema version. |
 
@@ -77,8 +78,8 @@ Fixed identification of the control plane itself. Every field is a constant fold
 
 | Bits | Field | Access | Reset | Source | Description |
 |---|---|---|---|---|---|
-| `7:0` | `N_BLOCKS` | RO | `0xB` | — | Declared blocks, implemented and planned. |
-| `15:8` | `N_REGS` | RO | `0x57` | — | Implemented registers across all blocks. |
+| `7:0` | `N_BLOCKS` | RO | `0xC` | — | Declared blocks, implemented and planned. |
+| `15:8` | `N_REGS` | RO | `0x64` | — | Implemented registers across all blocks. |
 | `23:16` | `DATA_W` | RO | `0x20` | — | Register data width in bits. |
 | `31:24` | `ADDR_W` | RO | `0x10` | — | Register address width in bits. |
 
@@ -86,7 +87,7 @@ Fixed identification of the control plane itself. Every field is a constant fold
 
 | Bits | Field | Access | Reset | Source | Description |
 |---|---|---|---|---|---|
-| `31:0` | `BLOCK_MASK` | RO | `0x6FF` | — | Implemented-block bitmap. |
+| `31:0` | `BLOCK_MASK` | RO | `0xEFF` | — | Implemented-block bitmap. |
 
 ## `build_params` — `0x1000`
 
@@ -756,6 +757,118 @@ Integration settings for the SPEC 7.6 power and covariance engine (rtl/covarianc
 | Bits | Field | Access | Reset | Source | Description |
 |---|---|---|---|---|---|
 | `31:0` | `VALUE` | ROHW | `0x0` | — | Saturation-event count. |
+
+## `history` — `0xA000`
+
+The SPEC 7.3 time-frequency history and corner turn (rtl/memory/, issue #15). Two SPEC 9 groups land here and both are literal: 'Active bank selection' is the rotating frame-bank pointer and its programmable depth, and 'Frame counts' is the completed-frame counter that decides what a beamformer read is allowed to ask for. The window claims no group of its own because SPEC 9's list has none for a memory, and inventing one would make scripts/gen_regmap.py's copy of that list stop being a copy. CLOCK DOMAIN: every register here is in core_clk, the WRITE side of the subsystem, because that is where the frame sequencers and the rotation policy live. The three read-side counters (HISTORY_READS, HISTORY_COLLISION, HISTORY_ERROR) are produced in history_clk and cross back through one cdc_handshake carrying all three at once, so they are always a consistent snapshot of each other and are at most one crossing stale; a reader that needs them settled should quiesce the traffic first. DEPTH CHANGES DISCARD THE HISTORY: writing HISTORY_DEPTH and pulsing HISTORY_CTRL.DEPTH_APPLY remaps every frame slot, so the block waits for a frame boundary on every antenna and then restarts empty. HISTORY_STATUS.DEPTH_PENDING reports the wait and HISTORY_STATUS.EPOCH counts the applies, so software can tell 'no frames yet' from 'frames from before a reconfiguration'.
+
+| Offset | Address | Register | Access | Reset | Description |
+|---|---|---|---|---|---|
+| `0x000` | `0xA000` | `HISTORY_CTRL` | MIXED | `0x00000001` | Master controls. The three pulse fields are events rather than modes and read back zero. |
+| `0x004` | `0xA004` | `HISTORY_DEPTH` | RW | `0x00000000` | Requested history depth, in frames. Takes effect on HISTORY_CTRL.DEPTH_APPLY, never before. |
+| `0x008` | `0xA008` | `HISTORY_STATUS` | ROHW | `0x00000000` | Live state of the rotation. Every field is hardware-driven. |
+| `0x00C` | `0xA00C` | `HISTORY_GEOMETRY` | ROHW | `0x00000000` | Elaborated geometry, part one. Reported by hardware so a consumer can size its own requests without a build-time header, which is the argument CFAR_STATUS makes for its own geometry fields. |
+| `0x010` | `0xA010` | `HISTORY_GEOMETRY2` | ROHW | `0x00000000` | Elaborated geometry, part two. |
+| `0x014` | `0xA014` | `HISTORY_FRAMES_DONE` | ROHW | `0x00000000` | Frames completed on every antenna since reset or the last applied depth change. This is the origin the relative frame offset in a read request counts back from. |
+| `0x018` | `0xA018` | `HISTORY_OVERWRITE` | ROHW | `0x00000000` | Frames EVICTED by the rotation: max(frames completed - DEPTH_ACTIVE, 0). The honest measure of how much history a consumer lost, and exact at every instant. |
+| `0x01C` | `0xA01C` | `HISTORY_COLLISION` | ROHW | `0x00000000` | Read responses whose addressed frame slot was the slot being written. ZERO IN CORRECT OPERATION: the readable set excludes the in-flight slot by construction, which makes this a defect detector rather than a statistic. HISTORY_CTRL.FORCE_UNSAFE is what makes it reachable, and therefore testable. |
+| `0x020` | `0xA020` | `HISTORY_ERROR` | ROHW | `0x00000000` | Read requests whose bin or frame offset was outside the legal set. The request is still ANSWERED, deterministically and clamped, with the out-of-range flag set in the response metadata: dropping it would break the one-response-per-request invariant the consumer's pipeline is built on, and would turn a software mistake into a hang. |
+| `0x024` | `0xA024` | `HISTORY_READS` | ROHW | `0x00000000` | Read responses produced. |
+| `0x028` | `0xA028` | `HISTORY_WRITE_BEATS` | ROHW | `0x00000000` | Write beats accepted, summed over every antenna. One beat carries LANES complex samples of one antenna's frame. |
+| `0x02C` | `0xA02C` | `HISTORY_SKEW` | ROHW | `0x00000000` | Occasions on which an antenna ran a whole DEPTH_ACTIVE frames ahead of the slowest one, and was therefore about to overwrite a slot the frame barrier still considered live. Counted on the RISING EDGE of the condition, not while it holds: skew is an episode and not a duration, and a level count would report a number that depends on how long the condition happened to last. |
+| `0x030` | `0xA030` | `HISTORY_FAULT` | W1C | `0x00000000` | Sticky fault bits, write 1 to clear. The block holds its own copy, so clearing a bit here while the block still holds it set has no lasting effect until HISTORY_CTRL.STATUS_CLEAR is pulsed. Same arrangement, and same reason, as CFAR_FAULT. |
+
+### `HISTORY.HISTORY_CTRL` — `0xA000`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `0` | `ENABLE` | RW | `0x1` | — | Global enable. Cleared, the block refuses write beats (s_ready goes low on every antenna) and advances nothing. Read requests are still answered from whatever is stored. |
+| `1` | `FORCE_UNSAFE` | RW | `0x0` | — | SPEC 9 fault injection. Normally an out-of-range frame offset is CLAMPED to the newest readable frame, which makes HISTORY_COLLISION unreachable by construction. Setting this removes the clamp, so an out-of-range request reaches the slot being written and the collision counter increments. It exists because a counter that cannot be made to fire is a counter nobody has tested; it is not a mode for production use, and rtl/memory/history_core.sv section 4 says why. |
+| `8` | `DEPTH_APPLY` | RWP | `0x0` | — | Arm the value in HISTORY_DEPTH. The change lands at the next instant at which no antenna is mid-frame, and discards the stored history when it does. |
+| `9` | `COUNTER_CLEAR` | RWP | `0x0` | — | Zero every counter in this window, on both sides of the clock-domain crossing. The read-side counters are cleared through a toggle synchroniser, so they reach zero a few cycles after the write-side ones do. |
+| `10` | `STATUS_CLEAR` | RWP | `0x0` | — | Clear the block's own sticky fault state. HISTORY_FAULT's bits are W1C on top of that, so clearing a bit the block still holds set has no lasting effect until this pulse is issued as well. |
+
+### `HISTORY.HISTORY_DEPTH` — `0xA004`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `9:0` | `DEPTH` | RW | `0x0` | — | Frames of history to retain, 1..FRAMES_MAX. Zero is clamped to one and anything above the elaborated maximum is clamped to it, so a zero-initialised register plane cannot request an illegal geometry. NOTE that the depth after reset is the ELABORATED MAXIMUM and not this field's reset value: nothing is applied until DEPTH_APPLY is pulsed, and HISTORY_STATUS.DEPTH_ACTIVE reports what is actually in force. A depth of 1 or 2 leaves nothing readable, because the readable set is two slots short of the depth - one for the frame being written, one to absorb a frame of publication lag across the clock crossing. That is legal, and it is reported through HISTORY_STATUS.OCCUPANCY. |
+
+### `HISTORY.HISTORY_STATUS` — `0xA008`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `9:0` | `DEPTH_ACTIVE` | ROHW | `0x0` | — | Depth currently in force. Equals the elaborated maximum until the first DEPTH_APPLY. |
+| `19:10` | `OCCUPANCY` | ROHW | `0x0` | — | Complete frames currently held: min(frames completed, DEPTH_ACTIVE). A frame counts as complete only when EVERY antenna has finished writing it, so this never claims a frame a beamformer read could not assemble. |
+| `27:20` | `EPOCH` | ROHW | `0x0` | — | Increments on every applied depth change. Modulo 256; software compares it against the value it last saw rather than reading an absolute count. |
+| `28` | `DEPTH_PENDING` | ROHW | `0x0` | — | A depth change is armed and waiting for a frame boundary. |
+
+### `HISTORY.HISTORY_GEOMETRY` — `0xA00C`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `7:0` | `N_ANT` | ROHW | `0x0` | — | Antennas, and therefore samples in one read response. |
+| `15:8` | `LANES` | ROHW | `0x0` | — | Complex samples per write beat (SPEC 11 SAMPLES_PER_CYCLE). Also the number of independently addressed banks per antenna. |
+| `25:16` | `FRAMES_MAX` | ROHW | `0x0` | — | Elaborated maximum history depth, the upper clamp on HISTORY_DEPTH.DEPTH. |
+| `26` | `BIT_REVERSED` | ROHW | `0x0` | — | 1 when the block absorbs the FFT's bit-reversed beat order in its read addressing, i.e. when rtl/fft/streaming_fft.sv upstream runs with REORDER = 0. Costs nothing here and saves the FFT its whole reorder buffer; rtl/packages/history_pkg.sv section 3 has the measured numbers. |
+
+### `HISTORY.HISTORY_GEOMETRY2` — `0xA010`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `15:0` | `FFT_SIZE` | ROHW | `0x0` | — | Frequency bins per frame. A read request's bin index is valid over 0..FFT_SIZE-1; anything else is answered with HISTORY_ERROR advanced and the out-of-range flag set in the response metadata. |
+| `31:16` | `N_BANKS` | ROHW | `0x0` | — | Independently addressed memory banks, N_ANT * LANES. Reported because it is the number the SPEC 18 M20K projection is built from. |
+
+### `HISTORY.HISTORY_FRAMES_DONE` — `0xA014`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `31:0` | `VALUE` | ROHW | `0x0` | — | Modulo 2^32. At the SPEC 8 history_clk and the SPEC 11 full-scale frame length this does not wrap inside any run this project makes. |
+
+### `HISTORY.HISTORY_OVERWRITE` — `0xA018`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `31:0` | `COUNT` | ROHW | `0x0` | — | Saturating 32-bit counter. Cleared by HISTORY_CTRL.COUNTER_CLEAR; saturates rather than wraps, because a telemetry counter that wraps reports a small number for a large problem. |
+
+### `HISTORY.HISTORY_COLLISION` — `0xA01C`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `31:0` | `COUNT` | ROHW | `0x0` | — | Saturating 32-bit counter. Cleared by HISTORY_CTRL.COUNTER_CLEAR; saturates rather than wraps, because a telemetry counter that wraps reports a small number for a large problem. Produced in history_clk and crossed back to core_clk with the other two read-side counters as one consistent bundle, so the three can never be read from different snapshots of each other. |
+
+### `HISTORY.HISTORY_ERROR` — `0xA020`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `31:0` | `COUNT` | ROHW | `0x0` | — | Saturating 32-bit counter. Cleared by HISTORY_CTRL.COUNTER_CLEAR; saturates rather than wraps, because a telemetry counter that wraps reports a small number for a large problem. Produced in history_clk and crossed back to core_clk with the other two read-side counters as one consistent bundle, so the three can never be read from different snapshots of each other. |
+
+### `HISTORY.HISTORY_READS` — `0xA024`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `31:0` | `COUNT` | ROHW | `0x0` | — | Saturating 32-bit counter. Cleared by HISTORY_CTRL.COUNTER_CLEAR; saturates rather than wraps, because a telemetry counter that wraps reports a small number for a large problem. Produced in history_clk and crossed back to core_clk with the other two read-side counters as one consistent bundle, so the three can never be read from different snapshots of each other. |
+
+### `HISTORY.HISTORY_WRITE_BEATS` — `0xA028`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `31:0` | `COUNT` | ROHW | `0x0` | — | Saturating 32-bit counter. Cleared by HISTORY_CTRL.COUNTER_CLEAR; saturates rather than wraps, because a telemetry counter that wraps reports a small number for a large problem. |
+
+### `HISTORY.HISTORY_SKEW` — `0xA02C`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `31:0` | `COUNT` | ROHW | `0x0` | — | Saturating 32-bit counter. Cleared by HISTORY_CTRL.COUNTER_CLEAR; saturates rather than wraps, because a telemetry counter that wraps reports a small number for a large problem. |
+
+### `HISTORY.HISTORY_FAULT` — `0xA030`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `0` | `ERROR_SEEN` | W1C | `0x0` | — | At least one read request was out of range. |
+| `1` | `COLLISION_SEEN` | W1C | `0x0` | — | At least one response addressed the slot being written. Unreachable outside fault injection. |
+| `2` | `SKEW_SEEN` | W1C | `0x0` | — | At least one antenna ran a full depth ahead of the frame barrier. |
+| `3` | `FRAMING_SEEN` | W1C | `0x0` | — | At least one write beat carried a start- or end-of-frame flag at the wrong beat index. A frame one beat short shifts every subsequent bin of that antenna for the rest of the run, and nothing downstream can tell a short frame from a correct one, because both are just words in a bank. |
 
 ## `packet` — `0xB000`
 
