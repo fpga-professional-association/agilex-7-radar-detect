@@ -184,14 +184,32 @@ module stream_elastic_buffer #(
       a_occupancy_shadow : assert (int'(count_q) == int'(wr_count_q - rd_count_q))
         else $error("stream_elastic_buffer: occupancy %0d disagrees with writes-minus-reads %0d",
                     count_q, wr_count_q - rd_count_q);
-      a_occupancy_bound : assert (count_q <= OCC_W'(DEPTH))
-        else $error("stream_elastic_buffer: occupancy %0d exceeds DEPTH=%0d", count_q, DEPTH);
       // Simultaneous read and write is legal and is the steady state at full
       // throughput; the pointers must still track the fill level exactly.
       a_ptr_consistent : assert ((int'(count_q) % int'(DEPTH)) ==
                                  ((int'(wr_ptr_q) - int'(rd_ptr_q) + int'(DEPTH)) % int'(DEPTH)))
         else $error("stream_elastic_buffer: pointers (wr=%0d rd=%0d) disagree with occupancy %0d",
                     wr_ptr_q, rd_ptr_q, count_q);
+    end
+  end
+
+  // Occupancy bound. In its OWN generate block, and elaborated only when DEPTH
+  // is not exactly 2**OCC_W - 1 (issue #10).
+  //
+  // At that value the counter's width already bounds it, so the comparison is
+  // constant: the check is VACUOUS rather than wrong, and Verilator 5.020
+  // rejects it (CMPCONST). Left ungated it makes every DEPTH of the form
+  // 2**k - 1 unbuildable — which is how it was found, by a polyphase bank whose
+  // credit arithmetic landed on 15. A generate-if rather than a procedural one
+  // because a procedural `if` with a constant condition still elaborates its
+  // body.
+  if (DEPTH < ((1 << OCC_W) - 1)) begin : g_occ_bound
+    always_ff @(posedge clk) begin
+      if (rst_n) begin
+        a_occupancy_bound : assert (count_q <= OCC_W'(DEPTH))
+          else $error("stream_elastic_buffer: occupancy %0d exceeds DEPTH=%0d",
+                      count_q, DEPTH);
+      end
     end
   end
 

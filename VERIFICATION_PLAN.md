@@ -164,9 +164,75 @@ are attributable to the fault and not to the edit.
 
 Repeat this whenever a check is added or relaxed.
 
+#### `test_pfb_bank` — polyphase FIR bank (SPEC §7.1, issue #10)
+
+Drives `pfb_top`, which holds **two complete banks** differing only in accumulation
+structure (`TREE` and `SYSTOLIC`) and admitting exactly the same beats. Every output beat of
+both is checked against the bit-accurate C++ model (`model/cpp/pfb/pfb_model.hpp`) and, on
+the directed pass, against the independent NumPy expectation committed in
+`model/vectors/pfb_*.vec`. The two structures are checked against each other by
+construction — they scoreboard against the same expectation list.
+
+The SPEC §7.1 verification list, and where each case lives:
+
+| SPEC §7.1 case | Where |
+|---|---|
+| zero input | the directed pass (every set opens with zeros) and the per-pass prologue |
+| complex impulse | the directed pass. With the `ident` set the output **is** the input; with `proto` it is the programmed response tap by tap — the only stimulus that checks coefficient **order** |
+| constant input | the directed pass |
+| single complex sinusoid | the directed pass |
+| random samples | the directed pass plus three backpressure passes, seeded from `+seed` |
+| maximum positive and negative | the directed pass |
+| saturation | the `random` and `max` coefficient sets saturate on most beats; a coverage audit fails the run if both directions were not observed, so the flag checks cannot pass vacuously |
+| coefficient-bank swap | a dedicated pass: two frames, a swap requested **mid-frame**, each frame checked against its own coefficient set, with the whole of the second set written into the spare bank **while the first frame streams** |
+| random output backpressure | three passes at none / light / heavy, all scoreboarded by sequence number, so content invariance under backpressure is checked rather than asserted |
+
+**Matching is by sequence number, not by position.** Every beat carries `seq`, `stream_id`
+and `user`, and every output is matched to its input by `seq`. That is what makes SPEC §7.1's
+"valid metadata must travel with the corresponding samples" a checked property: a result
+delivered against the wrong metadata fails on content, and a metadata field that did not
+travel fails on its own comparison. It is also what lets one scoreboard serve two banks whose
+latencies differ in **kind**.
+
+**The systolic transition window is predicted, not excused.** An adder-tree lane multiplies
+all `TAPS` taps of a beat in the same cycle, so a coefficient swap is instantaneous. A
+systolic cascade samples tap `j`'s coefficient `j` beats late — `y(n) = sum_j h_j(n+j)·x(n-j)`
+— so a swap at beat `B` gives outputs `n` in `[B-TAPS+1, B-1]` a *mixture* of the two sets,
+one tap at a time. The test builds a second expectation set that computes exactly that
+mixture and requires the RTL to match it bit for bit. A cascade that switched cleanly would
+fail just as loudly as one that switched at the wrong beat.
+
+Also covered: the SPEC §9 telemetry counters (saturation events, snapshot coherence, frame
+count) against an independent harness tally, and the C++ model against the NumPy vectors
+before the RTL is compared against the model at all — an oracle that agrees only with itself
+is not an oracle (SPEC §12.4).
+
+**Fault injection.** The oracle was proved to bite by changing `fir_lane`'s coefficient index
+to `(k+1) % TAPS` — a one-token off-by-one in the tap index — and re-running seed 1:
+
+```text
+RESULT: FAIL seed=1 test=test_pfb_bank rtl_vs_model=22028 rtl_vs_vector=1494 ...
+```
+
+with the first failure on the very first directed set. The injection was reverted; the
+transcript is in the issue #10 pull request.
+
 ### 4.2 Metamorphic tests (SPEC §13.2)
 
 TODO — populated by issues #10–#14.
+
+Implemented for the polyphase FIR bank (issue #10), in `test_pfb_bank`, on stimulus held at
+half scale under an L1-scaled filter so that nothing saturates and the relations are not
+vacuous:
+
+| Relation | Statement | Why it is exact |
+|---|---|---|
+| negation | `y(-x) == -y(x)` | round-to-nearest-even is symmetric about zero, so the identity is exact rather than approximate — no tolerance, no epsilon |
+| delay | delaying the input by `D` beats delays the output by `D` beats, value for value | the lane is time-invariant by construction; a history that advanced on clocks rather than samples would break this and nothing else |
+| scaling | doubling the input doubles the exact accumulator, so the output doubles to within the one LSB rounding may move it | the exact half — RTL against the model on the scaled run — is checked separately; this is the oracle-free half |
+
+The pass fails if it compared fewer lane-beats than it drove, so a relation that silently
+found nothing to check is a failure rather than a pass.
 
 ### 4.3 Random testing (SPEC §13.3)
 
@@ -505,6 +571,48 @@ by `a_cmult_p_im_match` (by name, aborting the run) and independently by
 A third RTL implementation maintained solely to be wrong would add maintenance without adding
 a check that the oracle does not already provide. Where issues #5 and #6 needed a violator —
 because a protocol assertion has no oracle to be redundant with — this set has one.
+
+### 5.10 Polyphase FIR assertion set (SPEC §14, issue #10)
+
+Two checker modules, both **instantiated by the RTL** under `` `ifndef SYNTHESIS `` rather
+than bound from a test — the same arrangement `rtl/stream/` uses, and for the same reason:
+the properties then hold wherever the modules are used, in the fast build, in every test,
+with no test-side wiring, and a future integration cannot forget to attach them.
+
+| Property | Module | What it forbids |
+|---|---|---|
+| `a_coeff_swap_at_sof` | `coeff_bank_checker` | the bank **in use** changing on any cycle that is not an admitted start-of-frame beat (SPEC §7.1's "safe frame boundary") |
+| `a_coeff_stable_between` | `coeff_bank_checker` | the active bank's **contents** moving without a bank change — the inactive-bank-write-has-no-effect property, stated on the output rather than on the write logic so it survives a rewrite of the write logic |
+| `a_pfb_out_never_blocked` | `pfb_assertions` | the output elastic buffer refusing a beat; if it ever fires, the fixed-latency interior stalled and a beat was lost |
+| `a_pfb_lane_valid_uniform` | `pfb_assertions` | the lanes disagreeing about when a result is valid |
+| `a_pfb_no_credit_no_admit` | `pfb_assertions` | `s_ready` asserting with an empty credit counter |
+| `a_pfb_credit_bound` | `pfb_assertions` | the credit counter exceeding `OUT_DEPTH` (elaborated only where the counter's own width does not already imply it) |
+| `a_pfb_admit_is_a_transfer` | `pfb_assertions` | a beat entering the datapath without a completed `valid && ready` handshake |
+| `a_fir_mult_valid_uniform` | `fir_lane` (inline) | the per-tap multipliers disagreeing about validity, which would otherwise surface only as a wrong sum |
+| `a_coeff_wr_valid_follows_write` | `reg_block_coeff` (inline) | the coefficient transfer strobe widening into a level, which the crossing would read as a second write |
+
+### 5.11 Proof that the polyphase assertions fire (issue #10)
+
+`a_coeff_swap_at_sof` is the one property in this set that a correct design can never
+provoke, so `rtl/pfb/coeff_bank.sv` carries an `ALLOW_UNSAFE_SWAP` parameter that makes the
+swap take effect the moment the request arrives instead of at the next start of frame.
+`sim/verilator/tops/pfb_top.sv` elaborates exactly one such instance, **outside the
+datapath**, wired to its own ports.
+
+`test_pfb_bank` runs it as its **final** mode, with `Verilated::fatalOnError(false)` and
+stdout captured, and requires that property to fire **by name**. It runs last because
+clearing `fatalOnError` weakens every assertion in the build, so nothing may run after it.
+An unprovoked run is a failure:
+
+```text
+  swap assertion   : 1 expected fire(s)
+  expected failure : %Error: coeff_bank_checker.sv:72: Assertion failed in
+                     TOP.pfb_top.u_unsafe.u_chk.a_coeff_swap_at_sof:
+                     coeff_bank: active bank changed outside a start-of-frame beat
+```
+
+This is the same expected-failure mechanism §5.2 and §5.6 use for the stream and CDC
+checkers.
 
 ## 6. Coverage strategy
 

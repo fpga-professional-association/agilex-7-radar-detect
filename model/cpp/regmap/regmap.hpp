@@ -25,11 +25,11 @@ inline constexpr unsigned kStrobeWidth = 4;
 inline constexpr std::uint32_t kWindowBytes = 0x1000u;
 inline constexpr std::uint32_t kAddrMask = 0xFFFFu;
 inline constexpr unsigned kBlockCount = 9;
-inline constexpr unsigned kBlockCountImplemented = 6;
-inline constexpr unsigned kRegisterCount = 49;
-inline constexpr std::uint32_t kBlockMask = 0x0000009Fu;
+inline constexpr unsigned kBlockCountImplemented = 7;
+inline constexpr unsigned kRegisterCount = 53;
+inline constexpr std::uint32_t kBlockMask = 0x000000BFu;
 inline constexpr unsigned kVersionMajor = 1;
-inline constexpr unsigned kVersionMinor = 1;
+inline constexpr unsigned kVersionMinor = 2;
 inline constexpr unsigned kVersionPatch = 0;
 
 // Per-bit access classification, matching rtl/control/reg_csr_block.sv.
@@ -78,7 +78,7 @@ inline constexpr unsigned ID_MAGIC_MAGIC_LSB = 0;
 inline constexpr unsigned ID_MAGIC_MAGIC_WIDTH = 32;
 inline constexpr std::uint32_t ID_MAGIC_MAGIC_MASK = 0xFFFFFFFFu;
 inline constexpr std::uint32_t ID_VERSION_ADDR = 0x0004u;
-inline constexpr std::uint32_t ID_VERSION_RESET = 0x01010001u;
+inline constexpr std::uint32_t ID_VERSION_RESET = 0x01020001u;
 inline constexpr unsigned ID_VERSION_MAJOR_LSB = 24;
 inline constexpr unsigned ID_VERSION_MAJOR_WIDTH = 8;
 inline constexpr std::uint32_t ID_VERSION_MAJOR_MASK = 0xFF000000u;
@@ -92,7 +92,7 @@ inline constexpr unsigned ID_VERSION_SCHEMA_LSB = 0;
 inline constexpr unsigned ID_VERSION_SCHEMA_WIDTH = 8;
 inline constexpr std::uint32_t ID_VERSION_SCHEMA_MASK = 0x000000FFu;
 inline constexpr std::uint32_t ID_GEOMETRY_ADDR = 0x0008u;
-inline constexpr std::uint32_t ID_GEOMETRY_RESET = 0x10203109u;
+inline constexpr std::uint32_t ID_GEOMETRY_RESET = 0x10203509u;
 inline constexpr unsigned ID_GEOMETRY_N_BLOCKS_LSB = 0;
 inline constexpr unsigned ID_GEOMETRY_N_BLOCKS_WIDTH = 8;
 inline constexpr std::uint32_t ID_GEOMETRY_N_BLOCKS_MASK = 0x000000FFu;
@@ -106,7 +106,7 @@ inline constexpr unsigned ID_GEOMETRY_ADDR_W_LSB = 24;
 inline constexpr unsigned ID_GEOMETRY_ADDR_W_WIDTH = 8;
 inline constexpr std::uint32_t ID_GEOMETRY_ADDR_W_MASK = 0xFF000000u;
 inline constexpr std::uint32_t ID_CAPABILITY_ADDR = 0x000Cu;
-inline constexpr std::uint32_t ID_CAPABILITY_RESET = 0x0000009Fu;
+inline constexpr std::uint32_t ID_CAPABILITY_RESET = 0x000000BFu;
 inline constexpr unsigned ID_CAPABILITY_BLOCK_MASK_LSB = 0;
 inline constexpr unsigned ID_CAPABILITY_BLOCK_MASK_WIDTH = 32;
 inline constexpr std::uint32_t ID_CAPABILITY_BLOCK_MASK_MASK = 0xFFFFFFFFu;
@@ -342,6 +342,59 @@ inline constexpr unsigned SCRATCH_SCRATCH3_RO_HIGH_LSB = 16;
 inline constexpr unsigned SCRATCH_SCRATCH3_RO_HIGH_WIDTH = 16;
 inline constexpr std::uint32_t SCRATCH_SCRATCH3_RO_HIGH_MASK = 0xFFFF0000u;
 
+// coeff: Coefficient and weight programming with double buffering and an active-bank select (SPEC 7.
+inline constexpr std::uint32_t COEFF_BASE = 0x5000u;
+inline constexpr std::uint32_t COEFF_COEFF_CTRL_ADDR = 0x5000u;
+inline constexpr std::uint32_t COEFF_COEFF_CTRL_RESET = 0x00000001u;
+inline constexpr unsigned COEFF_COEFF_CTRL_BANK_SEL_LSB = 0;
+inline constexpr unsigned COEFF_COEFF_CTRL_BANK_SEL_WIDTH = 1;
+inline constexpr std::uint32_t COEFF_COEFF_CTRL_BANK_SEL_MASK = 0x00000001u;
+inline constexpr unsigned COEFF_COEFF_CTRL_SWAP_REQ_LSB = 8;
+inline constexpr unsigned COEFF_COEFF_CTRL_SWAP_REQ_WIDTH = 1;
+inline constexpr std::uint32_t COEFF_COEFF_CTRL_SWAP_REQ_MASK = 0x00000100u;
+inline constexpr unsigned COEFF_COEFF_CTRL_STATUS_CLEAR_LSB = 9;
+inline constexpr unsigned COEFF_COEFF_CTRL_STATUS_CLEAR_WIDTH = 1;
+inline constexpr std::uint32_t COEFF_COEFF_CTRL_STATUS_CLEAR_MASK = 0x00000200u;
+inline constexpr std::uint32_t COEFF_COEFF_ADDR_ADDR = 0x5004u;
+inline constexpr std::uint32_t COEFF_COEFF_ADDR_RESET = 0x80000000u;
+inline constexpr unsigned COEFF_COEFF_ADDR_INDEX_LSB = 0;
+inline constexpr unsigned COEFF_COEFF_ADDR_INDEX_WIDTH = 16;
+inline constexpr std::uint32_t COEFF_COEFF_ADDR_INDEX_MASK = 0x0000FFFFu;
+inline constexpr unsigned COEFF_COEFF_ADDR_AUTO_INC_LSB = 31;
+inline constexpr unsigned COEFF_COEFF_ADDR_AUTO_INC_WIDTH = 1;
+inline constexpr std::uint32_t COEFF_COEFF_ADDR_AUTO_INC_MASK = 0x80000000u;
+inline constexpr std::uint32_t COEFF_COEFF_DATA_ADDR = 0x5008u;
+inline constexpr std::uint32_t COEFF_COEFF_DATA_RESET = 0x00000000u;
+inline constexpr unsigned COEFF_COEFF_DATA_RE_LSB = 0;
+inline constexpr unsigned COEFF_COEFF_DATA_RE_WIDTH = 16;
+inline constexpr std::uint32_t COEFF_COEFF_DATA_RE_MASK = 0x0000FFFFu;
+inline constexpr unsigned COEFF_COEFF_DATA_IM_LSB = 16;
+inline constexpr unsigned COEFF_COEFF_DATA_IM_WIDTH = 16;
+inline constexpr std::uint32_t COEFF_COEFF_DATA_IM_MASK = 0xFFFF0000u;
+inline constexpr std::uint32_t COEFF_COEFF_STATUS_ADDR = 0x500Cu;
+inline constexpr std::uint32_t COEFF_COEFF_STATUS_RESET = 0x00000000u;
+inline constexpr unsigned COEFF_COEFF_STATUS_ACTIVE_BANK_LSB = 0;
+inline constexpr unsigned COEFF_COEFF_STATUS_ACTIVE_BANK_WIDTH = 1;
+inline constexpr std::uint32_t COEFF_COEFF_STATUS_ACTIVE_BANK_MASK = 0x00000001u;
+inline constexpr unsigned COEFF_COEFF_STATUS_SWAP_PENDING_LSB = 1;
+inline constexpr unsigned COEFF_COEFF_STATUS_SWAP_PENDING_WIDTH = 1;
+inline constexpr std::uint32_t COEFF_COEFF_STATUS_SWAP_PENDING_MASK = 0x00000002u;
+inline constexpr unsigned COEFF_COEFF_STATUS_WR_BUSY_LSB = 2;
+inline constexpr unsigned COEFF_COEFF_STATUS_WR_BUSY_WIDTH = 1;
+inline constexpr std::uint32_t COEFF_COEFF_STATUS_WR_BUSY_MASK = 0x00000004u;
+inline constexpr unsigned COEFF_COEFF_STATUS_SWAP_BUSY_LSB = 3;
+inline constexpr unsigned COEFF_COEFF_STATUS_SWAP_BUSY_WIDTH = 1;
+inline constexpr std::uint32_t COEFF_COEFF_STATUS_SWAP_BUSY_MASK = 0x00000008u;
+inline constexpr unsigned COEFF_COEFF_STATUS_WR_REJECT_LSB = 8;
+inline constexpr unsigned COEFF_COEFF_STATUS_WR_REJECT_WIDTH = 1;
+inline constexpr std::uint32_t COEFF_COEFF_STATUS_WR_REJECT_MASK = 0x00000100u;
+inline constexpr unsigned COEFF_COEFF_STATUS_SWAP_OVERRUN_LSB = 9;
+inline constexpr unsigned COEFF_COEFF_STATUS_SWAP_OVERRUN_WIDTH = 1;
+inline constexpr std::uint32_t COEFF_COEFF_STATUS_SWAP_OVERRUN_MASK = 0x00000200u;
+inline constexpr unsigned COEFF_COEFF_STATUS_N_COEFF_LSB = 16;
+inline constexpr unsigned COEFF_COEFF_STATUS_N_COEFF_WIDTH = 16;
+inline constexpr std::uint32_t COEFF_COEFF_STATUS_N_COEFF_MASK = 0xFFFF0000u;
+
 // counters: Performance and health telemetry for one observed interface (rtl/common/telemetry_block.
 inline constexpr std::uint32_t COUNTERS_BASE = 0x7000u;
 inline constexpr std::uint32_t COUNTERS_TELEM_CTRL_ADDR = 0x7000u;
@@ -523,8 +576,6 @@ inline constexpr unsigned COUNTERS_WRAP_STATUS_SNAPSHOT_ID_WIDTH = 1;
 inline constexpr std::uint32_t COUNTERS_WRAP_STATUS_SNAPSHOT_ID_MASK = 0x00000100u;
 
 // ---- planned windows (declared, not implemented in this build) ----------
-// coeff 0x5000: planned by #10, #11, #12, #16. Accesses return error=1.
-inline constexpr std::uint32_t COEFF_BASE = 0x5000u;
 // cfar 0x6000: planned by #14, #16. Accesses return error=1.
 inline constexpr std::uint32_t CFAR_BASE = 0x6000u;
 // debug 0x8000: planned by #19. Accesses return error=1.
@@ -537,17 +588,17 @@ inline constexpr BlockInfo kBlocks[9] = {
     {"ctrl", 0x2000u, 0x1000u, true, 4},
     {"fault", 0x3000u, 0x1000u, true, 4},
     {"scratch", 0x4000u, 0x1000u, true, 4},
-    {"coeff", 0x5000u, 0x1000u, false, 0},
+    {"coeff", 0x5000u, 0x1000u, true, 4},
     {"cfar", 0x6000u, 0x1000u, false, 0},
     {"counters", 0x7000u, 0x1000u, true, 21},
     {"debug", 0x8000u, 0x1000u, false, 0},
 };
 
-inline constexpr RegInfo kRegisters[49] = {
+inline constexpr RegInfo kRegisters[53] = {
     {"id", "MAGIC", 0x0000u, 0, 0, Access::kRo, 0x52414441u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u},
-    {"id", "VERSION", 0x0004u, 0, 1, Access::kRo, 0x01010001u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u},
-    {"id", "GEOMETRY", 0x0008u, 0, 2, Access::kRo, 0x10203109u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u},
-    {"id", "CAPABILITY", 0x000Cu, 0, 3, Access::kRo, 0x0000009Fu, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u},
+    {"id", "VERSION", 0x0004u, 0, 1, Access::kRo, 0x01020001u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u},
+    {"id", "GEOMETRY", 0x0008u, 0, 2, Access::kRo, 0x10203509u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u},
+    {"id", "CAPABILITY", 0x000Cu, 0, 3, Access::kRo, 0x000000BFu, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u},
     {"build_params", "N_ANTENNAS", 0x1000u, 1, 0, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
     {"build_params", "SAMPLES_PER_CYCLE", 0x1004u, 1, 1, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
     {"build_params", "FFT_SIZE", 0x1008u, 1, 2, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
@@ -572,40 +623,44 @@ inline constexpr RegInfo kRegisters[49] = {
     {"scratch", "SCRATCH1", 0x4004u, 4, 1, Access::kRw, 0xFFFFFFFFu, 0xFFFFFFFFu, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu},
     {"scratch", "SCRATCH2", 0x4008u, 4, 2, Access::kRw, 0xA5A5A5A5u, 0xFFFFFFFFu, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu},
     {"scratch", "SCRATCH3", 0x400Cu, 4, 3, Access::kMixed, 0xDEAD5A5Au, 0x0000FFFFu, 0x00000000u, 0x00000000u, 0x00000000u, 0x0000FFFFu},
-    {"counters", "TELEM_CTRL", 0x7000u, 5, 0, Access::kMixed, 0x00000003u, 0x00000007u, 0x00000000u, 0x00000700u, 0x00000000u, 0x00000707u},
-    {"counters", "TELEM_STATUS", 0x7004u, 5, 1, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x0FFFFFFFu, 0x00000000u},
-    {"counters", "SNAPSHOT_ID", 0x7008u, 5, 2, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
-    {"counters", "BEAT_COUNT_LO", 0x700Cu, 5, 3, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
-    {"counters", "BEAT_COUNT_HI", 0x7010u, 5, 4, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
-    {"counters", "STALL_COUNT_LO", 0x7014u, 5, 5, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
-    {"counters", "STALL_COUNT_HI", 0x7018u, 5, 6, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
-    {"counters", "IDLE_COUNT", 0x701Cu, 5, 7, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
-    {"counters", "FRAME_COUNT", 0x7020u, 5, 8, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
-    {"counters", "FRAME_START_COUNT", 0x7024u, 5, 9, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
-    {"counters", "FIFO_HIGH_WATER", 0x7028u, 5, 10, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
-    {"counters", "OVERFLOW_COUNT", 0x702Cu, 5, 11, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
-    {"counters", "SATURATE_COUNT", 0x7030u, 5, 12, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
-    {"counters", "CDC_ERROR_COUNT", 0x7034u, 5, 13, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
-    {"counters", "SEQ_GAP_COUNT", 0x7038u, 5, 14, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
-    {"counters", "SEQ_DUP_COUNT", 0x703Cu, 5, 15, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
-    {"counters", "SEQ_REORDER_COUNT", 0x7040u, 5, 16, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
-    {"counters", "SEQ_LOST_BEATS", 0x7044u, 5, 17, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
-    {"counters", "SEQ_UNTRACKED_COUNT", 0x7048u, 5, 18, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
-    {"counters", "SEQ_STATUS", 0x704Cu, 5, 19, Access::kMixed, 0x00000000u, 0x00000000u, 0x0000000Fu, 0x00000000u, 0x00000F00u, 0x0000000Fu},
-    {"counters", "WRAP_STATUS", 0x7050u, 5, 20, Access::kW1c, 0x00000000u, 0x00000000u, 0x000001FFu, 0x00000000u, 0x00000000u, 0x000001FFu},
+    {"coeff", "COEFF_CTRL", 0x5000u, 5, 0, Access::kMixed, 0x00000001u, 0x00000001u, 0x00000000u, 0x00000300u, 0x00000000u, 0x00000301u},
+    {"coeff", "COEFF_ADDR", 0x5004u, 5, 1, Access::kRw, 0x80000000u, 0x8000FFFFu, 0x00000000u, 0x00000000u, 0x00000000u, 0x8000FFFFu},
+    {"coeff", "COEFF_DATA", 0x5008u, 5, 2, Access::kRw, 0x00000000u, 0xFFFFFFFFu, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu},
+    {"coeff", "COEFF_STATUS", 0x500Cu, 5, 3, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFF030Fu, 0x00000000u},
+    {"counters", "TELEM_CTRL", 0x7000u, 6, 0, Access::kMixed, 0x00000003u, 0x00000007u, 0x00000000u, 0x00000700u, 0x00000000u, 0x00000707u},
+    {"counters", "TELEM_STATUS", 0x7004u, 6, 1, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x0FFFFFFFu, 0x00000000u},
+    {"counters", "SNAPSHOT_ID", 0x7008u, 6, 2, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"counters", "BEAT_COUNT_LO", 0x700Cu, 6, 3, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"counters", "BEAT_COUNT_HI", 0x7010u, 6, 4, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"counters", "STALL_COUNT_LO", 0x7014u, 6, 5, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"counters", "STALL_COUNT_HI", 0x7018u, 6, 6, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"counters", "IDLE_COUNT", 0x701Cu, 6, 7, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"counters", "FRAME_COUNT", 0x7020u, 6, 8, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"counters", "FRAME_START_COUNT", 0x7024u, 6, 9, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"counters", "FIFO_HIGH_WATER", 0x7028u, 6, 10, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"counters", "OVERFLOW_COUNT", 0x702Cu, 6, 11, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"counters", "SATURATE_COUNT", 0x7030u, 6, 12, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"counters", "CDC_ERROR_COUNT", 0x7034u, 6, 13, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"counters", "SEQ_GAP_COUNT", 0x7038u, 6, 14, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"counters", "SEQ_DUP_COUNT", 0x703Cu, 6, 15, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"counters", "SEQ_REORDER_COUNT", 0x7040u, 6, 16, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"counters", "SEQ_LOST_BEATS", 0x7044u, 6, 17, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"counters", "SEQ_UNTRACKED_COUNT", 0x7048u, 6, 18, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"counters", "SEQ_STATUS", 0x704Cu, 6, 19, Access::kMixed, 0x00000000u, 0x00000000u, 0x0000000Fu, 0x00000000u, 0x00000F00u, 0x0000000Fu},
+    {"counters", "WRAP_STATUS", 0x7050u, 6, 20, Access::kW1c, 0x00000000u, 0x00000000u, 0x000001FFu, 0x00000000u, 0x00000000u, 0x000001FFu},
 };
 
-inline constexpr FieldInfo kFields[112] = {
+inline constexpr FieldInfo kFields[126] = {
     {"id", "MAGIC", "MAGIC", 0, 32, 0xFFFFFFFFu, Access::kRo, 0x52414441u},
     {"id", "VERSION", "MAJOR", 24, 8, 0xFF000000u, Access::kRo, 0x00000001u},
-    {"id", "VERSION", "MINOR", 16, 8, 0x00FF0000u, Access::kRo, 0x00000001u},
+    {"id", "VERSION", "MINOR", 16, 8, 0x00FF0000u, Access::kRo, 0x00000002u},
     {"id", "VERSION", "PATCH", 8, 8, 0x0000FF00u, Access::kRo, 0x00000000u},
     {"id", "VERSION", "SCHEMA", 0, 8, 0x000000FFu, Access::kRo, 0x00000001u},
     {"id", "GEOMETRY", "N_BLOCKS", 0, 8, 0x000000FFu, Access::kRo, 0x00000009u},
-    {"id", "GEOMETRY", "N_REGS", 8, 8, 0x0000FF00u, Access::kRo, 0x00000031u},
+    {"id", "GEOMETRY", "N_REGS", 8, 8, 0x0000FF00u, Access::kRo, 0x00000035u},
     {"id", "GEOMETRY", "DATA_W", 16, 8, 0x00FF0000u, Access::kRo, 0x00000020u},
     {"id", "GEOMETRY", "ADDR_W", 24, 8, 0xFF000000u, Access::kRo, 0x00000010u},
-    {"id", "CAPABILITY", "BLOCK_MASK", 0, 32, 0xFFFFFFFFu, Access::kRo, 0x0000009Fu},
+    {"id", "CAPABILITY", "BLOCK_MASK", 0, 32, 0xFFFFFFFFu, Access::kRo, 0x000000BFu},
     {"build_params", "N_ANTENNAS", "VALUE", 0, 32, 0xFFFFFFFFu, Access::kRoHw, 0x00000000u},
     {"build_params", "SAMPLES_PER_CYCLE", "VALUE", 0, 32, 0xFFFFFFFFu, Access::kRoHw, 0x00000000u},
     {"build_params", "FFT_SIZE", "VALUE", 0, 32, 0xFFFFFFFFu, Access::kRoHw, 0x00000000u},
@@ -663,6 +718,20 @@ inline constexpr FieldInfo kFields[112] = {
     {"scratch", "SCRATCH2", "VALUE", 0, 32, 0xFFFFFFFFu, Access::kRw, 0xA5A5A5A5u},
     {"scratch", "SCRATCH3", "RW_LOW", 0, 16, 0x0000FFFFu, Access::kRw, 0x00005A5Au},
     {"scratch", "SCRATCH3", "RO_HIGH", 16, 16, 0xFFFF0000u, Access::kRo, 0x0000DEADu},
+    {"coeff", "COEFF_CTRL", "BANK_SEL", 0, 1, 0x00000001u, Access::kRw, 0x00000001u},
+    {"coeff", "COEFF_CTRL", "SWAP_REQ", 8, 1, 0x00000100u, Access::kRwp, 0x00000000u},
+    {"coeff", "COEFF_CTRL", "STATUS_CLEAR", 9, 1, 0x00000200u, Access::kRwp, 0x00000000u},
+    {"coeff", "COEFF_ADDR", "INDEX", 0, 16, 0x0000FFFFu, Access::kRw, 0x00000000u},
+    {"coeff", "COEFF_ADDR", "AUTO_INC", 31, 1, 0x80000000u, Access::kRw, 0x00000001u},
+    {"coeff", "COEFF_DATA", "RE", 0, 16, 0x0000FFFFu, Access::kRw, 0x00000000u},
+    {"coeff", "COEFF_DATA", "IM", 16, 16, 0xFFFF0000u, Access::kRw, 0x00000000u},
+    {"coeff", "COEFF_STATUS", "ACTIVE_BANK", 0, 1, 0x00000001u, Access::kRoHw, 0x00000000u},
+    {"coeff", "COEFF_STATUS", "SWAP_PENDING", 1, 1, 0x00000002u, Access::kRoHw, 0x00000000u},
+    {"coeff", "COEFF_STATUS", "WR_BUSY", 2, 1, 0x00000004u, Access::kRoHw, 0x00000000u},
+    {"coeff", "COEFF_STATUS", "SWAP_BUSY", 3, 1, 0x00000008u, Access::kRoHw, 0x00000000u},
+    {"coeff", "COEFF_STATUS", "WR_REJECT", 8, 1, 0x00000100u, Access::kRoHw, 0x00000000u},
+    {"coeff", "COEFF_STATUS", "SWAP_OVERRUN", 9, 1, 0x00000200u, Access::kRoHw, 0x00000000u},
+    {"coeff", "COEFF_STATUS", "N_COEFF", 16, 16, 0xFFFF0000u, Access::kRoHw, 0x00000000u},
     {"counters", "TELEM_CTRL", "ENABLE", 0, 1, 0x00000001u, Access::kRw, 0x00000001u},
     {"counters", "TELEM_CTRL", "SEQ_ENABLE", 1, 1, 0x00000002u, Access::kRw, 0x00000001u},
     {"counters", "TELEM_CTRL", "SEQ_SOF_RESYNC", 2, 1, 0x00000004u, Access::kRw, 0x00000000u},

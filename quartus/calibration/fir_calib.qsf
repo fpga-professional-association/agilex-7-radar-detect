@@ -1,0 +1,88 @@
+# ---------------------------------------------------------------------------
+# fir_calib.qsf — SPEC 18 calibration project settings for one complex FIR lane
+# (issue #10, SPEC.md 18 item 2).
+#
+# SAME DEVICE as the benchmark project (quartus/project/agilex7_wideband.qsf)
+# and as the complex-multiplier calibration: AGMF039R47B1E1VC, same speed grade,
+# same junction-temperature range. A calibration number measured on a different
+# device or operating range is not calibration data for this benchmark, so every
+# calibration qsf states the device identically and the exported record repeats
+# it for every point.
+#
+# HAND MAINTAINED. quartus/scripts/calibrate.tcl lets Quartus export the
+# in-memory assignment database over this file — it has to, because that export
+# is how the swept `set_parameter` values reach quartus_syn — and then restores
+# these exact bytes afterwards. Do not open the project in the GUI and save it.
+#
+# All paths are relative to this directory (quartus/calibration/).
+# ---------------------------------------------------------------------------
+
+# --- device (SPEC.md 2, 15) -------------------------------------------------
+set_global_assignment -name FAMILY "Agilex 7"
+set_global_assignment -name DEVICE AGMF039R47B1E1VC
+set_global_assignment -name TOP_LEVEL_ENTITY fir_wrap
+
+set_global_assignment -name MIN_CORE_JUNCTION_TEMP 0
+set_global_assignment -name MAX_CORE_JUNCTION_TEMP 100
+
+# --- project output ---------------------------------------------------------
+set_global_assignment -name PROJECT_OUTPUT_DIRECTORY output_files
+set_global_assignment -name NUM_PARALLEL_PROCESSORS ALL
+
+# --- simulation-only code exclusion -----------------------------------------
+# Every module below guards its elaboration checks, its shadow pipelines and its
+# SPEC 14 checker instances with `ifndef SYNTHESIS. Quartus does not define
+# SYNTHESIS on its own, so the project defines it explicitly rather than relying
+# on the tool silently ignoring an `initial` block or, worse, elaborating a
+# checker module that is not even in this source list. Without this line the
+# compile does not build at all.
+set_global_assignment -name VERILOG_MACRO "SYNTHESIS=1"
+
+# --- design source ----------------------------------------------------------
+# Order matters: packages first. Every file is the SAME FILE the simulation
+# builds and lints — there is no synthesis-only copy, which is the property that
+# makes these numbers apply to the verified design.
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/packages/fxp_pkg.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/packages/cdc_pkg.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/packages/pfb_pkg.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/cdc/cdc_sync2.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/cdc/cdc_pulse.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/cdc/cdc_handshake.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/common/complex_multiplier.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/pfb/delay_line.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/pfb/coeff_bank.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/pfb/fir_lane.sv
+set_global_assignment -name SYSTEMVERILOG_FILE fir_wrap.sv
+
+# --- timing constraints -----------------------------------------------------
+set_global_assignment -name SDC_FILE fir_calib.sdc
+
+# ---------------------------------------------------------------------------
+# Virtual pins
+# ---------------------------------------------------------------------------
+# Same rationale as the benchmark and complex-multiplier projects: this is a
+# FABRIC measurement, not a pinout exercise. Every data and handshake port is a
+# virtual pin so the Fitter places no I/O buffers and the register-to-register
+# paths inside the wrapper are what gets measured. clk and rst_n stay real pins
+# so they get genuine global networks — a kernel measured on a local clock tree
+# would report an Fmax the real design can never reproduce.
+set_instance_assignment -name VIRTUAL_PIN ON -to valid_in
+set_instance_assignment -name VIRTUAL_PIN ON -to "x_re[*]"
+set_instance_assignment -name VIRTUAL_PIN ON -to "x_im[*]"
+set_instance_assignment -name VIRTUAL_PIN ON -to sof
+
+set_instance_assignment -name VIRTUAL_PIN ON -to valid_out
+set_instance_assignment -name VIRTUAL_PIN ON -to "y_re[*]"
+set_instance_assignment -name VIRTUAL_PIN ON -to "y_im[*]"
+set_instance_assignment -name VIRTUAL_PIN ON -to "flags_re[*]"
+set_instance_assignment -name VIRTUAL_PIN ON -to "flags_im[*]"
+set_instance_assignment -name VIRTUAL_PIN ON -to ovf
+
+set_instance_assignment -name VIRTUAL_PIN ON -to cfg_wr_valid
+set_instance_assignment -name VIRTUAL_PIN ON -to cfg_wr_ready
+set_instance_assignment -name VIRTUAL_PIN ON -to cfg_wr_bank
+set_instance_assignment -name VIRTUAL_PIN ON -to "cfg_wr_addr[*]"
+set_instance_assignment -name VIRTUAL_PIN ON -to "cfg_wr_data[*]"
+set_instance_assignment -name VIRTUAL_PIN ON -to cfg_swap_req
+set_instance_assignment -name VIRTUAL_PIN ON -to cfg_swap_busy
+set_instance_assignment -name VIRTUAL_PIN ON -to cfg_status

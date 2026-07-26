@@ -7,10 +7,10 @@ for the register and control plane ([SPEC.md](../SPEC.md) §9, issue #7). Edit t
 and re-run the generator; `make regmap-check` fails the build on any hand edit here or
 on a source change that was never regenerated.
 
-- Register-map version: **1.1.0** (schema 1)
+- Register-map version: **1.2.0** (schema 1)
 - Interface: 32-bit data, 16-bit byte address, 4 byte enables
 - Window per block: `0x1000` bytes
-- Blocks declared: 9 (6 implemented), registers implemented: 49
+- Blocks declared: 9 (7 implemented), registers implemented: 53
 
 ## Access types
 
@@ -34,7 +34,7 @@ the non-writable bits (`error=0`).
 | `ctrl` | `0x2000`–`0x2FFF` | 4 | implemented | Per-block enable and reset |
 | `fault` | `0x3000`–`0x3FFF` | 4 | implemented | Fault injection |
 | `scratch` | `0x4000`–`0x4FFF` | 4 | implemented | Snapshot and debug control |
-| `coeff` | `0x5000`–`0x5FFF` | 0 | planned (#10, #11, #12, #16) | Coefficient and weight programming; Active bank selection |
+| `coeff` | `0x5000`–`0x5FFF` | 4 | implemented | Coefficient and weight programming; Active bank selection |
 | `cfar` | `0x6000`–`0x6FFF` | 0 | planned (#14, #16) | CFAR settings; Integration settings |
 | `counters` | `0x7000`–`0x7FFF` | 21 | implemented | Stream counters; Stall counters; FIFO high-water marks; Overflow and saturation counts; Frame counts; Sequence errors; CDC errors; Snapshot and debug control |
 | `debug` | `0x8000`–`0x8FFF` | 0 | planned (#19) | Snapshot and debug control |
@@ -52,9 +52,9 @@ Fixed identification of the control plane itself. Every field is a constant fold
 | Offset | Address | Register | Access | Reset | Description |
 |---|---|---|---|---|---|
 | `0x000` | `0x0000` | `MAGIC` | RO | `0x52414441` | Constant marker. Reading 0x52414441 ('RADA') at block base proves a control plane is present and the address decode is alive. |
-| `0x004` | `0x0004` | `VERSION` | RO | `0x01010001` | Register-map version, from regmap_version in the source of truth. Static build data, deliberately not a git describe: the same source tree must produce the same register contents on any machine, and a VCS-derived value would make the generated artefacts depend on checkout state. |
-| `0x008` | `0x0008` | `GEOMETRY` | RO | `0x10203109` | Shape of the register plane, so a discovery walk needs no compiled-in constants. |
-| `0x00C` | `0x000C` | `CAPABILITY` | RO | `0x0000009F` | One bit per declared block, set when that block is implemented in this build. Bit i is block i in declaration order; a planned block reads 0 and its window returns error. |
+| `0x004` | `0x0004` | `VERSION` | RO | `0x01020001` | Register-map version, from regmap_version in the source of truth. Static build data, deliberately not a git describe: the same source tree must produce the same register contents on any machine, and a VCS-derived value would make the generated artefacts depend on checkout state. |
+| `0x008` | `0x0008` | `GEOMETRY` | RO | `0x10203509` | Shape of the register plane, so a discovery walk needs no compiled-in constants. |
+| `0x00C` | `0x000C` | `CAPABILITY` | RO | `0x000000BF` | One bit per declared block, set when that block is implemented in this build. Bit i is block i in declaration order; a planned block reads 0 and its window returns error. |
 
 ### `ID.MAGIC` — `0x0000`
 
@@ -67,7 +67,7 @@ Fixed identification of the control plane itself. Every field is a constant fold
 | Bits | Field | Access | Reset | Source | Description |
 |---|---|---|---|---|---|
 | `31:24` | `MAJOR` | RO | `0x1` | — | Incompatible layout change. |
-| `23:16` | `MINOR` | RO | `0x1` | — | Registers or fields added. |
+| `23:16` | `MINOR` | RO | `0x2` | — | Registers or fields added. |
 | `15:8` | `PATCH` | RO | `0x0` | — | Documentation-only change. |
 | `7:0` | `SCHEMA` | RO | `0x1` | — | Source-of-truth schema version. |
 
@@ -76,7 +76,7 @@ Fixed identification of the control plane itself. Every field is a constant fold
 | Bits | Field | Access | Reset | Source | Description |
 |---|---|---|---|---|---|
 | `7:0` | `N_BLOCKS` | RO | `0x9` | — | Declared blocks, implemented and planned. |
-| `15:8` | `N_REGS` | RO | `0x31` | — | Implemented registers across all blocks. |
+| `15:8` | `N_REGS` | RO | `0x35` | — | Implemented registers across all blocks. |
 | `23:16` | `DATA_W` | RO | `0x20` | — | Register data width in bits. |
 | `31:24` | `ADDR_W` | RO | `0x10` | — | Register address width in bits. |
 
@@ -84,7 +84,7 @@ Fixed identification of the control plane itself. Every field is a constant fold
 
 | Bits | Field | Access | Reset | Source | Description |
 |---|---|---|---|---|---|
-| `31:0` | `BLOCK_MASK` | RO | `0x9F` | — | Implemented-block bitmap. |
+| `31:0` | `BLOCK_MASK` | RO | `0xBF` | — | Implemented-block bitmap. |
 
 ## `build_params` — `0x1000`
 
@@ -317,10 +317,48 @@ Software scratch registers with no hardware effect. They exist to test the fabri
 
 ## `coeff` — `0x5000`
 
-PLANNED. Coefficient and beam-weight programming with double buffering and an active-bank select. Declared here so the window is reserved and the address space cannot be reassigned by a later issue; unimplemented until its owning issues land, and every access to this window returns error=1 today.
+Coefficient and weight programming with double buffering and an active-bank select (SPEC 7.1, SPEC 9). Implemented for the polyphase FIR bank by issue #10; the FFT twiddles (#11), the beam weights (#12) and the per-antenna fan-out (#16) extend it inside the same reserved window. PROGRAMMING SEQUENCE: set COEFF_CTRL.BANK_SEL to the SPARE bank, write COEFF_ADDR once, then write COEFF_DATA per coefficient (the DATA write is what issues the transfer; AUTO_INC advances the index), then write COEFF_CTRL.SWAP_REQ. The swap takes effect at the next start-of-frame beat and not before, which is what makes a frame filtered by exactly one coefficient set. A write aimed at the bank that is currently ACTIVE is refused and raises COEFF_STATUS.WR_REJECT; it is never merged and never deferred. Every field here crosses a clock domain, because the register plane runs on cfg_clk and the bank on core_clk (rtl/pfb/coeff_bank.sv, issue #6 primitives): writes through a four-phase handshake, SWAP_REQ through a pulse synchronizer, and each status bit through its own flip-flop synchronizer. WR_BUSY and SWAP_BUSY are therefore flow control, not decoration.
 
-**Planned, not implemented in this build** (owning issues: #10, #11, #12, #16).
-The window is reserved and every access to it returns `error=1`.
+| Offset | Address | Register | Access | Reset | Description |
+|---|---|---|---|---|---|
+| `0x000` | `0x5000` | `COEFF_CTRL` | MIXED | `0x00000001` | Bank selection and the swap request. BANK_SEL names the bank a COEFF_DATA write targets; it is NOT the active bank, which changes only at a frame boundary and is reported by COEFF_STATUS.ACTIVE_BANK. |
+| `0x004` | `0x5004` | `COEFF_ADDR` | RW | `0x80000000` | Coefficient index within the selected bank, phase-major and tap-minor: index = phase*PFB_TAPS + tap (pfb_pkg::pfb_coeff_index). That is the order scripts/generate_coefficients.py writes its files in, so a bank is loaded by counting up from zero. |
+| `0x008` | `0x5008` | `COEFF_DATA` | RW | `0x00000000` | One complex Q1.15 coefficient, packed {IM, RE} with the real part in the low half - the same layout as fxp_pkg::fxp_complex_t and the coefficient files. WRITING THIS REGISTER ISSUES THE TRANSFER; COEFF_CTRL and COEFF_ADDR only set it up. Refused while COEFF_STATUS.WR_BUSY is set. Reads return the last value written, not the bank contents: the bank lives in the core clock domain and a read-back path would be a second crossing for no diagnostic gain the coefficient files do not already provide. |
+| `0x00C` | `0x500C` | `COEFF_STATUS` | ROHW | `0x00000000` | Hardware-driven status for the coefficient plane. Every bit is synchronised out of the core clock domain, so it is a snapshot of a free-running block rather than a handshake - except the two BUSY bits, which are exactly the flow control. |
+
+### `COEFF.COEFF_CTRL` — `0x5000`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `0` | `BANK_SEL` | RW | `0x1` | — | Target bank for coefficient writes. Resets to 1 because the active bank resets to 0, so the reset state is already a legal programming state and software can write without reading anything first. |
+| `8` | `SWAP_REQ` | RWP | `0x0` | — | Writing 1 requests a bank swap. The swap happens at the next start-of-frame beat, not here; poll COEFF_STATUS.SWAP_PENDING to watch it retire. Refused, and flagged in SWAP_OVERRUN, while SWAP_BUSY is set. |
+| `9` | `STATUS_CLEAR` | RWP | `0x0` | — | Writing 1 clears the sticky COEFF_STATUS.WR_REJECT and COEFF_STATUS.SWAP_OVERRUN bits. |
+
+### `COEFF.COEFF_ADDR` — `0x5004`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `15:0` | `INDEX` | RW | `0x0` | — | Coefficient index. 16 bits covers 8 phases x 16 taps across 16 antennas with room to spare; an index beyond the elaborated bank is dropped and raises WR_REJECT. |
+| `31` | `AUTO_INC` | RW | `0x1` | — | When 1, INDEX advances by one after every accepted COEFF_DATA write, so a whole bank is loaded by writing COEFF_ADDR once and COEFF_DATA repeatedly. |
+
+### `COEFF.COEFF_DATA` — `0x5008`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `15:0` | `RE` | RW | `0x0` | — | Real part, Q1.15. |
+| `31:16` | `IM` | RW | `0x0` | — | Imaginary part, Q1.15. |
+
+### `COEFF.COEFF_STATUS` — `0x500C`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `0` | `ACTIVE_BANK` | ROHW | `0x0` | — | The bank the datapath is filtering with. Changes only on a start-of-frame beat (SPEC 7.1), which the RTL asserts as a_coeff_swap_at_sof. |
+| `1` | `SWAP_PENDING` | ROHW | `0x0` | — | A swap has been requested and is waiting for the next frame boundary. |
+| `2` | `WR_BUSY` | ROHW | `0x0` | — | A coefficient write is in flight across the clock-domain crossing. A COEFF_DATA write issued while this is set is refused. |
+| `3` | `SWAP_BUSY` | ROHW | `0x0` | — | A swap request is in flight across the crossing. A second SWAP_REQ while this is set is refused and sets SWAP_OVERRUN. |
+| `8` | `WR_REJECT` | ROHW | `0x0` | — | Sticky: at least one coefficient write since the last completed swap targeted the ACTIVE bank, or an index outside the elaborated bank, and was dropped. Cleared by COEFF_CTRL.STATUS_CLEAR. |
+| `9` | `SWAP_OVERRUN` | ROHW | `0x0` | — | Sticky: a swap request was refused because one was already in flight. Cleared by COEFF_CTRL.STATUS_CLEAR. |
+| `31:16` | `N_COEFF` | ROHW | `0x0` | — | Coefficients per bank in the elaborated design (SAMPLES_PER_CYCLE * PFB_TAPS), reported by hardware so software can size a load without a build-time constant. |
 
 ## `cfar` — `0x6000`
 

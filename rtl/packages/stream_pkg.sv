@@ -78,12 +78,20 @@ package stream_pkg;
   // benchmark_sim_top, which is what makes the bound testable rather than
   // assumed.
   //
-  // Sized from SPEC 11 full_agmf039 with headroom: DATA carries one complex
-  // sample pair (2 x SAMPLE_W = 32) today and a wider beat later; STREAM_ID
-  // covers 256 concurrent streams against 16 antennas at full scale; SEQ at 32
-  // bits does not wrap inside any test this project runs (SPEC 13.4's long
-  // stress test is bounded well below 4 G beats).
-  localparam int unsigned STREAM_MAX_DATA_W = 64;
+  // Sized from SPEC 11 full_agmf039 with headroom: STREAM_ID covers 256
+  // concurrent streams against 16 antennas at full scale; SEQ at 32 bits does
+  // not wrap inside any test this project runs (SPEC 13.4's long stress test is
+  // bounded well below 4 G beats).
+  //
+  // DATA is sized for the SPEC 3 nominal BEAT, not for one sample: a beat
+  // carries SAMPLES_PER_CYCLE complex samples, which is 8 x 2 x SAMPLE_W = 256
+  // bits in the full_agmf039 configuration. The polyphase bank (issue #10) is
+  // the first block whose interface is actually that wide; the previous bound of
+  // 64 covered a single complex sample and matched no SPEC 11 configuration.
+  // Raising it changes no instance's payload width — every instance's width
+  // comes from its own stream_geom_t — it only widens the working type the
+  // pack/unpack functions compute in.
+  localparam int unsigned STREAM_MAX_DATA_W = 256;
   localparam int unsigned STREAM_MAX_ID_W   = 8;
   localparam int unsigned STREAM_MAX_SEQ_W  = 32;
   localparam int unsigned STREAM_MAX_USER_W = 8;

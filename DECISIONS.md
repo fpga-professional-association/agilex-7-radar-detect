@@ -1359,3 +1359,211 @@ whose coefficients push an operand past the native 18x19 multiplier — a wider 
 format, or a complex multiply feeding a 27x27 mode — changes which side of the trade wins,
 and the sweep that answers that question is one matrix entry away. What the sweep has settled
 is the default, not the parameter.
+
+## 2026-07-25 — Polyphase FIR bank: accumulation structure, the beat/cycle latency split, frame-aligned coefficient swap, delay-line storage policy  (issue #10)
+
+Context: SPEC §7.1 asks for a parameterized complex FIR/PFB with eight samples per cycle,
+sixteen taps per phase, dual coefficient banks loaded from the configuration domain, a bank
+swap confined to a safe frame boundary, configurable pipeline stages, delay lines that infer
+M20Ks "when their size makes that appropriate", a multiplier structure that maps naturally to
+DSP blocks, metadata that travels with its samples, and no global reset on large datapath
+arrays. SPEC §18 items 2 and 3 require one FIR lane and one eight-lane PFB to be synthesized
+on their own before the full design. This is the first block directory to be populated and
+the first consumer of the issue #9 multiplier.
+
+**Decision 1 — a lane's latency is TWO numbers in DIFFERENT UNITS, and they are not
+interchangeable.** This is the load-bearing decision of the issue; everything else follows
+from it.
+
+A FIR history must advance once per **sample**, not once per clock: the SPEC §5 stream
+presents gaps, and a delay line that shifted on every clock would push a stale sample into
+the history and corrupt every subsequent output. So the delay line carries an enable. The
+consequence is that anything downstream which combines values from **different beats** must
+also advance once per beat, while anything combining values from the **same beat** may
+free-run:
+
+| `ACC_STYLE` | latency (beats) | latency (cycles) |
+|---|---|---|
+| `TREE` | 0 | `MULT_PIPE + ceil(log2 TAPS) + 1` |
+| `SYSTOLIC` | `TAPS-1` | `MULT_PIPE + 2` |
+
+A consumer aligns metadata by delaying it `pfb_lat_beats()` beats and **then**
+`pfb_lat_cycles()` cycles. Collapsing the two into one delay in either unit is correct only
+on a gapless stream — which is exactly the condition a unit test tends to run under and a
+real system never does. `rtl/pfb/pfb_bank.sv` builds the two delays in series, and
+`sim/tests/test_pfb_bank.cpp` scoreboards **by sequence number** under three backpressure
+profiles so that a misalignment fails on content rather than passing quietly.
+
+The rejected alternative was to give the systolic cascade per-stage enables so that its
+latency would also be pure cycles. It does not work, and the reason is worth recording
+because it looks like it should: with per-stage enables, stage `k-1` is enabled one cycle
+before stage `k` **for the same beat**, so the one-beat skew the cascade depends on collapses
+to zero. The cascade needs ONE shared enable — the multiplier's output valid — and that is
+what makes part of its latency beat-measured. `rtl/pfb/fir_lane.sv` says so at the point of
+use, because it is invisible on a gapless stream and wrong on every other one.
+
+**Decision 2 — both accumulation structures are implemented, they are bit-identical, and
+`TREE` is the default.** SPEC §18 asks which structure Agilex 7 prefers; that is a
+measurement, not an argument, so both exist behind one parameter and the sweep prices them.
+
+They are bit-identical because there is **no intermediate saturation** anywhere in a lane:
+every multiplier runs at `ROUND_OUT = 0` and contributes exact 33-bit partial sums, the
+`TAPS` of them are accumulated at `fxp_mac_q15_acc_w(2*TAPS)` bits where overflow is provably
+impossible, and the single round-and-saturate is at the lane output. Integer addition is
+associative, so the reduction order cannot change the answer. A lane that saturated
+internally would give a different result for a different structure and "tree vs cascade"
+would stop being a pure cost comparison.
+
+`TREE` is the default for a reason that survives whatever the sweep says: a fabric adder tree
+is the structure whose cost is predictable without knowing what the synthesiser will infer,
+and — see decision 3 — it is the only one of the two that can swap coefficient sets cleanly.
+
+**Decision 3 — the systolic cascade CANNOT swap coefficient sets cleanly, and that is a
+property of the architecture rather than a defect.** This was found by the swap test and is
+the strongest argument in the file for `TREE`.
+
+A systolic cascade's partial sums walk forward one stage per beat while the data walks
+backward relative to them, which is why tap `j` needs `2j` delay stages. Expanding the
+cascade with a time-varying coefficient gives
+
+```text
+y(n) = sum_j h_j(n + j) * x(n - j)
+```
+
+— tap `j`'s coefficient is sampled `j` beats LATE. A swap at beat `B` therefore leaves
+outputs `n` in `[B-TAPS+1, B-1]` computed from a **mixture** of the two coefficient sets, one
+tap at a time. An adder-tree lane multiplies all taps of a beat in the same cycle and has no
+such window.
+
+Making the cascade swap cleanly would need tap `j`'s coefficient delayed by `j` beats — a
+staggered coefficient pipeline of `32·TAPS(TAPS-1)/2` bits per lane, which at the nominal
+8×16 geometry is 30 720 flip-flops per antenna. That is far more than the fabric adder tree
+it was meant to save.
+
+So the window is **documented and verified rather than eliminated**: `test_pfb_bank` builds a
+second expectation set that predicts the mixture tap by tap and requires the RTL to match it
+bit for bit. A cascade that switched cleanly fails just as loudly as one that switched at the
+wrong beat. Nothing was relaxed to make the test pass.
+
+**Decision 4 — the swap is aligned to the start-of-frame beat, and the start-of-frame beat
+itself already uses the new bank.** SPEC §7.1's "safe frame boundary" has two readings, and
+only one of them does what a user expects: the first beat of the new frame must already be
+filtered with the new coefficients, or the frame is filtered with two different filters.
+
+A registered active-bank alone cannot do that — it updates at the end of the start-of-frame
+cycle. So the coefficient read selects `bank_sel = active_q ^ swap_now`, which is `active_q`
+on every ordinary cycle and the incoming bank on the swap cycle. The cost is a two-gate
+combinational cone ahead of the coefficient mux select; the mux itself is the wide thing and
+it was always there.
+
+Writes aimed at the bank currently in use are **refused** and raise a sticky `WR_REJECT`,
+tested against `bank_sel` rather than `active_q` so the swap cycle is covered too. Allowing
+them would change a coefficient set under a frame already being filtered — precisely what
+double buffering exists to prevent — and would make "inactive-bank write has no effect"
+unstateable. Refusing turns a software ordering bug into a visible flag instead of a
+numerical result nobody can explain later.
+
+Both properties are assertions rather than comments, and both are stated on the OUTPUT rather
+than on the write logic so they survive a rewrite of it:
+`a_coeff_swap_at_sof` (the bank in use changes only on an admitted start-of-frame beat) and
+`a_coeff_stable_between` (the active bank's contents move only when the bank does).
+
+**Decision 5 — one coefficient bank for the whole polyphase bank, not one per lane.** SPEC
+§7.1 says "shared dual coefficient banks" and the sharing is load-bearing: a per-lane
+instance would replicate the clock-domain crossing, the swap state machine and the
+frame-boundary logic once per lane, and would make "the banks swapped together" a property of
+eight independent state machines agreeing rather than a property of one. `coeff_bank` holds
+`PHASES × TAPS` complex coefficients twice over, phase-major, and hands each lane its slice.
+
+**Decision 6 — the configuration-to-core seam is real RTL even though this issue's
+simulation tops tie both clocks together.** The write crosses as ONE `cdc_handshake` payload
+carrying `{bank, address, data}` — crossing address and data as independent synchronised
+buses is exactly the multibit crossing SPEC §8 prohibits, and would let one bit of an address
+be sampled from a different cycle than its data. The swap request crosses as a `cdc_pulse`
+(an event, with an overrun flag, not a level). The three status bits cross as three
+**separate** `cdc_sync2` instances, never as a three-bit bus.
+
+Tying `cfg_clk` to `core_clk` in a simulation top bypasses none of it: the handshake still
+takes its full four-phase round trip, so the tests exercise the flow control the real system
+will have. `coeff_bank` and `pfb_bank` carry `(* cdc_primitive *)` attributes as
+**composites** — the same arrangement `stream_cdc` uses over `async_fifo` — and
+`make cdc-inventory` now runs `--strict` over `pfb_top` as well as `cdc_prims_top`: 32
+crossings, 0 unknown.
+
+**Decision 7 — a tapped delay line can never be an M20K, and that is arithmetic rather than a
+threshold.** SPEC §7.1 asks for delay lines that infer M20Ks "when their size makes that
+appropriate". A memory serves one read per cycle; a direct-form FIR presents every stage at
+once. So `N_TAPS > 1` forces the shift-register form at any depth and an explicit
+`STYLE = "MEM"` is an elaboration error rather than a silently ignored request.
+
+The style choice is real only for a **pure delay** (`N_TAPS == 1`) — a metadata alignment
+path, a corner-turn feed, a history bank — and there `pfb_pkg` applies a joint condition:
+depth ≥ 32 **and** total bits ≥ 2048. Depth alone would put a 64-deep 4-bit line (256 bits) in
+a 20 Kb block; bits alone would put a 4-deep 512-bit line in one. Both must hold.
+
+At the nominal SPEC §7.1 geometry every delay line in the design lands on shift registers,
+which is the correct answer for it. The measured question the sweep answers is what Quartus
+does *with* those shift registers — ALM registers or MLABs — not whether an M20K appears.
+
+**Decision 8 — `STREAM_MAX_DATA_W` is raised from 64 to 256.** The polyphase bank is the
+first block whose beat is actually the SPEC §3 beat: `SAMPLES_PER_CYCLE` complex samples, 256
+bits at the SPEC §11 `full_agmf039` size. The previous bound covered a single complex sample
+and matched no configuration in SPEC §11 — it was a Phase-1 artefact. Raising it changes no
+instance's payload width, because every instance's width comes from its own `stream_geom_t`;
+it only widens the working type the pack/unpack functions compute in.
+
+**Decision 9 — `pfb_pkg` names its integer type `pfb_uint_t`, not `uint_t`.** `fxp_pkg` and
+`stream_pkg` each already declare a `uint_t`, and `pfb_bank` wildcard-imports all three. A
+name visible via two wildcard imports is ambiguous under IEEE 1800 §26.3; **Quartus Prime Pro
+rejects it outright** and Verilator accepts it silently. The first calibration compile failed
+to elaborate with thirteen `uint_t is visible via multiple package imports` errors — a defect
+that `make lint` had passed cleanly through, and a reminder that lint clean is not the same
+as synthesizable. `pfb_bank` and `pfb_top` additionally qualify their remaining `uint_t` uses
+as `stream_pkg::uint_t` at the use site.
+
+**Decision 10 — the coefficient files are committed, and the C++ model is checked against
+them before the RTL is checked against the model.** `scripts/generate_coefficients.py`
+designs a windowed-sinc channelizer prototype in NumPy, decomposes it phase-wise, quantises
+it through `model/python/fxp_reference.py` (never through a float cast), and emits five
+coefficient sets per geometry plus a golden input/output vector file for each. The vector
+files are produced by `model/python/pfb_model.py`, which consults neither the SystemVerilog
+package nor the C++ library.
+
+They are committed for the reason `model/vectors/README.md` gives for the issue #4 vectors: a
+golden expectation regenerated on demand proves only that the generator agrees with itself,
+whereas a committed one makes a change to the filter design a reviewable diff.
+`make coeff-check` — a prerequisite of `sim-tiny` — regenerates them in memory and fails on
+any difference, so neither a hand edit nor an unregenerated design change survives a
+regression. The issue text asked for "no generated files committed"; this follows the
+established repository convention instead, with the regeneration gate as the safeguard, and
+records the deviation here.
+
+The designed sets are scaled so that `max_p sum_k |h_p[k]| = 0.98`, which makes clipping
+impossible for any legal input and turns any saturation the RTL reports into a real defect
+rather than a design consequence. The `random` and `max` sets deliberately do the opposite,
+because the saturation path has to be exercised too — a coverage audit fails the run if both
+saturation directions were not observed.
+
+**Decision 11 — the sample delay line and the coefficient storage are never reset; the
+coefficient array powers up at zero by declaration.** SPEC §23: reset validity, not every
+datapath bit. A reset fanout across the 8192 bits of a nominal coefficient bank would pin
+every one of them out of Hyper-Register retiming and buy nothing — coefficients are
+meaningless until software writes them, so there is no state a reset could restore. The
+`initial` that zeroes the array is a declaration, not a reset network: it gives simulation a
+defined start and a device a null filter at power-up. Only the control state resets: the
+active-bank register, the pending flag, the sticky reject flag, the credit counter and the
+valid chains.
+
+**Decision 12 — `stream_elastic_buffer`'s occupancy-bound assertion is now elaborated
+conditionally.** At `DEPTH = 2**OCC_W - 1` the counter's own width already bounds it, the
+comparison is constant, and Verilator 5.020 rejects it (`CMPCONST`). The check is vacuous
+there rather than wrong. Left ungated it makes every `DEPTH` of the form `2**k - 1`
+unbuildable — which is how it was found, by a systolic polyphase bank whose credit arithmetic
+landed on 15. It is now in its own generate block, guarded; a procedural `if` with a constant
+condition does not help, because the body is still elaborated.
+
+### Measured calibration data (SPEC §18 items 2 and 3, seed 1)
+
+_Pending: the sweep is running as this entry is written and the table lands with the
+calibration commit. Records in `results/synthesis/calibration_fir.json` and
+`calibration_pfb8.json` (generated, not committed)._
