@@ -3114,3 +3114,107 @@ about the crossbar, and the reflex it produces is to spend the design effort the
 actually limited this block on first measurement was a piece of instrumentation that no
 functional test can see and no amount of reading the RTL suggests. The before-and-after numbers
 are in the table below, measured at the same point, on the same seed, with the same tool.
+
+### Measured calibration data (SPEC §18 item 9, seed 1)
+
+Seed 1, AGMF039R47B1E1VC, Quartus Prime Pro 26.1.0 Build 110, probe constraint 600.24 MHz —
+the same device, the same tool and the same deliberately-unreachable probe every sweep since
+issue #9 has used, so the numbers are comparable. Three points, all successful. Full records in
+`results/synthesis/calibration_pkt_switch.json` and `calibration_pkt_slice.json` (generated, not
+committed); per-point evidence, including the verbatim retiming and resource panels, under
+`results/synthesis/calibration/`.
+
+| point | DSP | M20K | MLAB | ALM (total / kernel) | ALUTs | regs (total / kernel) | Hyper | Fmax MHz (reg2reg / restricted) | depth | fit s |
+|---|---|---|---|---|---|---|---|---|---|---|
+| `pktsw_r4v4_w512_p0` **before** the decision-16 fix | 0 | 0 | 0 | 28874 / 26166.8 | 20950 | 80252 / 78012 | 33360 | **186.3** / 186.3 | 12 | 877 |
+| `pktsw_r4v4_w512_p0` | 0 | 0 | 0 | 28946 / **26240.8** | 21096 | 80217 / 78033 | 35269 | **277.1** / 263.2 | 7 | 896 |
+| `pktsw_r4v4_w512_p1` | 0 | 0 | 0 | 29589 / 26888.8 | 21022 | 82206 / 79964 | 35151 | 278.6 / 263.2 | 7 | 776 |
+| `pktslice_2stage_w512` | 0 | 0 | 0 | 55476 / **52730.4** | 42541 | 125588 / 123190 | 35542 | **250.5** / 248.3 | 6 | 1007 |
+
+The two Fmax columns are both worth reading. `reg2reg` is the register-to-register limit — the
+kernel's own number. `restricted` additionally accounts for the wrapper's boundary paths onto
+4136 virtual pins; the gap between them is the price of pricing a 512-bit fabric with virtual
+pins, not a property of the switch. Every point's worst register-to-register path is inside
+`u_kernel`, which `run_calibration.py` records per point so it can be checked rather than
+assumed.
+
+**The telemetry fix bought 49% of Fmax for 0.3% of ALMs.** 186.3 → 277.1 MHz register to
+register, for +74 kernel ALMs and +21 kernel registers, and the Fitter's retiming limit for the
+domain moved from `Insufficient Registers` to `Path Limit` — from "there is nothing here to
+retime with" to "this is as short as the path gets". Logic depth on the worst path went from 12
+to 7 and the Hyper-Register count rose from 33 360 to 35 269, which is the retimer taking the
+registers the pipelined tree gave it. That is decision 16 measured rather than argued.
+
+**`OUT_PIPE = 1` buys nothing and costs 2.5%.** 278.6 MHz against 277.1 — inside the noise of a
+single seed — for +648 kernel ALMs and +1931 registers. The reason is visible in the critical
+path: at both settings the limiter is NOT the output register but the fairness gather
+(`wait_port_q → wait_max_q`, depth 7), so adding a stage to a path that is not the problem
+changes nothing. **`OUT_PIPE = 0` is therefore the default on measurement, not on taste** — and
+the parameter stays, because a later configuration whose limiter IS the output link will want
+it.
+
+**A hop costs 249 ALMs and 5.7% of Fmax.** The two-stage slice is 52 730.4 kernel ALMs against
+2 × 26 240.8 = 52 481.6 for the switches alone: the inter-stage link, its credit return and the
+extra fan-out cost **248.8 ALMs across four links, 62 ALMs per link** — under 0.5%, which is the
+butterfly's central claim (the wiring is point-to-point, so a hop is wires and not logic)
+measured rather than asserted. Fmax falls from 277.1 to 250.5 MHz, and the limiter moves to
+`g_sa[1].u_sa|ptr_q[0] → LessThan_1` inside stage A's switch allocator with **2.815 ns of the
+3.99 ns path in ROUTING**. Both remaining limiters are routing-dominated, which is what a
+517-bit fabric spread over a large placement region looks like.
+
+**Zero DSP, zero M20K, zero MLAB.** Every one of the switch's sixteen 517-bit buffers is ALM
+registers, because `STORAGE` defaults to `"regs"` and the sweep did not move it. Subtracting the
+retimer's contribution, the kernel holds 78 033 − 35 245 = **42 788 ALM registers**, which at
+four registers per ALM is about 10 700 ALMs of pure storage inside a 26 241-ALM block. That is
+the single largest lever in the projection below and the sweep this issue did NOT run.
+
+**What SPEC §8 asks for and what this measures.** `packet_clk` is constrained at 400 MHz. One
+switch stage reaches 277 MHz register to register and a two-stage slice 250 MHz, so the block as
+built is **31–37% short of its clock target**, with both remaining critical paths dominated by
+routing rather than by logic. That is stated plainly rather than smoothed: SPEC §7.8 predicted
+"substantial ALM and routing pressure" and this is what it looks like with a number on it. The
+named next steps are in the projection.
+
+### Full-scale ALM projection (SPEC §2, SPEC §7.8, SPEC §18)
+
+At the SPEC §7.8 nominal network — 16 ingress, 16 egress, `RADIX = 4`, `STAGES = 2`, `N_VC = 4`,
+`PACKET_W = 512`:
+
+| Term | Count | ALMs each | ALMs | Basis |
+|---|---|---|---|---|
+| switch stages | 8 | 26 240.8 | **209 926** | measured (`pktsw_r4v4_w512_p0`) |
+| inter-stage links | 16 | 62.2 | **995** | measured (slice minus two switches, per link) |
+| ingress + egress endpoints | 32 | 5 000 – 8 000 | **160 000 – 256 000** | **extrapolated, not measured** |
+| | | | **≈ 371 k – 467 k** | **28 – 36% of 1 305 600** |
+
+**The endpoint term is an extrapolation and is flagged as one.** An ingress or egress port holds
+four buffers of `END_DEPTH = 8` — 4 × 9 × 517 = 18 612 storage registers, 45% of a switch's
+42 788 — plus one 4-to-1 517-bit mux, a quarter of the switch's crossbar. Pro-rating the
+switch's measured split (about 10 700 ALMs of storage and 15 540 of crossbar-plus-control)
+against those two ratios gives roughly 4 800 + 3 900; discounting the per-switch control that an
+endpoint does not have (twenty arbiters, thirty-two credit counters, the lock and route state)
+puts it nearer 5 000. The range is the honest width of that argument. **Pricing an endpoint is
+the first thing issue #20 should compile**, and it is a cheaper project than either point here.
+
+**The lever, with arithmetic, and it is a parameter flip.** All of the storage above is ALM
+registers today. `sync_fifo` already takes `STORAGE`, already requires `SHOW_AHEAD = 0` for
+`"m20k"` — which every buffer in this fabric already uses — and asserts both at elaboration, so
+this is a parameter change and not a redesign:
+
+* switch buffers: 16 × 4 × 517 = 33 088 bits per switch. At 640 bits per MLAB that is 52 MLABs,
+  removing on the order of **8 300 ALMs per switch, 66 k across the fabric**.
+* endpoint buffers: 4 × 8 × 517 = 16 544 bits per port, which fits inside one 20 480-bit M20K.
+  That removes on the order of **4 700 ALMs per endpoint, 150 k across 32**.
+
+Together that is roughly **216 k of the 371–467 k projection**, taking the fabric to something
+like 155 k – 251 k ALMs (12 – 19%) at a cost of about 416 MLABs and 32 M20Ks. It is arithmetic,
+not a measurement — the `STORAGE` axis was pruned from this sweep on the grounds that it moves
+storage linearly, and the data now says that was the wrong axis to prune. **That is the sweep
+issue #20 should run first**, and this entry is the record of why.
+
+**What the projection does not include.** The butterfly's shuffle permutation is not priced:
+`pkt_slice_wrap` wires its two stages with the identity permutation deliberately, because a
+permutation of four elements on a four-port slice is not the sixteen-element one the real fabric
+routes, and the cost of a fixed renaming of point-to-point wires is placement rather than logic.
+The 16-port wiring is the one term here that only a full-fabric compile can settle, and it is the
+term SPEC §7.8's "routing pressure" is really about.

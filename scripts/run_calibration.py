@@ -601,7 +601,12 @@ PRUNING_NOTES: dict[str, str] = {
         "is not an axis because it moves storage linearly and arbitration not "
         "at all; the number a later revision needs from it is the high-water "
         "mark the simulation reports. RADIX is not an axis because a different "
-        "radix is a different network. See scripts/run_calibration.py."),
+        "radix is a different network. STORAGE was pruned on the same grounds "
+        "as VC_DEPTH and the measured data says that was the wrong axis to "
+        "prune: 42 788 of the switch's registers are buffer storage in ALMs, "
+        "which is the largest single term in the full-scale projection, so "
+        "MLAB against regs is the sweep issue #20 should run first. See "
+        "scripts/run_calibration.py and DECISIONS.md (issue #18)."),
     "pkt_slice": (
         "One point. It exists to isolate the per-HOP cost — the inter-stage "
         "flit bus and the credit return path — which a single-stage compile "
