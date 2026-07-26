@@ -1,0 +1,88 @@
+# ---------------------------------------------------------------------------
+# align_net_calib.qsf — SPEC 18 / SPEC 7.4 calibration project settings for the
+# whole frequency-bin alignment network (issue #16).
+#
+# SAME DEVICE as the benchmark project and as every other calibration project in
+# this directory: AGMF039R47B1E1VC, same speed grade, same junction-temperature
+# range.
+#
+# HAND MAINTAINED. quartus/scripts/calibrate.tcl exports the in-memory assignment
+# database over this file and restores these exact bytes afterwards; do not open
+# the project in the GUI and save it.
+#
+# All paths are relative to this directory (quartus/calibration/).
+# ---------------------------------------------------------------------------
+
+# --- device (SPEC.md 2, 15) -------------------------------------------------
+set_global_assignment -name FAMILY "Agilex 7"
+set_global_assignment -name DEVICE AGMF039R47B1E1VC
+set_global_assignment -name TOP_LEVEL_ENTITY align_net_wrap
+
+set_global_assignment -name MIN_CORE_JUNCTION_TEMP 0
+set_global_assignment -name MAX_CORE_JUNCTION_TEMP 100
+
+# --- project output ---------------------------------------------------------
+set_global_assignment -name PROJECT_OUTPUT_DIRECTORY output_files
+set_global_assignment -name NUM_PARALLEL_PROCESSORS ALL
+
+# --- simulation-only code exclusion -----------------------------------------
+# Without this the measured counts would include every `ifndef SYNTHESIS block in
+# the block: align_net's elaboration banner and its cross-package width checks,
+# align_collect's two proof assertions, the SPEC 14 property set and the SPEC 5
+# protocol checker on the output interface.
+set_global_assignment -name VERILOG_MACRO "SYNTHESIS=1"
+
+# --- design source ----------------------------------------------------------
+# Order matters: packages first. Every file is the SAME FILE the simulation
+# builds and lints.
+#
+# beamformer_pkg is here because align_net checks its output beat width against
+# `bf_in_data_w` at elaboration — two definitions of "a beamformer input beat"
+# that cannot be allowed to drift. history_pkg is here because the response this
+# block unpacks is #15's read contract, unpacked with #15's own function.
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/packages/fxp_pkg.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/packages/stream_pkg.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/packages/history_pkg.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/beamformer/beamformer_pkg.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/align/align_pkg.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/common/perf_counter.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/stream/stream_elastic_buffer.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/align/align_xbar.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/align/align_clos.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/align/align_switch.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/align/align_collect.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/align/align_net.sv
+set_global_assignment -name SYSTEMVERILOG_FILE align_net_wrap.sv
+
+# --- timing constraints -----------------------------------------------------
+set_global_assignment -name SDC_FILE align_net_calib.sdc
+
+# ---------------------------------------------------------------------------
+# Virtual pins
+# ---------------------------------------------------------------------------
+# The output beat alone is 1024 bits and the eight response payloads are 1176
+# bits together, so this is a fabric measurement or it is nothing. clk and rst_n
+# stay real pins so they get genuine global networks.
+set_instance_assignment -name VIRTUAL_PIN ON -to cfg_enable
+set_instance_assignment -name VIRTUAL_PIN ON -to cfg_run
+set_instance_assignment -name VIRTUAL_PIN ON -to "cfg_frame_off[*]"
+set_instance_assignment -name VIRTUAL_PIN ON -to cfg_partial_pass
+set_instance_assignment -name VIRTUAL_PIN ON -to cfg_counter_clear
+set_instance_assignment -name VIRTUAL_PIN ON -to cfg_sticky_clear
+set_instance_assignment -name VIRTUAL_PIN ON -to "cfg_lane_stall[*]"
+set_instance_assignment -name VIRTUAL_PIN ON -to cfg_force_unsafe
+
+set_instance_assignment -name VIRTUAL_PIN ON -to "rd_req_valid[*]"
+set_instance_assignment -name VIRTUAL_PIN ON -to "rd_req_ready[*]"
+set_instance_assignment -name VIRTUAL_PIN ON -to "rd_req_bin[*]"
+set_instance_assignment -name VIRTUAL_PIN ON -to "rd_req_frame_off[*]"
+
+set_instance_assignment -name VIRTUAL_PIN ON -to "rsp_valid[*]"
+set_instance_assignment -name VIRTUAL_PIN ON -to "rsp_ready[*]"
+set_instance_assignment -name VIRTUAL_PIN ON -to "rsp_payload[*]"
+
+set_instance_assignment -name VIRTUAL_PIN ON -to m_valid
+set_instance_assignment -name VIRTUAL_PIN ON -to m_ready
+set_instance_assignment -name VIRTUAL_PIN ON -to "m_payload[*]"
+
+set_instance_assignment -name VIRTUAL_PIN ON -to "stat_fold[*]"

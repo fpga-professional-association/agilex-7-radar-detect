@@ -3281,3 +3281,310 @@ the barrier path finding 4 already names. The banking scheme contains the fix an
 nothing structurally: the frame-slot dimension can be split into further banks exactly as the
 lane dimension is, by moving high address bits into the bank index, and `history_pkg`'s
 mapping supports it unchanged.
+
+---
+
+## 2026-07-26 — Frequency-bin alignment: what is left after the corner turn, identity as the routing key, and a measured crossbar/Clos comparison  (issue #16)
+
+**Context.** SPEC §7.4 asks for a pipelined network that rearranges FFT output into
+beamformer vectors, preserving antenna, frequency-bin and frame identity, supporting
+backpressure, detecting missing or duplicated samples, and avoiding one giant unregistered
+multiplexer — and it asks for **two architectures to be built and compared** with "area,
+congestion, latency, and Fmax recorded for both". The input is issue #15's read contract and
+the output is issue #12's input contract; both are normative and neither may be
+reinterpreted here. Simulation was run in WSL Ubuntu-24.04 with Verilator 5.020 and g++
+13.3; the calibration compiles were Quartus Prime Pro 26.1 on AGMF039R47B1E1VC, seed 1.
+
+**Decision 1 — the antenna transpose is NOT in this block, and the block says so at the top
+of its package.** The naive reading of §7.4 is "transpose antenna-sequential FFT output into
+bin-parallel antenna vectors". Issue #15 already did that transpose, in memory, for free:
+`history_pkg` chooses the bank dimension to be the antenna, so a read of one bin enables one
+bank per antenna and returns the whole antenna vector in one cycle with no multiplexer at
+all. Building a transpose here would be building it twice.
+
+What is left — and what this block is — is the **bin-parallel marshalling layer**: issuing
+`BIN_PAR` requests per cycle across `BIN_PAR` independent history read ports, routing each
+response to the beat position it belongs to, reassembling responses that arrive skewed, and
+detecting the ones that never arrive or arrive twice.
+
+*Consequences.* The interpretation is recorded in `align_pkg` section 0, in ARCHITECTURE.md
+§3.4a and here, because a reader who expects a transpose will otherwise look for one and
+conclude it is missing. It also settles a question #15 left open: its header records that the
+read port could serve up to `LANES` bins per cycle and deliberately does not, so that the lane
+constraint does not leak into this block's scheduler. This block spends that headroom by
+**instantiating the port `BIN_PAR` times** rather than by widening it, which leaves #15's
+correctness argument untouched and makes the skew between instances a first-class thing to be
+absorbed rather than a thing to be prevented.
+
+*Alternative rejected:* a wider, lane-constrained read port — it would make the two blocks'
+correctness joint, which is exactly what #15 declined.
+
+**Decision 2 — the request schedule ROTATES, and that is what makes the network a network.**
+Beat position `j` of group `g` is requested on port `(j + g) mod BIN_PAR`. A fixed assignment
+(`j` always on port `j`) would reduce the "network" to `BIN_PAR` wires and make SPEC §7.4's
+architecture comparison vacuous.
+
+The reason is physical rather than contrived. #15's banking makes the memory lane of a bin the
+*high* bits of the bin index, so a fixed assignment would send a fixed residue class of bins to
+each port forever, pinning each port to one subset of memory lanes at a fixed duty cycle — the
+one arrangement that guarantees the per-port enable trees are maximally unbalanced. Rotating
+spreads every port over every lane in `BIN_PAR` groups.
+
+*Consequences.* The map from response port to beat position is a different cyclic permutation
+on every group, so the network routes a genuinely time-varying permutation. The rotation is
+arithmetic on the request side only; nothing on the response side has to remember it (decision
+3), which is what makes the block tolerant of *arbitrary* skew rather than only of the skew the
+schedule happens to produce.
+
+**Decision 3 — the routing key is the response's own identity, not a side-channel tag.** The
+obvious mechanism is a per-port FIFO of issued tags, popped one per response. It is rejected,
+and the reason is the failure mode §7.4 exists to catch: **a tag FIFO is only correct while
+responses and tags stay in step, so the first dropped or duplicated response silently
+mis-labels every response after it.** The detector would be the thing that breaks first.
+
+The key is recomputed from the response's own metadata, which #15 already carries inside
+`data`: the lane is the low bits of the bin, the group is the high bits, and the reassembly
+entry index is the group modulo `GROUPS` — three bit slices, no arithmetic. The entry
+independently stores the `(group, frame_off, frame_id)` it was allocated for, and every
+arriving response is checked against it.
+
+*Consequences.* Missing is detected **positively** (a present bit that never sets) rather than
+inferred from a stream position; duplicate is detected exactly, on the second copy, whatever
+the skew; a response whose key does not match is an orphan, counted and dropped rather than
+written over a live beat; and **no ordering assumption at all** is made about the response
+streams, so a future out-of-order memory would not invalidate the network. The cost is that the
+identity travels through the routing network with the data instead of a `log2` tag — which is
+also literally what §7.4 means by "preserve antenna, frequency-bin and frame identity": the
+identity is *in* the routed word and is checked at the far end.
+
+*Alternative rejected:* a CAM over the open entries. It would be `BIN_PAR × GROUPS` comparators
+of a key wider than the index it replaces, on the response path, to compute something the
+address already contains.
+
+**Decision 4 — `frame_id` is part of the key, at its full 32 bits.** It is about 6% of the
+routed word and it is the only field that can answer "is every antenna vector in this beat from
+the same frame". `frame_off` cannot: it is relative to the newest complete frame, so two
+responses that both asked for offset 1 are from different absolute frames if a rotation
+happened between them — and #15's `stale` flag only fires when the addressed *slot* was reused,
+which is a later and coarser event. A beat assembled across a frame boundary is the exact
+failure ARCHITECTURE.md calls "not detectably wrong from the output alone".
+
+*Consequences.* The first response to reach an entry fixes its frame number and every later one
+must agree. Responses arriving in the **same cycle** before the number is fixed are compared
+against the lowest-numbered lane's, by a prefix scan across lanes — because with `BIN_PAR`
+history instances answering a group's requests in step, all arriving together is the *natural*
+case, not the exotic one, and a check that only looked at later cycles would miss it exactly
+when it matters. The scan costs `BIN_PAR(BIN_PAR−1)/2` selections of one frame id, not
+`GROUPS × BIN_PAR`: it is over lanes, and the entry-indexed lookup was already there for the
+group and offset comparison. The rule ("lowest-numbered lane wins") is stated normatively
+because both the RTL and `model/cpp/align` have to implement the same one.
+
+**Decision 5 — an incomplete group EMITS A BEAT; it does not vanish.** A group whose responses
+do not all arrive within the timeout is resolved rather than waited on. The obvious policy —
+drop the beat — is wrong, because SPEC §5 is normative too: the checker requires `sequence` to
+advance by exactly one per beat and requires one `eof` per frame. Deleting a beat breaks the
+first; deleting the beat that carried `eof` breaks the second and leaves the frame open
+forever, so the *next* frame's `sof` fires an assertion. A block that answers "detect missing
+samples" by corrupting the stream protocol has moved the defect, not fixed it.
+
+So: **the beat is emitted, the data is not.** Absent lanes are zeroed (`cfg_partial_pass = 0`,
+the default), so no stale or half-formed antenna vector ever reaches the beamformer;
+`ALGN_USER_MISSING` is set in the SPEC §5 `user` field; `stat_missing_count` advances by the
+exact number of absent lanes; and `sequence`, `sof` and `eof` are exactly what they would have
+been. `cfg_partial_pass = 1` keeps whatever arrived, for diagnosis. Both settings are modelled
+and both are tested; the default is the safe one.
+
+**Decision 6 — the timeout counts CYCLES OF PROGRESS, not wall time.** An entry's age advances
+only in cycles where the block could have retired a beat. Without that rule the detector is
+worse than useless: a beamformer that stalled for longer than the timeout would make every open
+group "time out", and the block would report missing samples for a pipeline that lost nothing.
+A missing-sample counter that fires on backpressure is a counter nobody can act on. The
+backpressure-invariance pass — a byte-identical beat sequence at four stall profiles — is the
+property that would fail immediately if the age counters free-ran.
+
+**Decision 7 — architecture 2 is an OMEGA network, not a literal three-stage Clos, and the
+reason is that non-blocking is the wrong purchase here.** SPEC §7.4 says "multistage or
+Clos-style". A strictly non-blocking Clos guarantees that any new connection can be added
+without rearranging existing ones — a guarantee about *circuits held open across time*. This
+network carries single-cycle packets: every word is independently routed, nothing is held open,
+and there is no connection to rearrange. What blocking costs here is one cycle of delay for one
+word, and the reassembly buffer already absorbs far larger skew between independent history
+instances. Paying `2n−1` middle stages would be buying the same insurance twice.
+
+What is bought instead is the multistage property that actually matters against a crossbar, and
+it is a **wiring** property: every connection is between adjacent switch positions of
+consecutive stages, so a routed word never has to be presented across the full width of the
+block, where a crossbar must present all `N` sources at every one of the `N` destinations. On a
+device where §7.4 asks specifically for *congestion* to be recorded, that is the difference the
+measurement is looking for. The blocking rate is measured and reported
+(`stat_conflict_count`) rather than argued away.
+
+**Decision 8 — the two architectures are LATENCY-MATCHED, by parameter, and the match is
+checked.** `align_xbar`'s `MUX_STAGES` is the knob: `algn_xbar_latency(1) = 2 =
+algn_clos_latency(4)` and `algn_xbar_latency(2) = 3 = algn_clos_latency(8)`. A resource
+comparison between a 2-cycle network and a 3-cycle network is a comparison of pipeline depths
+wearing two topologies' names. `align_switch` checks the match at elaboration and prints a note
+when a caller breaks it deliberately; the verification top's geometry pass fails the run if a
+pair is un-matched; and the calibration matrix sets `MUX_STAGES` explicitly at each width.
+
+**Decision 9 — `MUX_STAGES = 2` is how "no giant unregistered multiplexer" is met structurally
+rather than by argument.** At the wide calibration point an output's mux is 8 sources of 566
+bits and there are 8 of them: 4528 eight-input multiplexers in one combinational cone.
+`MUX_STAGES = 2` partitions the inputs into `ceil(sqrt(N))` groups and registers one `RADIX:1`
+mux result per group, so no cone is wider than `RADIX:1`. The alternative reading — "an 8:1 mux
+is only two LUT6 levels, that is not giant" — is available as `MUX_STAGES = 1` and is a real
+trade, but it is an argument about LUT depth where §7.4 asks for a structure.
+
+*Consequences.* Level 0 is `GROUPS` registers wide per output and only one of them can ever be
+loaded in a cycle. That is not an oversight: deciding *which* group to register before
+registering it needs the group decision to have already muxed the data, which is the `N:1` cone
+again. The cost it exposes is the measurement §7.4 asks for.
+
+**Decision 10 — `align_clos`'s ready chain is combinational across its stages, deliberately,
+and the alternative is priced rather than dismissed.** A link is free when it is empty or is
+being emptied, and "being emptied" is decided by the next stage — so `in_ready` is a function of
+`out_ready` through `log2(N)` stages of two-input arbitration. The fix, a two-deep elastic
+buffer on every link, **doubles the storage of the entire network**, which is the resource this
+architecture exists to economise: at `N = 8` it would take the omega network from 24 link
+registers to 48, against the crossbar's 40, and would invert the comparison's own result.
+Spending it to remove a path of three two-input gates would give away the subject. The
+calibration records the critical path's endpoints for every point, so whether this is the
+limiter is in the record and not in a comment.
+
+**Decision 11 — the SPEC §14 route property lives OUTSIDE both architectures, and the
+elaboration proof does not replace it.** `a_align_route_correct` sits in
+`align_assertions.sv`, watching the network's master side, so both architectures are held to it
+by the same code. It is the property this issue turns on: a mis-routed word still produces a
+perfectly well-formed beat — right count, right frame, right group — carrying two copies of one
+bin and none of another.
+
+`align_clos` additionally proves its wiring at elaboration, over the whole `N × N` space, and
+checks every delivered word at run time. Both, because they catch different things: the
+elaboration proof catches a shuffle that is off by one rotation (which otherwise passes every
+test where the destination happens to equal the source — and at `BIN_PAR = 2` that is every
+test there is), and the runtime property catches an arbiter, stall or reset interaction that
+moves a word off a correct route. The fault injection in decision 20 shows a fault that passes
+the first and fails the second.
+
+**Decision 12 — `cfg_run` is a separate control from `cfg_enable`, and it stops at a frame
+boundary.** Dropping `cfg_run` halts the sweep only when the current frame completes; a sweep in
+progress ignores it. It is one term — `run_gate = cfg_run || (gidx != 0)` — with no state and no
+handshake, and it is what makes it impossible to leave a SPEC §5 frame open.
+
+It is separate from `cfg_enable` because conflating them is a **deadlock**: `cfg_enable` low
+also stops the block accepting responses, so a block disabled with work in flight would strand
+its own reassembly entries and then report them as missing samples. This was found by writing
+the test — there was no way to bring the block to a clean quiescent point at which the counters
+could be compared — which is a design defect the test surfaced rather than a test inconvenience.
+
+**Decision 13 — the reassembly buffer's lane ports are ALWAYS ready, and that is a deadlock
+argument.** Every word arriving on a lane belongs to an entry that is already open, because the
+scheduler allocates the entry before it issues the requests. Refusing such a word could not
+free anything — the entry it would fill is the very thing the buffer is waiting for — so a
+full-buffer stall there would be a deadlock, not backpressure. Backpressure is applied one level
+upstream, at group allocation, where refusing genuinely does bound the work in flight.
+`cfg_lane_stall` exists so SPEC §13.1 stall testing can reach that interface anyway; it is a
+real port driven by the harness and by the calibration wrapper's pins, not a tie-off.
+
+**Decision 14 — the SPEC §18 sweep measures the ROUTING FABRIC on its own, and the block
+separately.** Two calibration projects, `align_sw` (four points) and `align_net` (two). The two
+architectures *are* the two routing fabrics; everything else in the block is byte-for-byte
+identical in both builds, and the reassembly buffer alone is `GROUPS × BIN_PAR × VEC_W`
+flip-flops, which at the wide point is several times either fabric. Sweeping the whole block
+twice would report two numbers differing by a few percent and the few percent would *be* the
+answer. `align_net`'s two points price the common part once per architecture, which is what a
+full-scale projection needs as a number rather than as a difference.
+
+*Consequence, and it is a real gain:* the fabric carries no SPEC §5 payload — it moves one bin's
+vector plus its identity — so `stream_pkg::STREAM_MAX_DATA_W` does not bound it, and the
+**full-scale 16-antenna routing width is measured a phase early**, without raising that bound.
+The block-level points stop at 8 bins × 4 antennas, which is exactly 1024 bits.
+
+**Decision 15 — `STREAM_MAX_DATA_W` is NOT raised to 4096 by this issue.** Issue #12 raised it
+from 256 to 1024 and recorded that going to 4096 "belongs to the issue that builds the alignment
+network producing such a beat (#16) and the one that freezes full scale (#20), with measured
+data in hand". This is that issue, and the answer is: not yet, and here is the data.
+
+Raising it multiplies the working type of every `stream_pack`/`stream_unpack` in the design by
+four, paid by every block, for a geometry nothing yet verifies. What #20 actually needs is (a)
+the full-scale routing cost, which `align_sw`'s wide points measure at 16 antennas without the
+bound applying, and (b) the block's fixed cost, which `align_net`'s points measure at the widest
+beat the bound allows. The full-scale figure is (a) + (b), which is arithmetic rather than
+another compile. The bound is left where #12 put it, and moving it is left to the issue that
+also freezes the geometry.
+
+**Decision 16 — `align_pkg` names its integer type `algn_uint_t`, and the block is spelled
+`algn_` inside identifiers.** Issue #10's decision 9 applied a sixth time: `fxp_pkg`,
+`stream_pkg`, `covar_pkg`, `cfar_pkg`, `pfb_pkg`, `beamformer_pkg` and `history_pkg` each export
+a helper of that role, and a name visible through two wildcard imports is ambiguous under IEEE
+1800 §26.3 — Quartus rejects it outright and Verilator accepts it silently. `align_net`
+wildcard-imports `fxp_pkg`, `stream_pkg`, `history_pkg` and this package at once.
+
+One naming hazard is worth recording because it is specific to this block: **`lane` means two
+different axes in two adjacent packages.** In `history_pkg` it is a memory bank index; here it
+is a beat position. They never appear in one expression and each package's header says which one
+it means, but a reader moving between the two files will meet both.
+
+**Decision 17 — `ALGN_USER_W` and `ALGN_FAULT_W` stay localparams and are given a reader inside
+the package.** Everything else in `align_pkg` is a function, for the reason `stream_pkg` and
+`history_pkg` give. These two cannot be: they appear in port declarations. Issue #15's decision
+13 records the consequence — a package localparam the elaborated hierarchy never reads is
+`UNUSEDPARAM`, and `files.f` lists this package for a top that does not yet instantiate the
+block — and this issue hit it on the first full `make lint`. The reader is
+`algn_status_encoding_ok()`, which states the invariant that makes "one decode serves both"
+true: the beat's status field and the block's sticky fault word are the same four bits in the
+same order.
+
+**Decision 18 — `scripts/cdc_inventory.py` gains `--allow-empty`, and the alignment network is
+the first block to use it.** The block is single-clock by construction: `history_pkg` §5 puts
+the read request and the read response in `history_clk`, and the beamformer that consumes the
+output beat is in it too. Running the inventory over it with `--strict` failed on "the inventory
+is empty", which was an unconditional error — reasonable when every block inventoried so far had
+crossings, and wrong for a block whose *design claim* is that it has none.
+
+`--allow-empty` makes zero crossings a pass **while leaving the unclassified-crossing check
+running**, so a two-clock module added to `rtl/align/` later without a `(* cdc_primitive *)` tag
+still fails the gate. The default is unchanged. The alternative — simply not inventorying the
+block, as the other single-clock tops are not — would have left "no crossings here" as an
+untested absence rather than a checked fact.
+
+**Decision 19 — `align_net` does not truncate an out-of-range frame offset.** The scheduler
+carries `cfg_frame_off` at #15's full control-port width and drives it onto the request port
+unmodified. An offset that does not fit the geometry's `FOFF_W` is *out of range*, and
+`history_pkg` §5 already defines what happens to it: #15 answers deterministically, sets
+`HIST_FLAG_OUT_OF_RANGE` and advances its own error counter. Truncating here would instead send
+a **different, perfectly legal** request and get a perfectly good answer to a question nobody
+asked. The returned metadata then disagrees with the entry key and the responses are counted as
+orphans — loud, exact, and correct: a software error is reported rather than silently
+reinterpreted.
+
+**Decision 20 — two deliberate faults, one per architecture, prove the property set fires.**
+SPEC §14 requires the assertions to be shown to fire rather than assumed to.
+
+* `align_xbar`: the per-output request comparison changed to `a_dst[i] == (o+1) % N`, so every
+  word is delivered one lane from where it belongs. `a_align_route_correct` fired on the first
+  delivered word — *"lane 0 was given a word belonging at beat position 1"*.
+* `align_clos`: a switch's routing bit changed from `src_dst[J0][RBIT]` to `src_dst[J0][0]`, so
+  the hardware routes on the LSB at every stage while the elaboration-time `route_ok()` proof —
+  written against the generic expression — still passes. `a_clos_arrived_at_destination` fired:
+  *"a word addressed to 1 was presented at output 3"*. This is precisely the case decision 11
+  says the elaboration proof cannot catch.
+
+Both edits were reverted and `make sim-tiny` passes on seeds 1, 2 and 3.
+
+**Decision 21 — two defects this issue found in its own test rather than in the RTL, recorded
+because they will recur.** Both were the model disagreeing with correct hardware, and both are
+properties of how an elastic, independently-stalled interface is observed:
+
+* the model must open a reassembly entry on the **first** accepted request of a group, not the
+  last. The block allocates at issue — all `BIN_PAR` requests are loaded in one cycle — so with
+  the request ports stalling independently, the answer to the first request can be back before
+  the last has been accepted.
+* the model must find an entry by searching its open list **from the back**. The RTL frees an
+  entry when the beat is *pushed* into the output elastic buffer; the test only learns about the
+  beat when it is *popped*, so the model can be holding an entry the RTL has already reused.
+  Taking the newest open entry with the matching index reproduces exactly what the RTL sees.
+
+The general lesson, and it applies to every block after this one: **a transaction-level model of
+an elastic block is synchronised by the events the test caused, not by the events it observes**,
+and the two differ by the depth of every buffer between them.
