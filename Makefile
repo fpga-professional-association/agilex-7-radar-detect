@@ -179,6 +179,13 @@ CDC_INVENTORY_JSON ?= $(RESULTS_DIR)/cdc_inventory.json
 # it is what proves the seam's crossings are declared rather than merely present.
 CDC_INVENTORY_PFB_JSON ?= $(RESULTS_DIR)/cdc_inventory_pfb.json
 
+# And the beamformer build gets its own (issue #12). Its weight plane is a
+# THREE-LEVEL composite -- beamformer over weight_bank over the REUSED
+# rtl/pfb/coeff_bank.sv over the issue #6 primitives -- and running --strict over
+# it is what proves the inventory still classifies a crossing reached through two
+# wrappers rather than one.
+CDC_INVENTORY_BF_JSON ?= $(RESULTS_DIR)/cdc_inventory_beamformer.json
+
 # --- register/control plane (issue #7, SPEC 9 / 13.1 / 14) -----------------
 # A fourth self-contained build, for the reason the others have one: a failure
 # in it is unambiguously a control-plane failure. control_top holds the whole of
@@ -315,6 +322,41 @@ FFT_FILES     := sim/verilator/files_fft.f
 FFT_TEST      := test_fft
 FFT_BIN        = sim/verilator/build/fast_tiny_$(FFT_TOP)/V$(FFT_TOP)_$(FFT_TEST)
 
+# --- beamforming matrix (issue #12, SPEC 6 / 7.5 / 13.1 / 13.2 / 14 / 18) --
+# A ninth self-contained build, for the reason the others have one: a failure in
+# it is unambiguously a failure of the dot product, the weight bank or the
+# matrix. beamformer_top holds THREE complete matrices in one elaboration --
+# the reference engine, the same engine with BEAM_PAR halved so the beams are
+# time multiplexed, and the same engine with two adders per adder-tree register
+# stage -- driven from one stimulus port and admitting exactly the same beats, so
+# "time multiplexing changes the schedule and not the answer" and "the adder
+# tree's pipelining is a cost parameter and not a numerical one" are same-run
+# facts rather than comparisons of two runs. It also holds TWO standalone
+# 16-antenna dot products (the SPEC 7.5 nominal antenna count and the geometry
+# the calibration compiles) and one weight bank elaborated with the
+# frame-boundary rule disabled, outside the datapath, so the SPEC 7.5 swap
+# assertion can be provoked by name.
+#
+#   test_beamformer  the whole SPEC 7.5 verification list -- unit weights
+#                    (passthrough of the selected antenna, expected without any
+#                    model), zero weights and zero input, orthogonal Hadamard
+#                    weight patterns whose off-diagonal beams must be exactly
+#                    zero, max-amplitude saturation, random beats under three
+#                    backpressure profiles with content invariance checked
+#                    directly, and the weight-bank swap requested mid-frame --
+#                    against model/cpp/beamformer/beamformer_model.hpp on every
+#                    beat and against an independent double-precision evaluation
+#                    on every non-saturating one; plus the SPEC 13.2 metamorphic
+#                    relations including the ANTENNA PERMUTATION relation SPEC
+#                    13.2 names for this block, the SPEC 9 telemetry counters,
+#                    the SPEC 7.5 reported-throughput readback, and the
+#                    expected-failure mode that requires a_coeff_swap_at_sof to
+#                    fire.
+BF_TOP        := beamformer_top
+BF_FILES      := sim/verilator/files_beamformer.f
+BF_TEST       := test_beamformer
+BF_BIN         = sim/verilator/build/fast_tiny_$(BF_TOP)/V$(BF_TOP)_$(BF_TEST)
+
 # The twiddle table and the golden FFT vectors are generated and committed, for
 # the reasons in model/python/gen_fft_twiddles.py and model/vectors/README.md.
 # `fft-check` is what stops either from drifting, and it also runs the standalone
@@ -373,35 +415,38 @@ define LINT_RECIPE
 	    '$(CONFIG)' 'sim/verilator/lint_waivers.vlt'
 	$(REGMAP_CHECK_RECIPE)
 	$(FFT_TWIDDLE_CHECK_RECIPE)
-	@printf '[lint] 1/10 %s\n' 'benchmark_sim_top'
+	@printf '[lint] 1/11 %s\n' 'benchmark_sim_top'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) --test $(TEST)
-	@printf '[lint] 2/10 %s\n' '$(STREAM_TOP)'
+	@printf '[lint] 2/11 %s\n' '$(STREAM_TOP)'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
 	    --top $(STREAM_TOP) --files $(STREAM_FILES) --test $(STREAM_TEST)
-	@printf '[lint] 3/10 %s\n' '$(VIOL_TOP)'
+	@printf '[lint] 3/11 %s\n' '$(VIOL_TOP)'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
 	    --top $(VIOL_TOP) --files $(VIOL_FILES) --test $(VIOL_TEST)
-	@printf '[lint] 4/10 %s\n' '$(CONTROL_TOP)'
+	@printf '[lint] 4/11 %s\n' '$(CONTROL_TOP)'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
 	    --top $(CONTROL_TOP) --files $(CONTROL_FILES) --test $(CONTROL_TEST)
-	@printf '[lint] 5/10 %s\n' '$(CDC_TOP)'
+	@printf '[lint] 5/11 %s\n' '$(CDC_TOP)'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
 	    --top $(CDC_TOP) --files $(CDC_FILES) --test $(firstword $(CDC_TESTS))
-	@printf '[lint] 6/10 %s\n' '$(CDCV_TOP)'
+	@printf '[lint] 6/11 %s\n' '$(CDCV_TOP)'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
 	    --top $(CDCV_TOP) --files $(CDCV_FILES) --test $(CDCV_TEST)
-	@printf '[lint] 7/10 %s\n' '$(TELEM_TOP)'
+	@printf '[lint] 7/11 %s\n' '$(TELEM_TOP)'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
 	    --top $(TELEM_TOP) --files $(TELEM_FILES) --test $(firstword $(TELEM_TESTS))
-	@printf '[lint] 8/10 %s\n' '$(CMULT_TOP)'
+	@printf '[lint] 8/11 %s\n' '$(CMULT_TOP)'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
 	    --top $(CMULT_TOP) --files $(CMULT_FILES) --test $(CMULT_TEST)
-	@printf '[lint] 9/10 %s\n' '$(PFB_TOP)'
+	@printf '[lint] 9/11 %s\n' '$(PFB_TOP)'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
 	    --top $(PFB_TOP) --files $(PFB_FILES) --test $(PFB_TEST)
-	@printf '[lint] 10/10 %s\n' '$(FFT_TOP)'
+	@printf '[lint] 10/11 %s\n' '$(FFT_TOP)'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
 	    --top $(FFT_TOP) --files $(FFT_FILES) --test $(FFT_TEST)
+	@printf '[lint] 11/11 %s\n' '$(BF_TOP)'
+	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
+	    --top $(BF_TOP) --files $(BF_FILES) --test $(BF_TEST)
 endef
 
 # `sim-tiny`: SPEC 12.1 fast build of every simulation top, then every test
@@ -481,11 +526,14 @@ define SIM_TINY_RECIPE
 	    --top $(CMULT_TOP) --files $(CMULT_FILES) --test $(CMULT_TEST)
 	$(BUILD_VERILATOR) --mode fast --config tiny --jobs $(JOBS) \
 	    --top $(PFB_TOP) --files $(PFB_FILES) --test $(PFB_TEST)
+	$(BUILD_VERILATOR) --mode fast --config tiny --jobs $(JOBS) \
 	    --top $(FFT_TOP) --files $(FFT_FILES) --test $(FFT_TEST)
+	$(BUILD_VERILATOR) --mode fast --config tiny --jobs $(JOBS) \
+	    --top $(BF_TOP) --files $(BF_FILES) --test $(BF_TEST)
 	@printf '[sim-tiny] seeds: %s\n' '$(SEEDS)'
-	@printf '[sim-tiny] tests: %s %s %s %s %s %s %s %s %s %s\n' '$(TEST)' '$(STREAM_TEST)' \
+	@printf '[sim-tiny] tests: %s %s %s %s %s %s %s %s %s %s %s\n' '$(TEST)' '$(STREAM_TEST)' \
 	    '$(VIOL_TEST)' '$(CONTROL_TEST)' '$(CDC_TESTS)' '$(CDCV_TEST)' \
-	    '$(TELEM_TESTS)' '$(CMULT_TEST)' '$(PFB_TEST)' '$(FFT_TEST)'
+	    '$(TELEM_TESTS)' '$(CMULT_TEST)' '$(PFB_TEST)' '$(FFT_TEST)' '$(BF_TEST)'
 	@rc=0; for s in $(SEEDS); do \
 	    printf '\n[sim-tiny] ===== seed %s : %s =====\n' "$$s" '$(TEST)'; \
 	    ./$(SIM_TINY_BIN) +seed=$$s +results=$(RESULTS_DIR) || rc=1; \
@@ -513,6 +561,8 @@ define SIM_TINY_RECIPE
 	    ./$(PFB_BIN) +seed=$$s +results=$(RESULTS_DIR) +vectors=$(VECTORS_DIR) || rc=1; \
 	    printf '\n[sim-tiny] ===== seed %s : %s =====\n' "$$s" '$(FFT_TEST)'; \
 	    ./$(FFT_BIN) +seed=$$s +results=$(RESULTS_DIR) +vectors=$(VECTORS_DIR) || rc=1; \
+	    printf '\n[sim-tiny] ===== seed %s : %s =====\n' "$$s" '$(BF_TEST)'; \
+	    ./$(BF_BIN) +seed=$$s +results=$(RESULTS_DIR) || rc=1; \
 	  done; \
 	  if [ $$rc -ne 0 ]; then \
 	    printf '\n[sim-tiny] FAILED (seeds: %s)\n' '$(SEEDS)' 1>&2; exit 1; \
@@ -649,6 +699,12 @@ define CDC_INVENTORY_RECIPE
 	    --top $(PFB_TOP) --files $(PFB_FILES) --test $(PFB_TEST) --quiet
 	$(PYTHON) scripts/cdc_inventory.py --top $(PFB_TOP) --files $(PFB_FILES) \
 	    --out $(CDC_INVENTORY_PFB_JSON) --print --strict
+	@printf '[cdc-inventory] SPEC 8 crossing report for top=%s -> %s\n' \
+	    '$(BF_TOP)' '$(CDC_INVENTORY_BF_JSON)'
+	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
+	    --top $(BF_TOP) --files $(BF_FILES) --test $(BF_TEST) --quiet
+	$(PYTHON) scripts/cdc_inventory.py --top $(BF_TOP) --files $(BF_FILES) \
+	    --out $(CDC_INVENTORY_BF_JSON) --print --strict
 endef
 
 # Remaining simulation entry points. The Verilator flow itself exists as of
@@ -776,6 +832,7 @@ help:
 	@printf '%-18s %-9s %s\n' 'calibrate-fir'    'windows' 'SPEC 18 complex-FIR-lane sweep (TAPS=16)'
 	@printf '%-18s %-9s %s\n' 'calibrate-pfb8'   'windows' 'SPEC 18 eight-lane polyphase-bank sweep'
 	@printf '%-18s %-9s %s\n' 'calibrate-fft'    'windows' 'SPEC 18 FFT stage + full-FFT sweep (~1 h of Fitter)'
+	@printf '%-18s %-9s %s\n' 'calibrate-beamformer' 'windows' 'SPEC 18 beamforming dot-product + matrix-slice sweep'
 	@printf '%-18s %-9s %s\n' 'calibrate-summary' 'local'  'rebuild the calibration JSON/table from evidence on disk (KERNEL=<name>)'
 	@printf '\n'
 	@printf '%-18s %-9s %s\n' 'seed-sweep'       'windows' 'TODO(issue #23) ten-seed robustness sweep'
@@ -1023,6 +1080,35 @@ calibrate-pfb8:
 	@$(PYTHON) scripts/run_calibration.py --kernel pfb8 --seed $(SEED) \
 	    --jobs $(CALIB_JOBS) $(CALIB_ARGS)
 
+# `calibrate-beamformer` (issue #12): SPEC 18 items 6 and 7 — "one beamforming
+# dot product" and "one complete beam". Two projects rather than one, for the
+# reason calibrate-fft gives: bf_dot_calib prices the ATOM (16 complex
+# multipliers and a 37-bit accumulation tree), bf_matrix_calib prices the BLOCK
+# (eight of those atoms sharing a weight store, a beam-group mux, a credit gate
+# and an elastic output), and the difference between them is the matrix's fixed
+# cost measured rather than argued.
+#
+# This is the sweep the full-scale DSP projection comes from: the beamformer is
+# the design's dominant DSP consumer, and SPEC 2 targets 75-90% total DSP
+# utilisation, so the number bf_dot_calib reports times BIN_PAR*BEAM_PAR is what
+# issue #20's parameter freeze has to be planned around.
+#
+# Windows side only, and deliberately not a prerequisite of any simulation
+# target. The same CALIB_JOBS warning applies: one Fitter run of the matrix
+# project peaks near 20 GB of virtual memory on this host, so CALIB_JOBS=1 is
+# the default and raising it on a 32 GB machine will thrash.
+calibrate-beamformer:
+	$(QUARTUS_CHECK)
+	$(PYTHON_CHECK)
+	@printf '[calibrate] SPEC 18 sweep: kernel=bf_dot seed=%s jobs=%s\n' \
+	    '$(SEED)' '$(CALIB_JOBS)'
+	$(RUN_CALIBRATION) --kernel bf_dot --seed $(SEED) --jobs $(CALIB_JOBS) \
+	    --quartus-bin '$(QUARTUS_BIN)' $(CALIB_ARGS)
+	@printf '[calibrate] SPEC 18 sweep: kernel=bf_matrix seed=%s jobs=%s\n' \
+	    '$(SEED)' '$(CALIB_JOBS)'
+	$(RUN_CALIBRATION) --kernel bf_matrix --seed $(SEED) --jobs $(CALIB_JOBS) \
+	    --quartus-bin '$(QUARTUS_BIN)' $(CALIB_ARGS)
+
 # KERNEL selects which sweep to rebuild; default cmult, e.g. KERNEL=fft_core.
 CALIB_KERNEL ?= cmult
 
@@ -1046,7 +1132,7 @@ reproduce-final:
 .PHONY: help env-check \
         lint numerics-check regmap-check fft-check cdc-inventory \
         sim-tiny sim-medium sim-random sim-stress sim-coverage sim-full-smoke \
-        coeff-check calibrate-fir calibrate-pfb8 \
+        coeff-check calibrate-fir calibrate-pfb8 calibrate-beamformer \
         quartus-map quartus-fit quartus-sta quartus-report quartus-compile \
         calibrate-cmult calibrate-fft calibrate-summary \
         seed-sweep compare-baseline reproduce-final

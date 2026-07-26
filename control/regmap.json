@@ -45,7 +45,7 @@
   ],
   "regmap_version": {
     "major": 1,
-    "minor": 2,
+    "minor": 3,
     "patch": 0,
     "description": "Bump on any change to this file. major: incompatible layout change; minor: registers or fields added; patch: documentation only."
   },
@@ -271,9 +271,9 @@
       "base": "0x5000",
       "size": "0x1000",
       "implemented": true,
-      "planned_by": "#11, #12, #16",
+      "planned_by": "#11, #16",
       "spec_groups": ["Coefficient and weight programming", "Active bank selection"],
-      "description": "Coefficient and weight programming with double buffering and an active-bank select (SPEC 7.1, SPEC 9). Implemented for the polyphase FIR bank by issue #10; the FFT twiddles (#11), the beam weights (#12) and the per-antenna fan-out (#16) extend it inside the same reserved window. PROGRAMMING SEQUENCE: set COEFF_CTRL.BANK_SEL to the SPARE bank, write COEFF_ADDR once, then write COEFF_DATA per coefficient (the DATA write is what issues the transfer; AUTO_INC advances the index), then write COEFF_CTRL.SWAP_REQ. The swap takes effect at the next start-of-frame beat and not before, which is what makes a frame filtered by exactly one coefficient set. A write aimed at the bank that is currently ACTIVE is refused and raises COEFF_STATUS.WR_REJECT; it is never merged and never deferred. Every field here crosses a clock domain, because the register plane runs on cfg_clk and the bank on core_clk (rtl/pfb/coeff_bank.sv, issue #6 primitives): writes through a four-phase handshake, SWAP_REQ through a pulse synchronizer, and each status bit through its own flip-flop synchronizer. WR_BUSY and SWAP_BUSY are therefore flow control, not decoration.",
+      "description": "Coefficient and weight programming with double buffering and an active-bank select (SPEC 7.1, SPEC 9). Implemented for the polyphase FIR bank by issue #10; the FFT twiddles (#11), the beam weights (#12) and the per-antenna fan-out (#16) extend it inside the same reserved window. PROGRAMMING SEQUENCE: set COEFF_CTRL.BANK_SEL to the SPARE bank, write COEFF_ADDR once, then write COEFF_DATA per coefficient (the DATA write is what issues the transfer; AUTO_INC advances the index), then write COEFF_CTRL.SWAP_REQ. The swap takes effect at the next start-of-frame beat and not before, which is what makes a frame filtered by exactly one coefficient set. A write aimed at the bank that is currently ACTIVE is refused and raises COEFF_STATUS.WR_REJECT; it is never merged and never deferred. Every field here crosses a clock domain, because the register plane runs on cfg_clk and the bank on core_clk (rtl/pfb/coeff_bank.sv, issue #6 primitives): writes through a four-phase handshake, SWAP_REQ through a pulse synchronizer, and each status bit through its own flip-flop synchronizer. WR_BUSY and SWAP_BUSY are therefore flow control, not decoration. ISSUE #12 ADDED THE BEAM-WEIGHT HALF OF THIS WINDOW (WEIGHT_CTRL, WEIGHT_ADDR, WEIGHT_DATA, WEIGHT_STATUS, WEIGHT_PARALLELISM, WEIGHT_THROUGHPUT), at offsets 0x010..0x024. It is a SECOND, INDEPENDENT programming port with the same shape as the coefficient half above, not a re-use of it: the polyphase coefficients and the beam weights are different stores in different blocks with independent active banks, and sharing one CTRL/ADDR/DATA triple would make loading one of them while the other streams a race with no way to express it. Every rule above - the DATA write is what issues the transfer, AUTO_INC advances the live index, a write aimed at the ACTIVE bank is refused and flagged, the swap takes effect at a frame boundary and not before - holds verbatim for the weight half, because rtl/beamformer/weight_bank.sv reuses the same dual-bank store rather than reimplementing it. WEIGHT_PARALLELISM and WEIGHT_THROUGHPUT are the SPEC 7.5 requirement that any time multiplexing be visible in reported throughput rather than silently reducing it; they are hardware-driven constants folded in at elaboration, so a build cannot report a throughput it does not have.",
       "registers": [
         {
           "name": "COEFF_CTRL",
@@ -315,6 +315,68 @@
             {"name": "WR_REJECT",    "lsb": 8,  "width": 1,  "access": "ROHW", "description": "Sticky: at least one coefficient write since the last completed swap targeted the ACTIVE bank, or an index outside the elaborated bank, and was dropped. Cleared by COEFF_CTRL.STATUS_CLEAR."},
             {"name": "SWAP_OVERRUN", "lsb": 9,  "width": 1,  "access": "ROHW", "description": "Sticky: a swap request was refused because one was already in flight. Cleared by COEFF_CTRL.STATUS_CLEAR."},
             {"name": "N_COEFF",      "lsb": 16, "width": 16, "access": "ROHW", "description": "Coefficients per bank in the elaborated design (SAMPLES_PER_CYCLE * PFB_TAPS), reported by hardware so software can size a load without a build-time constant."}
+          ]
+        },
+        {
+          "name": "WEIGHT_CTRL",
+          "offset": "0x010",
+          "description": "Bank selection and the swap request for the BEAM-WEIGHT store (SPEC 7.5, issue #12). BANK_SEL names the bank a WEIGHT_DATA write targets; it is NOT the active bank, which changes only at a frame boundary and is reported by WEIGHT_STATUS.ACTIVE_BANK.",
+          "fields": [
+            {"name": "BANK_SEL",     "lsb": 0, "width": 1, "access": "RW",  "reset": "0x1", "description": "Target bank for weight writes. Resets to 1 because the active bank resets to 0, so the reset state is already a legal programming state and software can write without reading anything first."},
+            {"name": "SWAP_REQ",     "lsb": 8, "width": 1, "access": "RWP", "description": "Writing 1 requests a weight-bank swap. The swap happens when the first beam group of the next start-of-frame beat is issued, not here; poll WEIGHT_STATUS.SWAP_PENDING to watch it retire. Refused, and flagged in SWAP_OVERRUN, while SWAP_BUSY is set. THE WHOLE MATRIX SWAPS AT ONCE, never per beam: a beamforming matrix is one calibration solution and a half-swapped array steers to a geometry that was never solved for. See rtl/beamformer/weight_bank.sv section 2 for the alternatives that were rejected."},
+            {"name": "STATUS_CLEAR", "lsb": 9, "width": 1, "access": "RWP", "description": "Writing 1 clears the sticky WEIGHT_STATUS.WR_REJECT and WEIGHT_STATUS.SWAP_OVERRUN bits."}
+          ]
+        },
+        {
+          "name": "WEIGHT_ADDR",
+          "offset": "0x014",
+          "description": "Weight index within the selected bank, beam-major and antenna-minor: index = beam*N_ANTENNAS + antenna (beamformer_pkg::bf_weight_index). That is the order the RTL, the C++ model and the weight files all use, so a bank is loaded by counting up from zero.",
+          "fields": [
+            {"name": "INDEX",    "lsb": 0,  "width": 16, "access": "RW", "reset": "0x0000", "description": "Weight index. 16 bits covers 16 beams x 16 antennas with room for the larger arrays beamformer_pkg's bounds allow; an index beyond the elaborated bank is dropped and raises WR_REJECT."},
+            {"name": "AUTO_INC", "lsb": 31, "width": 1,  "access": "RW", "reset": "0x1",    "description": "When 1, the LIVE index advances by one after every accepted WEIGHT_DATA write, so a whole bank is loaded by writing WEIGHT_ADDR once and WEIGHT_DATA repeatedly. As with COEFF_ADDR, INDEX reads back the last value SOFTWARE wrote rather than the live index, for the same reason: reg_csr_block has no hardware-write path into an RW field. The live index lives in rtl/control/reg_block_coeff.sv, is reloaded by any WEIGHT_ADDR write, and is what a transfer carries."}
+          ]
+        },
+        {
+          "name": "WEIGHT_DATA",
+          "offset": "0x018",
+          "description": "One complex Q1.15 beam weight, packed {IM, RE} with the real part in the low half - the same layout as fxp_pkg::fxp_complex_t. WRITING THIS REGISTER ISSUES THE TRANSFER; WEIGHT_CTRL and WEIGHT_ADDR only set it up. Refused while WEIGHT_STATUS.WR_BUSY is set. Reads return the last value written, not the bank contents: the bank lives in the core clock domain and a read-back path would be a second crossing for no diagnostic gain.",
+          "fields": [
+            {"name": "RE", "lsb": 0,  "width": 16, "access": "RW", "reset": "0x0000", "description": "Real part, Q1.15."},
+            {"name": "IM", "lsb": 16, "width": 16, "access": "RW", "reset": "0x0000", "description": "Imaginary part, Q1.15."}
+          ]
+        },
+        {
+          "name": "WEIGHT_STATUS",
+          "offset": "0x01C",
+          "description": "Hardware-driven status for the beam-weight plane. Every bit is synchronised out of the core clock domain, so it is a snapshot of a free-running block rather than a handshake - except the two BUSY bits, which are exactly the flow control.",
+          "fields": [
+            {"name": "ACTIVE_BANK",  "lsb": 0,  "width": 1,  "access": "ROHW", "description": "The bank the matrix is beamforming with. Changes only when the first beam group of a start-of-frame beat is issued (SPEC 7.5), which the RTL asserts as a_coeff_swap_at_sof inside the reused store."},
+            {"name": "SWAP_PENDING", "lsb": 1,  "width": 1,  "access": "ROHW", "description": "A swap has been requested and is waiting for the next frame boundary."},
+            {"name": "WR_BUSY",      "lsb": 2,  "width": 1,  "access": "ROHW", "description": "A weight write is in flight across the clock-domain crossing. A WEIGHT_DATA write issued while this is set is refused."},
+            {"name": "SWAP_BUSY",    "lsb": 3,  "width": 1,  "access": "ROHW", "description": "A swap request is in flight across the crossing. A second SWAP_REQ while this is set is refused and sets SWAP_OVERRUN."},
+            {"name": "WR_REJECT",    "lsb": 8,  "width": 1,  "access": "ROHW", "description": "Sticky: at least one weight write since the last completed swap targeted the ACTIVE bank, or an index outside the elaborated bank, and was dropped. Cleared by WEIGHT_CTRL.STATUS_CLEAR."},
+            {"name": "SWAP_OVERRUN", "lsb": 9,  "width": 1,  "access": "ROHW", "description": "Sticky: a swap request was refused because one was already in flight. Cleared by WEIGHT_CTRL.STATUS_CLEAR."},
+            {"name": "N_WEIGHTS",    "lsb": 16, "width": 16, "access": "ROHW", "description": "Weights per bank in the elaborated design (N_BEAMS * N_ANTENNAS), reported by hardware so software can size a load without a build-time constant."}
+          ]
+        },
+        {
+          "name": "WEIGHT_PARALLELISM",
+          "offset": "0x020",
+          "description": "The elaborated beamformer geometry, driven by hardware from rtl/beamformer/beamformer.sv's tput_* ports. SPEC 7.5: 'Do not silently reduce throughput to meet utilization. Any time multiplexing must be visible in parameters and reported throughput.' These four fields plus WEIGHT_THROUGHPUT are that visibility, and they are folded in at elaboration so a build cannot report a shape it does not have.",
+          "fields": [
+            {"name": "N_ANTENNAS", "lsb": 0,  "width": 8, "access": "ROHW", "description": "Antennas summed by each dot product."},
+            {"name": "N_BEAMS",    "lsb": 8,  "width": 8, "access": "ROHW", "description": "Beams the matrix produces per frequency bin."},
+            {"name": "BIN_PAR",    "lsb": 16, "width": 8, "access": "ROHW", "description": "Frequency bins carried by one input beat, each as a complete N_ANTENNAS vector."},
+            {"name": "BEAM_PAR",   "lsb": 24, "width": 8, "access": "ROHW", "description": "Beams computed per cycle by the elaborated engine. Equal to N_BEAMS when there is no time multiplexing."}
+          ]
+        },
+        {
+          "name": "WEIGHT_THROUGHPUT",
+          "offset": "0x024",
+          "description": "The derived throughput of the elaborated beamformer. BEAM_MUX is the time-multiplex factor N_BEAMS/BEAM_PAR: the block accepts one input beat every BEAM_MUX cycles and emits one output beat per cycle, each carrying BEAM_PAR beams of BIN_PAR bins, so sustained bins per cycle is BIN_PAR/BEAM_MUX. Reading a value greater than 1 in BEAM_MUX is the design telling software that its input rate is reduced - which is precisely what SPEC 7.5 forbids doing silently.",
+          "fields": [
+            {"name": "BEAM_MUX",            "lsb": 0, "width": 8,  "access": "ROHW", "description": "N_BEAMS / BEAM_PAR. 1 when every beam is computed in parallel and there is no multiplexing at all."},
+            {"name": "BEAM_BINS_PER_CYCLE", "lsb": 8, "width": 16, "access": "ROHW", "description": "BIN_PAR * BEAM_PAR: the engine's arithmetic throughput in beam-bins per cycle. Invariant under the multiplex, because multiplexing trades input rate for engine reuse and nothing else."}
           ]
         }
       ]

@@ -7,10 +7,10 @@ for the register and control plane ([SPEC.md](../SPEC.md) §9, issue #7). Edit t
 and re-run the generator; `make regmap-check` fails the build on any hand edit here or
 on a source change that was never regenerated.
 
-- Register-map version: **1.2.0** (schema 1)
+- Register-map version: **1.3.0** (schema 1)
 - Interface: 32-bit data, 16-bit byte address, 4 byte enables
 - Window per block: `0x1000` bytes
-- Blocks declared: 9 (7 implemented), registers implemented: 53
+- Blocks declared: 9 (7 implemented), registers implemented: 59
 
 ## Access types
 
@@ -34,7 +34,7 @@ the non-writable bits (`error=0`).
 | `ctrl` | `0x2000`–`0x2FFF` | 4 | implemented | Per-block enable and reset |
 | `fault` | `0x3000`–`0x3FFF` | 4 | implemented | Fault injection |
 | `scratch` | `0x4000`–`0x4FFF` | 4 | implemented | Snapshot and debug control |
-| `coeff` | `0x5000`–`0x5FFF` | 4 | implemented | Coefficient and weight programming; Active bank selection |
+| `coeff` | `0x5000`–`0x5FFF` | 10 | implemented | Coefficient and weight programming; Active bank selection |
 | `cfar` | `0x6000`–`0x6FFF` | 0 | planned (#14, #16) | CFAR settings; Integration settings |
 | `counters` | `0x7000`–`0x7FFF` | 21 | implemented | Stream counters; Stall counters; FIFO high-water marks; Overflow and saturation counts; Frame counts; Sequence errors; CDC errors; Snapshot and debug control |
 | `debug` | `0x8000`–`0x8FFF` | 0 | planned (#19) | Snapshot and debug control |
@@ -52,8 +52,8 @@ Fixed identification of the control plane itself. Every field is a constant fold
 | Offset | Address | Register | Access | Reset | Description |
 |---|---|---|---|---|---|
 | `0x000` | `0x0000` | `MAGIC` | RO | `0x52414441` | Constant marker. Reading 0x52414441 ('RADA') at block base proves a control plane is present and the address decode is alive. |
-| `0x004` | `0x0004` | `VERSION` | RO | `0x01020001` | Register-map version, from regmap_version in the source of truth. Static build data, deliberately not a git describe: the same source tree must produce the same register contents on any machine, and a VCS-derived value would make the generated artefacts depend on checkout state. |
-| `0x008` | `0x0008` | `GEOMETRY` | RO | `0x10203509` | Shape of the register plane, so a discovery walk needs no compiled-in constants. |
+| `0x004` | `0x0004` | `VERSION` | RO | `0x01030001` | Register-map version, from regmap_version in the source of truth. Static build data, deliberately not a git describe: the same source tree must produce the same register contents on any machine, and a VCS-derived value would make the generated artefacts depend on checkout state. |
+| `0x008` | `0x0008` | `GEOMETRY` | RO | `0x10203B09` | Shape of the register plane, so a discovery walk needs no compiled-in constants. |
 | `0x00C` | `0x000C` | `CAPABILITY` | RO | `0x000000BF` | One bit per declared block, set when that block is implemented in this build. Bit i is block i in declaration order; a planned block reads 0 and its window returns error. |
 
 ### `ID.MAGIC` — `0x0000`
@@ -67,7 +67,7 @@ Fixed identification of the control plane itself. Every field is a constant fold
 | Bits | Field | Access | Reset | Source | Description |
 |---|---|---|---|---|---|
 | `31:24` | `MAJOR` | RO | `0x1` | — | Incompatible layout change. |
-| `23:16` | `MINOR` | RO | `0x2` | — | Registers or fields added. |
+| `23:16` | `MINOR` | RO | `0x3` | — | Registers or fields added. |
 | `15:8` | `PATCH` | RO | `0x0` | — | Documentation-only change. |
 | `7:0` | `SCHEMA` | RO | `0x1` | — | Source-of-truth schema version. |
 
@@ -76,7 +76,7 @@ Fixed identification of the control plane itself. Every field is a constant fold
 | Bits | Field | Access | Reset | Source | Description |
 |---|---|---|---|---|---|
 | `7:0` | `N_BLOCKS` | RO | `0x9` | — | Declared blocks, implemented and planned. |
-| `15:8` | `N_REGS` | RO | `0x35` | — | Implemented registers across all blocks. |
+| `15:8` | `N_REGS` | RO | `0x3B` | — | Implemented registers across all blocks. |
 | `23:16` | `DATA_W` | RO | `0x20` | — | Register data width in bits. |
 | `31:24` | `ADDR_W` | RO | `0x10` | — | Register address width in bits. |
 
@@ -317,7 +317,7 @@ Software scratch registers with no hardware effect. They exist to test the fabri
 
 ## `coeff` — `0x5000`
 
-Coefficient and weight programming with double buffering and an active-bank select (SPEC 7.1, SPEC 9). Implemented for the polyphase FIR bank by issue #10; the FFT twiddles (#11), the beam weights (#12) and the per-antenna fan-out (#16) extend it inside the same reserved window. PROGRAMMING SEQUENCE: set COEFF_CTRL.BANK_SEL to the SPARE bank, write COEFF_ADDR once, then write COEFF_DATA per coefficient (the DATA write is what issues the transfer; AUTO_INC advances the index), then write COEFF_CTRL.SWAP_REQ. The swap takes effect at the next start-of-frame beat and not before, which is what makes a frame filtered by exactly one coefficient set. A write aimed at the bank that is currently ACTIVE is refused and raises COEFF_STATUS.WR_REJECT; it is never merged and never deferred. Every field here crosses a clock domain, because the register plane runs on cfg_clk and the bank on core_clk (rtl/pfb/coeff_bank.sv, issue #6 primitives): writes through a four-phase handshake, SWAP_REQ through a pulse synchronizer, and each status bit through its own flip-flop synchronizer. WR_BUSY and SWAP_BUSY are therefore flow control, not decoration.
+Coefficient and weight programming with double buffering and an active-bank select (SPEC 7.1, SPEC 9). Implemented for the polyphase FIR bank by issue #10; the FFT twiddles (#11), the beam weights (#12) and the per-antenna fan-out (#16) extend it inside the same reserved window. PROGRAMMING SEQUENCE: set COEFF_CTRL.BANK_SEL to the SPARE bank, write COEFF_ADDR once, then write COEFF_DATA per coefficient (the DATA write is what issues the transfer; AUTO_INC advances the index), then write COEFF_CTRL.SWAP_REQ. The swap takes effect at the next start-of-frame beat and not before, which is what makes a frame filtered by exactly one coefficient set. A write aimed at the bank that is currently ACTIVE is refused and raises COEFF_STATUS.WR_REJECT; it is never merged and never deferred. Every field here crosses a clock domain, because the register plane runs on cfg_clk and the bank on core_clk (rtl/pfb/coeff_bank.sv, issue #6 primitives): writes through a four-phase handshake, SWAP_REQ through a pulse synchronizer, and each status bit through its own flip-flop synchronizer. WR_BUSY and SWAP_BUSY are therefore flow control, not decoration. ISSUE #12 ADDED THE BEAM-WEIGHT HALF OF THIS WINDOW (WEIGHT_CTRL, WEIGHT_ADDR, WEIGHT_DATA, WEIGHT_STATUS, WEIGHT_PARALLELISM, WEIGHT_THROUGHPUT), at offsets 0x010..0x024. It is a SECOND, INDEPENDENT programming port with the same shape as the coefficient half above, not a re-use of it: the polyphase coefficients and the beam weights are different stores in different blocks with independent active banks, and sharing one CTRL/ADDR/DATA triple would make loading one of them while the other streams a race with no way to express it. Every rule above - the DATA write is what issues the transfer, AUTO_INC advances the live index, a write aimed at the ACTIVE bank is refused and flagged, the swap takes effect at a frame boundary and not before - holds verbatim for the weight half, because rtl/beamformer/weight_bank.sv reuses the same dual-bank store rather than reimplementing it. WEIGHT_PARALLELISM and WEIGHT_THROUGHPUT are the SPEC 7.5 requirement that any time multiplexing be visible in reported throughput rather than silently reducing it; they are hardware-driven constants folded in at elaboration, so a build cannot report a throughput it does not have.
 
 | Offset | Address | Register | Access | Reset | Description |
 |---|---|---|---|---|---|
@@ -325,6 +325,12 @@ Coefficient and weight programming with double buffering and an active-bank sele
 | `0x004` | `0x5004` | `COEFF_ADDR` | RW | `0x80000000` | Coefficient index within the selected bank, phase-major and tap-minor: index = phase*PFB_TAPS + tap (pfb_pkg::pfb_coeff_index). That is the order scripts/generate_coefficients.py writes its files in, so a bank is loaded by counting up from zero. |
 | `0x008` | `0x5008` | `COEFF_DATA` | RW | `0x00000000` | One complex Q1.15 coefficient, packed {IM, RE} with the real part in the low half - the same layout as fxp_pkg::fxp_complex_t and the coefficient files. WRITING THIS REGISTER ISSUES THE TRANSFER; COEFF_CTRL and COEFF_ADDR only set it up. Refused while COEFF_STATUS.WR_BUSY is set. Reads return the last value written, not the bank contents: the bank lives in the core clock domain and a read-back path would be a second crossing for no diagnostic gain the coefficient files do not already provide. |
 | `0x00C` | `0x500C` | `COEFF_STATUS` | ROHW | `0x00000000` | Hardware-driven status for the coefficient plane. Every bit is synchronised out of the core clock domain, so it is a snapshot of a free-running block rather than a handshake - except the two BUSY bits, which are exactly the flow control. |
+| `0x010` | `0x5010` | `WEIGHT_CTRL` | MIXED | `0x00000001` | Bank selection and the swap request for the BEAM-WEIGHT store (SPEC 7.5, issue #12). BANK_SEL names the bank a WEIGHT_DATA write targets; it is NOT the active bank, which changes only at a frame boundary and is reported by WEIGHT_STATUS.ACTIVE_BANK. |
+| `0x014` | `0x5014` | `WEIGHT_ADDR` | RW | `0x80000000` | Weight index within the selected bank, beam-major and antenna-minor: index = beam*N_ANTENNAS + antenna (beamformer_pkg::bf_weight_index). That is the order the RTL, the C++ model and the weight files all use, so a bank is loaded by counting up from zero. |
+| `0x018` | `0x5018` | `WEIGHT_DATA` | RW | `0x00000000` | One complex Q1.15 beam weight, packed {IM, RE} with the real part in the low half - the same layout as fxp_pkg::fxp_complex_t. WRITING THIS REGISTER ISSUES THE TRANSFER; WEIGHT_CTRL and WEIGHT_ADDR only set it up. Refused while WEIGHT_STATUS.WR_BUSY is set. Reads return the last value written, not the bank contents: the bank lives in the core clock domain and a read-back path would be a second crossing for no diagnostic gain. |
+| `0x01C` | `0x501C` | `WEIGHT_STATUS` | ROHW | `0x00000000` | Hardware-driven status for the beam-weight plane. Every bit is synchronised out of the core clock domain, so it is a snapshot of a free-running block rather than a handshake - except the two BUSY bits, which are exactly the flow control. |
+| `0x020` | `0x5020` | `WEIGHT_PARALLELISM` | ROHW | `0x00000000` | The elaborated beamformer geometry, driven by hardware from rtl/beamformer/beamformer.sv's tput_* ports. SPEC 7.5: 'Do not silently reduce throughput to meet utilization. Any time multiplexing must be visible in parameters and reported throughput.' These four fields plus WEIGHT_THROUGHPUT are that visibility, and they are folded in at elaboration so a build cannot report a shape it does not have. |
+| `0x024` | `0x5024` | `WEIGHT_THROUGHPUT` | ROHW | `0x00000000` | The derived throughput of the elaborated beamformer. BEAM_MUX is the time-multiplex factor N_BEAMS/BEAM_PAR: the block accepts one input beat every BEAM_MUX cycles and emits one output beat per cycle, each carrying BEAM_PAR beams of BIN_PAR bins, so sustained bins per cycle is BIN_PAR/BEAM_MUX. Reading a value greater than 1 in BEAM_MUX is the design telling software that its input rate is reduced - which is precisely what SPEC 7.5 forbids doing silently. |
 
 ### `COEFF.COEFF_CTRL` — `0x5000`
 
@@ -359,6 +365,56 @@ Coefficient and weight programming with double buffering and an active-bank sele
 | `8` | `WR_REJECT` | ROHW | `0x0` | — | Sticky: at least one coefficient write since the last completed swap targeted the ACTIVE bank, or an index outside the elaborated bank, and was dropped. Cleared by COEFF_CTRL.STATUS_CLEAR. |
 | `9` | `SWAP_OVERRUN` | ROHW | `0x0` | — | Sticky: a swap request was refused because one was already in flight. Cleared by COEFF_CTRL.STATUS_CLEAR. |
 | `31:16` | `N_COEFF` | ROHW | `0x0` | — | Coefficients per bank in the elaborated design (SAMPLES_PER_CYCLE * PFB_TAPS), reported by hardware so software can size a load without a build-time constant. |
+
+### `COEFF.WEIGHT_CTRL` — `0x5010`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `0` | `BANK_SEL` | RW | `0x1` | — | Target bank for weight writes. Resets to 1 because the active bank resets to 0, so the reset state is already a legal programming state and software can write without reading anything first. |
+| `8` | `SWAP_REQ` | RWP | `0x0` | — | Writing 1 requests a weight-bank swap. The swap happens when the first beam group of the next start-of-frame beat is issued, not here; poll WEIGHT_STATUS.SWAP_PENDING to watch it retire. Refused, and flagged in SWAP_OVERRUN, while SWAP_BUSY is set. THE WHOLE MATRIX SWAPS AT ONCE, never per beam: a beamforming matrix is one calibration solution and a half-swapped array steers to a geometry that was never solved for. See rtl/beamformer/weight_bank.sv section 2 for the alternatives that were rejected. |
+| `9` | `STATUS_CLEAR` | RWP | `0x0` | — | Writing 1 clears the sticky WEIGHT_STATUS.WR_REJECT and WEIGHT_STATUS.SWAP_OVERRUN bits. |
+
+### `COEFF.WEIGHT_ADDR` — `0x5014`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `15:0` | `INDEX` | RW | `0x0` | — | Weight index. 16 bits covers 16 beams x 16 antennas with room for the larger arrays beamformer_pkg's bounds allow; an index beyond the elaborated bank is dropped and raises WR_REJECT. |
+| `31` | `AUTO_INC` | RW | `0x1` | — | When 1, the LIVE index advances by one after every accepted WEIGHT_DATA write, so a whole bank is loaded by writing WEIGHT_ADDR once and WEIGHT_DATA repeatedly. As with COEFF_ADDR, INDEX reads back the last value SOFTWARE wrote rather than the live index, for the same reason: reg_csr_block has no hardware-write path into an RW field. The live index lives in rtl/control/reg_block_coeff.sv, is reloaded by any WEIGHT_ADDR write, and is what a transfer carries. |
+
+### `COEFF.WEIGHT_DATA` — `0x5018`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `15:0` | `RE` | RW | `0x0` | — | Real part, Q1.15. |
+| `31:16` | `IM` | RW | `0x0` | — | Imaginary part, Q1.15. |
+
+### `COEFF.WEIGHT_STATUS` — `0x501C`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `0` | `ACTIVE_BANK` | ROHW | `0x0` | — | The bank the matrix is beamforming with. Changes only when the first beam group of a start-of-frame beat is issued (SPEC 7.5), which the RTL asserts as a_coeff_swap_at_sof inside the reused store. |
+| `1` | `SWAP_PENDING` | ROHW | `0x0` | — | A swap has been requested and is waiting for the next frame boundary. |
+| `2` | `WR_BUSY` | ROHW | `0x0` | — | A weight write is in flight across the clock-domain crossing. A WEIGHT_DATA write issued while this is set is refused. |
+| `3` | `SWAP_BUSY` | ROHW | `0x0` | — | A swap request is in flight across the crossing. A second SWAP_REQ while this is set is refused and sets SWAP_OVERRUN. |
+| `8` | `WR_REJECT` | ROHW | `0x0` | — | Sticky: at least one weight write since the last completed swap targeted the ACTIVE bank, or an index outside the elaborated bank, and was dropped. Cleared by WEIGHT_CTRL.STATUS_CLEAR. |
+| `9` | `SWAP_OVERRUN` | ROHW | `0x0` | — | Sticky: a swap request was refused because one was already in flight. Cleared by WEIGHT_CTRL.STATUS_CLEAR. |
+| `31:16` | `N_WEIGHTS` | ROHW | `0x0` | — | Weights per bank in the elaborated design (N_BEAMS * N_ANTENNAS), reported by hardware so software can size a load without a build-time constant. |
+
+### `COEFF.WEIGHT_PARALLELISM` — `0x5020`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `7:0` | `N_ANTENNAS` | ROHW | `0x0` | — | Antennas summed by each dot product. |
+| `15:8` | `N_BEAMS` | ROHW | `0x0` | — | Beams the matrix produces per frequency bin. |
+| `23:16` | `BIN_PAR` | ROHW | `0x0` | — | Frequency bins carried by one input beat, each as a complete N_ANTENNAS vector. |
+| `31:24` | `BEAM_PAR` | ROHW | `0x0` | — | Beams computed per cycle by the elaborated engine. Equal to N_BEAMS when there is no time multiplexing. |
+
+### `COEFF.WEIGHT_THROUGHPUT` — `0x5024`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `7:0` | `BEAM_MUX` | ROHW | `0x0` | — | N_BEAMS / BEAM_PAR. 1 when every beam is computed in parallel and there is no multiplexing at all. |
+| `23:8` | `BEAM_BINS_PER_CYCLE` | ROHW | `0x0` | — | BIN_PAR * BEAM_PAR: the engine's arithmetic throughput in beam-bins per cycle. Invariant under the multiplex, because multiplexing trades input rate for engine reuse and nothing else. |
 
 ## `cfar` — `0x6000`
 

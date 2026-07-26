@@ -278,6 +278,17 @@ module control_top
   wire        coeff_swap_req_unused, coeff_status_clear_unused;
   wire [REGMAP_COEFF_N_REGS*32-1:0] coeff_pulse;
 
+  // The beam-weight half of the same window (issue #12), tied off for the same
+  // reason: control_top proves the REGISTER PLANE, and wiring a live
+  // rtl/beamformer/weight_bank.sv into it would make a register-plane failure
+  // and a beamformer failure indistinguishable.
+  // sim/verilator/tops/beamformer_top.sv drives the weight bank's configuration
+  // port directly in the meantime.
+  wire        weight_wr_valid_unused, weight_wr_bank_unused;
+  wire [15:0] weight_wr_index_unused;
+  wire [31:0] weight_wr_data_unused;
+  wire        weight_swap_req_unused, weight_status_clear_unused;
+
   reg_block_coeff #(
       .IDX_W (IDX_W)
   ) u_coeff (
@@ -305,6 +316,25 @@ module control_top
       .hw_wr_reject    (1'b0),
       .hw_swap_overrun (1'b0),
       .hw_n_coeff      (16'd0),
+      .wwr_valid       (weight_wr_valid_unused),
+      .wwr_bank        (weight_wr_bank_unused),
+      .wwr_index       (weight_wr_index_unused),
+      .wwr_data        (weight_wr_data_unused),
+      .wswap_req       (weight_swap_req_unused),
+      .wstatus_clear   (weight_status_clear_unused),
+      .hw_w_active_bank  (1'b0),
+      .hw_w_swap_pending (1'b0),
+      .hw_w_wr_busy      (1'b0),
+      .hw_w_swap_busy    (1'b0),
+      .hw_w_wr_reject    (1'b0),
+      .hw_w_swap_overrun (1'b0),
+      .hw_n_weights      (16'd0),
+      .hw_n_antennas     (8'd0),
+      .hw_n_beams        (8'd0),
+      .hw_bin_par        (8'd0),
+      .hw_beam_par       (8'd0),
+      .hw_beam_mux       (8'd0),
+      .hw_beam_bins_per_cycle (16'd0),
       .csr             (obs_coeff_csr),
       .pulse           (coeff_pulse)
   );

@@ -40,6 +40,10 @@ TODO — each implementing issue appends its own modules.
 
 Register-map types are added by issue #7.
 
+Two packages deliberately live with their block rather than here, because exactly one
+block uses each: `rtl/fft/fft_pkg.sv` (issue #11) and `rtl/beamformer/beamformer_pkg.sv`
+(issue #12). `rtl/packages/` holds the packages more than one block shares.
+
 Two modules belong to the same contract although they live elsewhere:
 
 | Path | Parameters | Issue | Function |
@@ -230,8 +234,172 @@ position, not by time, so a frame's output requires `fft_total_latency()` **furt
 to be admitted before it emerges. In continuous operation that is invisible; a finite test
 must flush, and `sim/tests/test_fft.cpp` does.
 
-Issues #12–#14 populate the remaining block directories; issue #15 consumes this one and
-decides whether `REORDER` is worth its frame of latency.
+Issue #15 consumes this block and decides whether `REORDER` is worth its frame of
+latency.
+
+#### Beamforming matrix (`rtl/beamformer/`, issue #12)
+
+SPEC §7.5. `Y[b][f] = sum over antennas a of X[a][f] * W[b][a]` — parameterised in
+antennas, beams, bins per beat and beams per cycle, with double-buffered weights, a
+pipelined accumulation tree and explicit saturation reporting. **This is the design's
+dominant DSP consumer**: every other kernel's DSP count is a fraction of it.
+
+```text
+one beat = BIN_PAR aligned antenna vectors        (issue #16 produces this alignment)
+
+  s_payload.data                                       weight_bank (2 banks)
+  +--------------------------------------+             +--------------------+
+  | bin 0: X[0..N_ANT-1]                 |             | W[b][a], beam-major|
+  | bin 1: X[0..N_ANT-1]                 |             +---------+----------+
+  | ...                                  |                       | group mux
+  +------------------+-------------------+                       v
+                     |  hold register (also the multiplex source)
+                     v
+        +------------+-------------------------------------------+
+        |  BIN_PAR x BEAM_PAR  bf_dot                            |
+        |    N_ANT complex_multiplier (ROUND_OUT = 0, exact)     |
+        |    balanced adder tree at bf_acc_w(N_ANT) bits         |
+        |    ONE fxp_round_sat to Q1.15 + saturation flags       |
+        +------------+-------------------------------------------+
+                     v
+        one output beat = BEAM_PAR beams x BIN_PAR bins of ONE beam group
+```
+
+##### The input contract (NORMATIVE)
+
+A beat's `data` field carries **`BIN_PAR` consecutive frequency bins, each as the complete
+vector of `N_ANT` complex Q1.15 samples for that bin**, bin-major and antenna-minor:
+
+```text
+data[(j*N_ANT + a) * 2*SAMPLE_W  +:  2*SAMPLE_W]   =   X[antenna a][bin_base + j]
+    j in [0, BIN_PAR)     a in [0, N_ANT)          packed {im, re}, Q1.15
+```
+
+With `BIN_PAR = 1` this is exactly "one beat is one bin's antenna vector".
+
+**The word *aligned* is the whole contract.** Every antenna's sample in a beat must be the
+**same frequency bin of the same frame**. A beamformer sums across the antenna dimension,
+so a beat in which antenna 3 is one bin behind the others produces a result that is not a
+beam and is *not detectably wrong from the output alone*. Producing that alignment is
+issue #16's frequency alignment network, and it is the reason that issue exists. This block
+assumes it and states the assumption, because an assumption that lives only in a diagram is
+an assumption nobody checks.
+
+What the block does **not** assume, and therefore does not require of #16:
+
+* **no particular bin order.** `bin_base` is positional, not decoded: bin *j* of the beat is
+  bin *j* of the beat, and the frame's mapping from beat index to absolute bin index is a
+  frame-level convention carried by the sequence number.
+* **no relationship between frame length and any parameter.** Frames are delimited by
+  `start_of_frame` / `end_of_frame` exactly as SPEC §5 says.
+
+The output beat is the transpose of that nesting, because the output's slow axis is the beam
+where the input's is the bin:
+
+```text
+data[(k*BIN_PAR + j) * 2*SAMPLE_W  +:  2*SAMPLE_W]  =  Y[group*BEAM_PAR + k][bin_base + j]
+```
+
+**Payload widths.** `BIN_PAR * N_ANT * 32` in, `BIN_PAR * BEAM_PAR * 32` out. The input beat
+is the widest interface in the design: 1024 bits at the 2-bin, 16-antenna slice the SPEC §18
+calibration compiles, and 4096 bits at the `full_agmf039` 8-bin, 16-antenna configuration.
+`stream_pkg::STREAM_MAX_DATA_W` was raised from 256 to **1024** by this issue for that
+reason, and deliberately not to 4096; see DECISIONS.md (issue #12, decision 5).
+
+##### Modules
+
+| Path | Parameters | Issue | Function |
+|---|---|---|---|
+| `rtl/beamformer/beamformer_pkg.sv` | none (functions only) | #12 | The single definition of the block's geometry and arithmetic: `bf_acc_w()` (accumulator width, from `fxp_pkg`'s own policy), the adder-tree geometry and register count, the latency accounting, the time-multiplex factor and its power-of-two rule, the beam-major weight index, and the two payload widths. `model/cpp/beamformer/beamformer_model.hpp` is its C++ mirror and the test checks the two against each other before anything else runs. |
+| `rtl/beamformer/bf_dot.sv` | `N_ANT`, `MULT_PIPE_STAGES`, `MULT_VARIANT`, `ADD_REG_EVERY` | #12 | One beam x one bin complex dot product: `N_ANT` `complex_multiplier` instances at `ROUND_OUT = 0`, a balanced binary adder tree at `bf_acc_w(N_ANT)` bits with a register every `ADD_REG_EVERY` levels, and **one** `fxp_round_sat` to Q1.15 with direction-resolved flags. Also exports the exact accumulator for issue #13. Fixed-latency valid pipeline, no ready. The SPEC §18 item 6 calibration unit. |
+| `rtl/beamformer/weight_bank.sv` | `N_BEAMS`, `N_ANT`, `SYNC_STAGES`, `ALLOW_UNSAFE_SWAP` | #12 | The double-buffered `N_BEAMS x N_ANT` weight store with a frame-aligned swap. **Instantiates `rtl/pfb/coeff_bank.sv`** rather than reimplementing a dual-bank store, a clock-domain seam and a swap state machine; it adds the beamformer's bounds, the beam-major index contract and a beamformer-named status surface. Swap granularity is the **whole array**, never per beam. |
+| `rtl/beamformer/beamformer.sv` | `N_ANT`, `N_BEAMS`, `BIN_PAR`, `BEAM_PAR`, `MULT_PIPE_STAGES`, `MULT_VARIANT`, `ADD_REG_EVERY`, SPEC §5 field widths, `SYNC_STAGES`, `TELEM_COUNT_W` | #12 | The SPEC §5 block: the credit-gated elastic input boundary, the hold register that is also the time-multiplex source, the weight bank and its beam-group mux, the `BIN_PAR x BEAM_PAR` engine, the metadata path, the output elastic buffer, the SPEC §9 telemetry, and the SPEC §7.5 reported-throughput ports. |
+
+Simulation-only and synthesis-only companions:
+
+| Path | Parameters | Issue | Function |
+|---|---|---|---|
+| `sim/verilator/tops/beamformer_top.sv` | none | #12 | Verification top holding **three** matrices in one elaboration — the reference engine, the same engine with `BEAM_PAR` halved so the beams are time multiplexed, and the same engine with two adders per register stage — all admitting the same beats, plus two standalone 16-antenna dot products and one weight bank with the frame-boundary rule disabled. |
+| `sim/assertions/beamformer_assertions.sv` | `N_DOT`, `OUT_DEPTH`, `CRED_W`, `BEAM_MUX`, `GRP_W` | #12 | The SPEC §14 property set: the credit argument and the time-multiplex contract. See VERIFICATION_PLAN.md §5.12. |
+| `quartus/calibration/bf_dot_wrap.sv` | `N_ANT`, `MULT_PIPE_STAGES`, `VARIANT_SEL`, `ADD_REG_EVERY` | #12 | SPEC §18 item 6 wrapper: one 16-antenna dot product between boundary registers. |
+| `quartus/calibration/bf_matrix_wrap.sv` | `N_ANT`, `N_BEAMS`, `BIN_PAR`, `BEAM_PAR`, `MULT_PIPE_STAGES`, `ADD_REG_EVERY`, `VARIANT_SEL` | #12 | SPEC §18 item 7 wrapper: a 2-bin x 4-beam x 16-antenna slice of the matrix — the same arithmetic as one complete beam at 8 bins per cycle — between boundary registers, with `BEAM_MUX = 2` so the multiplex machinery is in the measured design. |
+
+##### Time multiplexing, in parameters and in reported throughput
+
+SPEC §7.5: *"Do not silently reduce throughput to meet utilization. Any time multiplexing
+must be visible in parameters and reported throughput."*
+
+When `BEAM_PAR < N_BEAMS` the remaining beams are computed on later cycles from the same
+held input beat, in `BEAM_MUX = N_BEAMS / BEAM_PAR` groups:
+
+```text
+input  beats accepted per cycle  =  1 / BEAM_MUX
+output beats produced per cycle  =  1
+bins  per input  beat            =  BIN_PAR
+beams per output beat            =  BEAM_PAR
+sustained bins per cycle         =  BIN_PAR / BEAM_MUX
+arithmetic throughput            =  BIN_PAR * BEAM_PAR beam-bins per cycle   (invariant)
+```
+
+The last line is the one that matters: multiplexing trades **input rate for engine reuse**
+and changes nothing else. All six numbers are exported on the block's `tput_*` ports and are
+read back through `WEIGHT_PARALLELISM` / `WEIGHT_THROUGHPUT` in the register map, so the
+throughput claim is a readback rather than a comment. `beamformer_assertions` additionally
+checks the admission rate on live traffic, so a build that admitted faster than the engine
+can serve fails rather than silently dropping beams.
+
+`BEAM_MUX` is a power of two, checked at elaboration, because that buys the output sequence
+number: `seq_out = {seq_in, group}` is a free concatenation, is continuous beat-to-beat
+(which `stream_protocol_checker` requires), and is invertible by slicing.
+
+##### Output metadata convention
+
+Output beat *k* is not "the same beat as" any input beat once `BEAM_MUX > 1`, so the mapping
+is a stated convention rather than an implied one — the same situation issue #11 faced for
+the FFT:
+
+| field | value |
+|---|---|
+| `stream_id` | unchanged |
+| `seq` | `{seq_in, group}`; identical to `seq_in` when `BEAM_MUX = 1` |
+| `start_of_frame` | set on **group 0** of an input beat carrying `start_of_frame` |
+| `end_of_frame` | set on the **last group** of an input beat carrying `end_of_frame` |
+| `user` | **the beam group index**: the beams in this beat are `[group*BEAM_PAR, (group+1)*BEAM_PAR)` |
+
+`user` carries the group rather than forwarding the input's `user` because SPEC §12.5's
+transaction identity names `beam` as a dimension and this is the only field it can live in;
+the bin dimension is positional within the beat and needs no field.
+
+##### Flow control, numerics and the weight swap
+
+* **Elastic at the boundary, fixed latency inside.** The interior is a valid-tagged pipeline
+  with no ready at all — a ready chain into a `bf_dot` would land `m_ready` on the clock
+  enable of every DSP register in the largest DSP array in the design. `s_ready` is a
+  flip-flop whose input depends only on this block's own credit counter and hold state, and
+  an input beat is admitted only when **`BEAM_MUX` output slots** are reserved. Reserving
+  all of them at once is what makes the reservation sound: an input beat is an
+  all-or-nothing commitment to `BEAM_MUX` outputs.
+* **One quantisation, at the end.** Every multiplier runs at `ROUND_OUT = 0`; the `N_ANT`
+  exact 33-bit partial products are summed at `bf_acc_w(N_ANT)` bits — 37 for 16 antennas —
+  a width at which the accumulation provably cannot overflow, and the result is rounded and
+  saturated exactly once. There is therefore **no intermediate saturation**, integer
+  addition is associative, and `ADD_REG_EVERY` is a pure cost parameter: the tree's shape
+  cannot change its answer. Issue #9 measured what the alternative costs — a rounding
+  network is about 100 ALMs and roughly half the achievable clock, so rounding per antenna
+  would buy sixteen of them and double the quantisation noise.
+* **Latency is pure cycles.** There is no sample history anywhere in a beamformer, so every
+  register combines same-beat values and free-runs. Unlike `pfb_pkg`, `beamformer_pkg` has
+  no beat-measured latency at all; a consumer delays metadata by `bf_lat_cycles()` cycles
+  and nothing else.
+* **The weight swap is aligned to the ISSUE, not the admission.** With `BEAM_MUX > 1` a new
+  beat is admitted on the same cycle as the *last group of the previous beat is issued*, so
+  driving the bank from the admission swaps the matrix one cycle early and gives the
+  previous frame's final beat its last `BEAM_PAR` beams from the next frame's weights. That
+  was a real defect, found by the multiplexed DUT; see DECISIONS.md (issue #12, decision 4).
+
+Issue #13 consumes this block's output (and its exact-accumulator port); issue #16 produces
+its input; issue #20 freezes `BIN_PAR` and `BEAM_PAR` against the SPEC §18 measurements.
+
 
 ### 3.6 Packet fabric (`rtl/packet/`)
 
@@ -438,6 +606,8 @@ TODO — populated by issue #2 (config plumbing into the build) and issue #20.
 | `fft_dit_merge` | `ROM_LAT + TW_PIPE + 1` | 1 beat/enabled cycle | #11 |
 | `fft_reorder` | `M + 1` beats (`M = FFT_SIZE/SAMPLES_PER_CYCLE`) | 1 beat/enabled cycle | #11 |
 | `streaming_fft` | `fft_pkg::fft_total_latency()` beats — **88** at 64 points / 2 SPC with `REORDER = 1`, **55** without | 1 beat/cycle while credits allow | #11 |
+| `bf_dot` | `MULT_PIPE + ceil(clog2(N_ANT) / ADD_REG_EVERY) + 1` cycles, 0 beats — **9** at 16 antennas with a register per tree level, **7** with one per two levels | 1 operand set/cycle, no backpressure | #12 |
+| `beamformer` | the dot product's, plus 1 cycle for the input hold register, plus 1 for the output elastic buffer | **`BIN_PAR / BEAM_MUX` bins per cycle**; one input beat accepted every `BEAM_MUX = N_BEAMS/BEAM_PAR` cycles and one output beat produced per cycle. Arithmetic throughput is `BIN_PAR * BEAM_PAR` beam-bins/cycle and is invariant under the multiplex. Reported on the `tput_*` ports and readable through `WEIGHT_THROUGHPUT`. | #12 |
 
 The FFT's latency is counted in **beats**, not cycles, and the distinction is load-bearing:
 its delay feedbacks advance on beats while its multipliers free-run, so a gap on the input

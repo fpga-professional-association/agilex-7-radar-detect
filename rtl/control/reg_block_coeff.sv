@@ -32,6 +32,33 @@
 // rtl/control/generated/regmap_pkg.sv supplies every mask and index; nothing
 // here is a literal.
 //
+// TWO PROGRAMMING PORTS IN ONE WINDOW (issue #12)
+// -----------------------------------------------
+// The window now carries a SECOND, structurally identical port group for the
+// BEAM WEIGHTS (SPEC 7.5): WEIGHT_CTRL / WEIGHT_ADDR / WEIGHT_DATA /
+// WEIGHT_STATUS, driving `wwr_*` into rtl/beamformer/weight_bank.sv, plus two
+// read-only registers reporting the elaborated parallelism and the derived
+// throughput.
+//
+// A second port rather than a target-select field on the first, and the reason
+// is a race that would otherwise have no expression: the polyphase coefficients
+// and the beam weights are different stores, in different blocks, with
+// INDEPENDENT active banks and independent swap timing. One CTRL/ADDR/DATA
+// triple shared between them would mean software could not load one while the
+// other is mid-load, and the register map would have no way to say so. Two port
+// groups cost a second 16-bit index register and a second transfer strobe.
+//
+// Everything else is deliberately the same shape, because it is the same store:
+// rtl/beamformer/weight_bank.sv reuses rtl/pfb/coeff_bank.sv rather than
+// reimplementing it, so the data-write trigger, AUTO_INC, the active-bank
+// refusal and the frame-boundary swap behave identically and are documented
+// once, above.
+//
+// WEIGHT_PARALLELISM and WEIGHT_THROUGHPUT are pure ROHW: the beamformer drives
+// them from its own elaboration parameters (rtl/beamformer/beamformer.sv,
+// `tput_*`), which is what makes SPEC 7.5's "any time multiplexing must be
+// visible in ... reported throughput" a readback rather than a claim.
+//
 // Lint contract: clean under `--Wall` with no waiver.
 // -----------------------------------------------------------------------------
 
@@ -79,6 +106,34 @@ module reg_block_coeff
     input  wire                                hw_swap_overrun,
     input  wire [15:0]                         hw_n_coeff,
 
+    // ---- to rtl/beamformer/weight_bank.sv (cfg domain), issue #12 ----------
+    // Structurally identical to the coefficient group above; see the header for
+    // why it is a second port rather than a target-select field.
+    output wire                                wwr_valid,
+    output wire                                wwr_bank,
+    output wire [15:0]                         wwr_index,
+    output wire [2*16-1:0]                     wwr_data,
+    output wire                                wswap_req,
+    output wire                                wstatus_clear,
+
+    // ---- from rtl/beamformer/weight_bank.sv (already synchronised) ---------
+    input  wire                                hw_w_active_bank,
+    input  wire                                hw_w_swap_pending,
+    input  wire                                hw_w_wr_busy,
+    input  wire                                hw_w_swap_busy,
+    input  wire                                hw_w_wr_reject,
+    input  wire                                hw_w_swap_overrun,
+    input  wire [15:0]                         hw_n_weights,
+
+    // ---- the SPEC 7.5 reported throughput, straight from the beamformer's
+    // elaboration parameters (rtl/beamformer/beamformer.sv `tput_*`) ---------
+    input  wire [7:0]                          hw_n_antennas,
+    input  wire [7:0]                          hw_n_beams,
+    input  wire [7:0]                          hw_bin_par,
+    input  wire [7:0]                          hw_beam_par,
+    input  wire [7:0]                          hw_beam_mux,
+    input  wire [15:0]                         hw_beam_bins_per_cycle,
+
     // Storage, observable without going through the read mux.
     output wire [REGMAP_COEFF_N_REGS*32-1:0]   csr,
     output wire [REGMAP_COEFF_N_REGS*32-1:0]   pulse
@@ -104,6 +159,30 @@ module reg_block_coeff
         hw_wr_busy,                                   // [2]
         hw_swap_pending,                              // [1]
         hw_active_bank                                // [0]
+    };
+    hw_value[REGMAP_COEFF_WEIGHT_STATUS_INDEX*32 +: 32] = {
+        hw_n_weights,                                 // [31:16] N_WEIGHTS
+        6'd0,
+        hw_w_swap_overrun,                            // [9]
+        hw_w_wr_reject,                               // [8]
+        4'd0,
+        hw_w_swap_busy,                               // [3]
+        hw_w_wr_busy,                                 // [2]
+        hw_w_swap_pending,                            // [1]
+        hw_w_active_bank                              // [0]
+    };
+    // SPEC 7.5 reported throughput. Constants at elaboration, so these two
+    // registers cannot describe a build other than the one that is running.
+    hw_value[REGMAP_COEFF_WEIGHT_PARALLELISM_INDEX*32 +: 32] = {
+        hw_beam_par,                                  // [31:24]
+        hw_bin_par,                                   // [23:16]
+        hw_n_beams,                                   // [15:8]
+        hw_n_antennas                                 // [7:0]
+    };
+    hw_value[REGMAP_COEFF_WEIGHT_THROUGHPUT_INDEX*32 +: 32] = {
+        8'd0,
+        hw_beam_bins_per_cycle,                       // [23:8]
+        hw_beam_mux                                   // [7:0]
     };
   end
 
@@ -226,6 +305,72 @@ module reg_block_coeff
       pulse_i[REGMAP_COEFF_COEFF_CTRL_INDEX*32 +
               REGMAP_COEFF_COEFF_CTRL_STATUS_CLEAR_LSB];
 
+  // ---------------------------------------------------------------------------
+  // The beam-weight port (issue #12). Structurally identical to everything
+  // above, on WEIGHT_CTRL / WEIGHT_ADDR / WEIGHT_DATA instead of COEFF_*; see
+  // the header for why it is a second port group rather than a target select.
+  // Every rationale in the coefficient sections applies verbatim and is not
+  // repeated.
+  // ---------------------------------------------------------------------------
+  logic wdata_write;
+  assign wdata_write = sel && write_enable &&
+                       (index == IDX_W'(REGMAP_COEFF_WEIGHT_DATA_INDEX));
+
+  wire [31:0] waddr_reg = csr_i[REGMAP_COEFF_WEIGHT_ADDR_INDEX*32 +: 32];
+  wire [31:0] wctrl_reg = csr_i[REGMAP_COEFF_WEIGHT_CTRL_INDEX*32 +: 32];
+
+  wire        w_auto_inc = waddr_reg[REGMAP_COEFF_WEIGHT_ADDR_AUTO_INC_LSB];
+  wire        w_cur_bank = wctrl_reg[REGMAP_COEFF_WEIGHT_CTRL_BANK_SEL_LSB];
+
+  logic waddr_write;
+  assign waddr_write = sel && write_enable &&
+                       (index == IDX_W'(REGMAP_COEFF_WEIGHT_ADDR_INDEX));
+
+  logic [15:0] windex_q;
+
+  always_ff @(posedge clk) begin
+    if (!rst_n) begin
+      windex_q <= 16'd0;
+    end else if (waddr_write) begin
+      windex_q <= write_data[REGMAP_COEFF_WEIGHT_ADDR_INDEX_LSB +: 16];
+    end else if (wdata_write && w_auto_inc) begin
+      windex_q <= windex_q + 16'd1;
+    end
+  end
+
+  logic        wwr_valid_q;
+  logic        wwr_bank_q;
+  logic [15:0] wwr_index_q;
+  logic [31:0] wwr_data_q;
+
+  always_ff @(posedge clk) begin
+    if (!rst_n) begin
+      wwr_valid_q <= 1'b0;
+    end else begin
+      wwr_valid_q <= wdata_write;
+    end
+  end
+
+  always_ff @(posedge clk) begin
+    if (wdata_write) begin
+      wwr_bank_q  <= w_cur_bank;
+      wwr_index_q <= windex_q;
+      wwr_data_q  <= write_data;
+    end
+  end
+
+  assign wwr_valid = wwr_valid_q;
+  assign wwr_bank  = wwr_bank_q;
+  assign wwr_index = wwr_index_q;
+  assign wwr_data  = wwr_data_q;
+
+  assign wswap_req =
+      pulse_i[REGMAP_COEFF_WEIGHT_CTRL_INDEX*32 +
+              REGMAP_COEFF_WEIGHT_CTRL_SWAP_REQ_LSB];
+  assign wstatus_clear =
+      pulse_i[REGMAP_COEFF_WEIGHT_CTRL_INDEX*32 +
+              REGMAP_COEFF_WEIGHT_CTRL_STATUS_CLEAR_LSB];
+
 `ifndef SYNTHESIS
   // The transfer strobe must be one cycle wide and must follow a data write.
   // Both are structural above; asserted so a future edit cannot quietly widen
@@ -240,6 +385,18 @@ module reg_block_coeff
       a_coeff_index_moves_only_on_purpose : assert (
           $stable(index_q) || $past(addr_write) || ($past(data_write) && $past(auto_inc)))
         else $error("reg_block_coeff: the live coefficient index moved without a write");
+
+      // The same two obligations for the beam-weight port. Stated separately
+      // rather than folded into the ones above, because a failure has to name
+      // WHICH store lost a transfer: a beamformer loaded through the
+      // coefficient index and a polyphase bank loaded through the weight index
+      // would both be silently wrong and would look identical in a waveform.
+      a_weight_wr_valid_follows_write : assert (!wwr_valid_q || $past(wdata_write))
+        else $error("reg_block_coeff: wwr_valid without a preceding WEIGHT_DATA write");
+      a_weight_index_moves_only_on_purpose : assert (
+          $stable(windex_q) || $past(waddr_write) ||
+          ($past(wdata_write) && $past(w_auto_inc)))
+        else $error("reg_block_coeff: the live weight index moved without a write");
     end
   end
 `endif

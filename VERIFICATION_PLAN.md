@@ -233,9 +233,108 @@ RESULT: FAIL seed=1 test=test_pfb_bank rtl_vs_model=22028 rtl_vs_vector=1494 ...
 with the first failure on the very first directed set. The injection was reverted; the
 transcript is in the issue #10 pull request.
 
+#### `test_beamformer` — beamforming matrix (SPEC §7.5, issue #12)
+
+Drives `beamformer_top`, which holds **three complete matrices** in one elaboration,
+admitting exactly the same beats, differing only in the two things this issue has to defend:
+
+| DUT | `BIN_PAR` | `BEAM_PAR` | `BEAM_MUX` | `ADD_REG_EVERY` | what it proves |
+|---|---|---|---|---|---|
+| `ref` | 2 | 4 | 1 | 1 | the reference engine |
+| `mux2` | 2 | 2 | 2 | 1 | time multiplexing produces the same beams, spread over twice as many output beats |
+| `reg2` | 2 | 4 | 1 | 2 | two adders per register stage is the same integer |
+
+plus **two standalone 16-antenna dot products** (`ADD_REG_EVERY` 1 and 2) sharing one operand
+port — the SPEC §7.5 nominal antenna count and the geometry the SPEC §18 calibration
+compiles — and one weight bank with the frame-boundary rule disabled, outside the datapath.
+
+All three matrices have the same input payload width, so one stimulus port drives them and
+the equivalences are **same-cycle facts about one stream** rather than comparisons of
+separate runs. The visible consequence of lockstep admission is that the whole top runs at
+`mux2`'s rate, which is exactly the throughput reduction SPEC §7.5 asks to be made visible.
+
+The SPEC §7.5 / §13.1 verification list, and where each case lives:
+
+| Case | Where |
+|---|---|
+| zero input, zero weights | pass 1, on the 16-antenna dot product. Both directions of the SPEC §13.2 zero relation; the expected value needs no model |
+| unit weights → passthrough | pass 2 (dot) and pass 4 (matrix). Beam *b* selects antenna *(b+1) mod N_ANT* and nothing else, so the expectation is that antenna's sample scaled by `0x7FFF`, computed by a **one-term** dot product rather than by the general path |
+| orthogonal weight patterns | pass 2. Rows of a 16×16 Sylvester Hadamard matrix scaled to ±1/16 (2048 in Q1.15, exactly representable): a stimulus equal to row *p* lands entirely in beam *p* and **exactly zero** in every other. An expectation with no model in it that exercises every antenna at full weight |
+| maximum-amplitude saturation | pass 3 (dot, three amplitude regimes) and pass 8 (matrix, full-scale weights against full-scale input), with a coverage audit that fails the run if both saturation directions were not observed |
+| random samples and weights, ≥3 seeds | passes 3 and 5, seeded from `+seed`; 5504 dot results and 7448 output beats per seed |
+| weight-bank swap | pass 6: two frames, a swap requested **mid-frame**, each frame checked against its own weight set, with the whole of the second set written into the spare bank **while the first frame streams** |
+| random output backpressure | pass 5, three profiles at none / light / heavy |
+| time multiplexing | every matrix pass, plus an explicit output-beat count check: `mux2` must produce exactly `BEAM_MUX` output beats per input beat |
+| adder-tree pipelining | every pass; `reg2` and `u_dot16_r2` must be bit-identical to their `ADD_REG_EVERY = 1` twins |
+
+**Matching is by sequence number, not by position**, for the reason `test_pfb_bank` gives —
+and here it does one more job: it lets one expectation serve three engines whose output
+**rates** differ. `mux2`'s output sequence is `{seq_in, group}`, so its two beats per input
+land on two distinct, predictable keys.
+
+**Content invariance under backpressure is a direct comparison.** The three profiles drive
+the **same stimulus** (different sequence numbers, so the SPEC §5 protocol checker stays
+happy; identical data), and the stalled runs are required to be beat-for-beat identical to
+the dense run — not merely both correct against the model.
+
+**The predicted transition behaviour at a weight swap is "none", and that is a claim rather
+than an absence.** A beamformer has no sample history, so every dot product of a beat reads
+the weight bank on the same cycle: the swap is atomic at the beat that carries it and there
+is no transition window at all. Contrast the polyphase bank's systolic cascade, whose taps
+sample the coefficient set up to `TAPS-1` beats apart and which therefore *has* a predicted
+mixed window. The expectation is built with a hard switch at the swap beat, so if the RTL had
+a transition window this pass would fail on every beat of it — which is exactly how the
+swap-point defect recorded in DECISIONS.md (issue #12, decision 4) was found.
+
+**The independent cross-check is in C++, not NumPy, and that is a recorded deviation.**
+SPEC §12.4's standing problem is that an oracle agreeing only with itself is not an oracle,
+and the C++ model shares `fxp_pkg`'s definitions with the RTL *by design* — that is what
+makes them bit-exact. Every non-saturating beat is therefore also checked against
+`bf::dot_float()`, a **double-precision** evaluation of the same sum through no shared code,
+to within 2 output LSB.
+
+Issues #4, #9, #10 and #11 discharge the same obligation with a committed NumPy vector set.
+This issue does not ship one, deliberately:
+
+* the beamformer is **stateless** — no history, no schedule, no twiddle table — so a golden
+  file would carry no information the weight set and the input beat do not already carry,
+  whereas an FFT vector pins a whole scaling schedule and a PFB vector pins a tap ordering;
+* the two error classes a vector file exists to catch here are covered more directly and
+  more cheaply: a **wrong algorithm** by the double-precision leg (a different number system
+  entirely), and a **wrong index** by the orthogonality case and the permutation relation
+  (expectations with no model in them at all);
+* the generator, the committed vectors and the regenerate-and-compare wiring would be real
+  files that must be kept in step forever, for a block whose reference is four lines of
+  arithmetic.
+
+If a later issue makes the beamformer stateful — a per-beam gain schedule, an adaptive
+update — this trade stops holding and a generator should be added with it.
+
+**Fault injection.** The oracle was proved to bite by **transposing the weight index** in
+`rtl/beamformer/beamformer.sv` (`w_rows[b][a] <= w_all[a*N_BEAMS + b]`) and re-running seed 1:
+
+```text
+RESULT: FAIL seed=1 test=test_beamformer rtl_vs_model=41472 rtl_vs_float=41472
+        rtl_vs_directed=1024 metamorphic=1024 ...
+```
+
+The experiment also **changed the test**. With the first version of the unit-weight pass —
+beam *b* selects antenna *b* — the matrix `W` is the identity, which is **symmetric** and
+therefore unchanged by a transpose, and that pass reported `rtl_vs_directed = 0` while 38 400
+model comparisons failed around it. The same is true of the Hadamard pass, whose matrix is
+symmetric by construction (`H[p][a]` depends only on `popcount(p & a)`). The unit-weight pass
+was changed to a cyclic shift, which is asymmetric for every `N_ANT > 2`, and the injection
+was re-run to confirm it now fails too. The injection was then reverted; both transcripts are
+in the issue #12 pull request.
+
+The lesson is recorded because it generalises: **a directed case built from a symmetric
+matrix cannot detect a transpose**, and a transpose is the most likely defect in any matrix
+kernel. The permutation relation below is the check that does not depend on getting that
+right.
+
 ### 4.2 Metamorphic tests (SPEC §13.2)
 
-TODO — populated by issues #10–#14.
+Populated progressively by issues #10–#14; #10 and #12 have landed.
 
 Implemented for the polyphase FIR bank (issue #10), in `test_pfb_bank`, on stimulus held at
 half scale under an L1-scaled filter so that nothing saturates and the relations are not
@@ -249,6 +348,27 @@ vacuous:
 
 The pass fails if it compared fewer lane-beats than it drove, so a relation that silently
 found nothing to check is a failure rather than a pass.
+
+Implemented for the beamforming matrix (issue #12), in `test_beamformer`, on stimulus held at
+half scale under small weights so that nothing saturates and the relations are not vacuous:
+
+| Relation | Statement | Why it is exact |
+|---|---|---|
+| **permutation** | permuting the antenna inputs **and** the antenna axis of the weights by the same permutation leaves every beam output **bit-identical** | the accumulation carries no intermediate saturation and integer addition is commutative, so "equivalent" is stronger than SPEC §13.2 asks for. This is the relation SPEC §13.2 names for this block specifically |
+| negation | `y(-x) == -y(x)` | round-to-nearest-even is symmetric about zero |
+| scaling | doubling the input doubles the output to within the one LSB rounding may move it | the exact half — RTL against the model on the scaled run — is checked separately |
+| delay | delaying the input by `D` beats delays the output by `D` beats, value for value | the block is memoryless across beats by construction |
+
+The permutation used is a **rotation by one**, chosen because it is the permutation a
+transposed or off-by-one weight index is least able to survive, and fixed rather than random
+so that a failure is reproducible from the message alone. The pass fails if it compared fewer
+slots than it drove, so a relation that silently found nothing to check is a failure rather
+than a pass.
+
+This is also the strongest available check on the weight **index**. A transposed or rotated
+index still produces beams, still saturates plausibly and still passes every protocol check;
+what it cannot do is commute with a permutation applied to both operands — see the fault
+injection under §4.1.
 
 ### 4.3 Random testing (SPEC §13.3)
 
@@ -629,6 +749,52 @@ An unprovoked run is a failure:
 
 This is the same expected-failure mechanism §5.2 and §5.6 use for the stream and CDC
 checkers.
+
+### 5.12 Beamforming assertion set (SPEC §14, issue #12)
+
+One checker module plus two inline property groups, all **instantiated by the RTL** under
+`` `ifndef SYNTHESIS `` rather than bound from a test, for the reason §5.10 gives.
+
+The weight bank contributes **no new properties**, and that is the point of how it is built:
+`rtl/beamformer/weight_bank.sv` reuses `rtl/pfb/coeff_bank.sv`, so `a_coeff_swap_at_sof` and
+`a_coeff_stable_between` (§5.10) already hold for the beam weights, with no second copy to
+drift.
+
+| Property | Module | What it forbids |
+|---|---|---|
+| `a_bf_admit_only_when_group_complete` | `beamformer_assertions` | **the property this file exists for.** A new input beat being admitted while the held beat still has beam groups to issue. That overwrites a beat whose remaining beams were never computed, and the result is *silently missing beams*: every output beat is still a well-formed beam sample, the protocol is still legal and the frame counts still add up |
+| `a_bf_group_advances_on_issue` | `beamformer_assertions` | the beam-group counter not advancing exactly once per issued group |
+| `a_bf_group_holds_when_idle` | `beamformer_assertions` | the group counter advancing on a cycle with nothing issued, which would slide the group index away from the metadata travelling with it |
+| `a_bf_group_in_range` | `beamformer_assertions` | the group counter leaving `[0, BEAM_MUX)` (elaborated only where the counter's own width does not already imply it) |
+| `a_bf_issue_implies_held` | `beamformer_assertions` | a group being issued with no beat held, which would multiply whatever the deliberately-unreset hold register happened to contain — plausible noise rather than an X |
+| `a_bf_out_never_blocked` | `beamformer_assertions` | the output elastic buffer refusing a beat; if it fires, the fixed-latency interior stalled |
+| `a_bf_no_credit_no_admit` | `beamformer_assertions` | `s_ready` asserting with fewer than `BEAM_MUX` credits. An input beat is an all-or-nothing commitment to `BEAM_MUX` outputs, so a partial reservation is not a smaller commitment — it is a beat whose later groups have nowhere to go |
+| `a_bf_credit_bound` | `beamformer_assertions` | the credit counter exceeding `OUT_DEPTH` |
+| `a_bf_dot_valid_uniform` | `beamformer_assertions` | the `BIN_PAR × BEAM_PAR` dot products disagreeing about when a result is valid |
+| `a_bf_mult_valid_uniform` | `bf_dot` (inline) | the per-antenna multipliers disagreeing about validity |
+| `a_bf_tree_matches_flat_sum` | `bf_dot` (inline) | the adder tree computing anything other than the sum of its own leaves. A flat reduction of level 0, delayed by exactly the tree's register depth, is compared against the tree output on every valid cycle; any mis-wired level, wrong register stride or leaf-padding off-by-one shows up immediately instead of as a wrong beam sample thousands of beats later |
+| `a_weight_wr_valid_follows_write` | `reg_block_coeff` (inline) | the **weight** transfer strobe widening into a level. Stated separately from the coefficient one so a failure names *which* store lost a transfer |
+| `a_weight_index_moves_only_on_purpose` | `reg_block_coeff` (inline) | the live weight index moving without a `WEIGHT_ADDR` or auto-incremented `WEIGHT_DATA` write |
+
+`a_bf_admit_only_when_group_complete` and the two group-counter properties are elaborated
+only when `BEAM_MUX > 1`; at `BEAM_MUX = 1` every group is the last group and they are
+constant-true. That is precisely why `beamformer_top` elaborates a multiplexed instance:
+a property that only a multiplexed configuration can violate is untested in a build that has
+none, and the weight-swap defect of DECISIONS.md (issue #12, decision 4) was invisible at
+`BEAM_MUX = 1` for the same reason.
+
+**Proof that they fire.** `a_coeff_swap_at_sof` is provoked by name, exactly as §5.11
+describes: `beamformer_top` elaborates one `weight_bank` with `ALLOW_UNSAFE_SWAP = 1`,
+outside the datapath, and `test_beamformer` runs it as its **final** mode with
+`Verilated::fatalOnError(false)` and stdout captured. An unprovoked run is a failure:
+
+```text
+  swap assertion   : 1 expected fire(s)
+  expected failure : %Error: coeff_bank_checker.sv:72: Assertion failed in
+                     TOP.beamformer_top.u_unsafe.u_store.u_chk.a_coeff_swap_at_sof:
+                     coeff_bank: active bank changed outside a start-of-frame beat
+```
+
 
 ## 6. Coverage strategy
 

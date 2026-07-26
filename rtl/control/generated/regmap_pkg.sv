@@ -23,7 +23,7 @@ package regmap_pkg;
   localparam int unsigned REGMAP_WINDOW_W = 12;
   localparam int unsigned REGMAP_N_BLOCKS = 9;
   localparam int unsigned REGMAP_N_BLOCKS_IMPL = 7;
-  localparam int unsigned REGMAP_N_REGS_TOTAL = 53;
+  localparam int unsigned REGMAP_N_REGS_TOTAL = 59;
   localparam logic [31:0] REGMAP_BLOCK_MASK = 32'h000000BF;
 
   // ---- implemented block windows, in fabric port order ----
@@ -35,7 +35,7 @@ package regmap_pkg;
   //   [2] ctrl          base 0x2000  4 registers
   //   [3] fault         base 0x3000  4 registers
   //   [4] scratch       base 0x4000  4 registers
-  //   [5] coeff         base 0x5000  4 registers
+  //   [5] coeff         base 0x5000  10 registers
   //   [6] counters      base 0x7000  21 registers
 
   // -------------------------------------------------------------------------
@@ -129,8 +129,8 @@ package regmap_pkg;
   // reset value of the stored bits
   localparam logic [REGMAP_ID_N_REGS*32-1:0] REGMAP_ID_RESET = {
       32'h000000BF,  // [3]
-      32'h10203509,  // [2]
-      32'h01020001,  // [1]
+      32'h10203B09,  // [2]
+      32'h01030001,  // [1]
       32'h52414441  // [0]
   };
   // bits a software write may set or clear (RW)
@@ -835,11 +835,25 @@ package regmap_pkg;
   // core_clk (rtl/pfb/coeff_bank.sv, issue #6 primitives): writes through a four-phase
   // handshake, SWAP_REQ through a pulse synchronizer, and each status bit through its
   // own flip-flop synchronizer. WR_BUSY and SWAP_BUSY are therefore flow control, not
-  // decoration.
+  // decoration. ISSUE #12 ADDED THE BEAM-WEIGHT HALF OF THIS WINDOW (WEIGHT_CTRL,
+  // WEIGHT_ADDR, WEIGHT_DATA, WEIGHT_STATUS, WEIGHT_PARALLELISM, WEIGHT_THROUGHPUT), at
+  // offsets 0x010..0x024. It is a SECOND, INDEPENDENT programming port with the same
+  // shape as the coefficient half above, not a re-use of it: the polyphase coefficients
+  // and the beam weights are different stores in different blocks with independent
+  // active banks, and sharing one CTRL/ADDR/DATA triple would make loading one of them
+  // while the other streams a race with no way to express it. Every rule above - the
+  // DATA write is what issues the transfer, AUTO_INC advances the live index, a write
+  // aimed at the ACTIVE bank is refused and flagged, the swap takes effect at a frame
+  // boundary and not before - holds verbatim for the weight half, because
+  // rtl/beamformer/weight_bank.sv reuses the same dual-bank store rather than
+  // reimplementing it. WEIGHT_PARALLELISM and WEIGHT_THROUGHPUT are the SPEC 7.5
+  // requirement that any time multiplexing be visible in reported throughput rather
+  // than silently reducing it; they are hardware-driven constants folded in at
+  // elaboration, so a build cannot report a throughput it does not have.
   // -------------------------------------------------------------------------
   localparam logic [REGMAP_ADDR_W-1:0] REGMAP_COEFF_BASE = 16'h5000;
   localparam int unsigned REGMAP_COEFF_SIZE = 4096;
-  localparam int unsigned REGMAP_COEFF_N_REGS = 4;
+  localparam int unsigned REGMAP_COEFF_N_REGS = 10;
   localparam int unsigned REGMAP_COEFF_INDEX = 5;  // fabric port index
 
   // COEFF_CTRL @ 0x5000 (MIXED)
@@ -966,8 +980,198 @@ package regmap_pkg;
   localparam int unsigned REGMAP_COEFF_COEFF_STATUS_N_COEFF_WIDTH = 16;
   localparam logic [31:0] REGMAP_COEFF_COEFF_STATUS_N_COEFF_MASK = 32'hFFFF0000;
 
+  // WEIGHT_CTRL @ 0x5010 (MIXED)
+  //   Bank selection and the swap request for the BEAM-WEIGHT store (SPEC 7.5, issue
+  //   #12). BANK_SEL names the bank a WEIGHT_DATA write targets; it is NOT the active
+  //   bank, which changes only at a frame boundary and is reported by
+  //   WEIGHT_STATUS.ACTIVE_BANK.
+  //   [0:0] BANK_SEL (RW)
+  //       Target bank for weight writes. Resets to 1 because the active bank resets to
+  //       0, so the reset state is already a legal programming state and software can
+  //       write without reading anything first.
+  //   [8:8] SWAP_REQ (RWP)
+  //       Writing 1 requests a weight-bank swap. The swap happens when the first beam
+  //       group of the next start-of-frame beat is issued, not here; poll
+  //       WEIGHT_STATUS.SWAP_PENDING to watch it retire. Refused, and flagged in
+  //       SWAP_OVERRUN, while SWAP_BUSY is set. THE WHOLE MATRIX SWAPS AT ONCE, never
+  //       per beam: a beamforming matrix is one calibration solution and a half-swapped
+  //       array steers to a geometry that was never solved for. See
+  //       rtl/beamformer/weight_bank.sv section 2 for the alternatives that were
+  //       rejected.
+  //   [9:9] STATUS_CLEAR (RWP)
+  //       Writing 1 clears the sticky WEIGHT_STATUS.WR_REJECT and
+  //       WEIGHT_STATUS.SWAP_OVERRUN bits.
+  localparam int unsigned REGMAP_COEFF_WEIGHT_CTRL_INDEX = 4;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_COEFF_WEIGHT_CTRL_ADDR = 16'h5010;
+  localparam int unsigned REGMAP_COEFF_WEIGHT_CTRL_BANK_SEL_LSB = 0;
+  localparam int unsigned REGMAP_COEFF_WEIGHT_CTRL_BANK_SEL_WIDTH = 1;
+  localparam logic [31:0] REGMAP_COEFF_WEIGHT_CTRL_BANK_SEL_MASK = 32'h00000001;
+  localparam int unsigned REGMAP_COEFF_WEIGHT_CTRL_SWAP_REQ_LSB = 8;
+  localparam int unsigned REGMAP_COEFF_WEIGHT_CTRL_SWAP_REQ_WIDTH = 1;
+  localparam logic [31:0] REGMAP_COEFF_WEIGHT_CTRL_SWAP_REQ_MASK = 32'h00000100;
+  localparam int unsigned REGMAP_COEFF_WEIGHT_CTRL_STATUS_CLEAR_LSB = 9;
+  localparam int unsigned REGMAP_COEFF_WEIGHT_CTRL_STATUS_CLEAR_WIDTH = 1;
+  localparam logic [31:0] REGMAP_COEFF_WEIGHT_CTRL_STATUS_CLEAR_MASK = 32'h00000200;
+
+  // WEIGHT_ADDR @ 0x5014 (RW)
+  //   Weight index within the selected bank, beam-major and antenna-minor: index =
+  //   beam*N_ANTENNAS + antenna (beamformer_pkg::bf_weight_index). That is the order
+  //   the RTL, the C++ model and the weight files all use, so a bank is loaded by
+  //   counting up from zero.
+  //   [15:0] INDEX (RW)
+  //       Weight index. 16 bits covers 16 beams x 16 antennas with room for the larger
+  //       arrays beamformer_pkg's bounds allow; an index beyond the elaborated bank is
+  //       dropped and raises WR_REJECT.
+  //   [31:31] AUTO_INC (RW)
+  //       When 1, the LIVE index advances by one after every accepted WEIGHT_DATA
+  //       write, so a whole bank is loaded by writing WEIGHT_ADDR once and WEIGHT_DATA
+  //       repeatedly. As with COEFF_ADDR, INDEX reads back the last value SOFTWARE
+  //       wrote rather than the live index, for the same reason: reg_csr_block has no
+  //       hardware-write path into an RW field. The live index lives in
+  //       rtl/control/reg_block_coeff.sv, is reloaded by any WEIGHT_ADDR write, and is
+  //       what a transfer carries.
+  localparam int unsigned REGMAP_COEFF_WEIGHT_ADDR_INDEX = 5;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_COEFF_WEIGHT_ADDR_ADDR = 16'h5014;
+  localparam int unsigned REGMAP_COEFF_WEIGHT_ADDR_INDEX_LSB = 0;
+  localparam int unsigned REGMAP_COEFF_WEIGHT_ADDR_INDEX_WIDTH = 16;
+  localparam logic [31:0] REGMAP_COEFF_WEIGHT_ADDR_INDEX_MASK = 32'h0000FFFF;
+  localparam int unsigned REGMAP_COEFF_WEIGHT_ADDR_AUTO_INC_LSB = 31;
+  localparam int unsigned REGMAP_COEFF_WEIGHT_ADDR_AUTO_INC_WIDTH = 1;
+  localparam logic [31:0] REGMAP_COEFF_WEIGHT_ADDR_AUTO_INC_MASK = 32'h80000000;
+
+  // WEIGHT_DATA @ 0x5018 (RW)
+  //   One complex Q1.15 beam weight, packed {IM, RE} with the real part in the low half
+  //   - the same layout as fxp_pkg::fxp_complex_t. WRITING THIS REGISTER ISSUES THE
+  //   TRANSFER; WEIGHT_CTRL and WEIGHT_ADDR only set it up. Refused while
+  //   WEIGHT_STATUS.WR_BUSY is set. Reads return the last value written, not the bank
+  //   contents: the bank lives in the core clock domain and a read-back path would be a
+  //   second crossing for no diagnostic gain.
+  //   [15:0] RE (RW)
+  //       Real part, Q1.15.
+  //   [31:16] IM (RW)
+  //       Imaginary part, Q1.15.
+  localparam int unsigned REGMAP_COEFF_WEIGHT_DATA_INDEX = 6;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_COEFF_WEIGHT_DATA_ADDR = 16'h5018;
+  localparam int unsigned REGMAP_COEFF_WEIGHT_DATA_RE_LSB = 0;
+  localparam int unsigned REGMAP_COEFF_WEIGHT_DATA_RE_WIDTH = 16;
+  localparam logic [31:0] REGMAP_COEFF_WEIGHT_DATA_RE_MASK = 32'h0000FFFF;
+  localparam int unsigned REGMAP_COEFF_WEIGHT_DATA_IM_LSB = 16;
+  localparam int unsigned REGMAP_COEFF_WEIGHT_DATA_IM_WIDTH = 16;
+  localparam logic [31:0] REGMAP_COEFF_WEIGHT_DATA_IM_MASK = 32'hFFFF0000;
+
+  // WEIGHT_STATUS @ 0x501C (ROHW)
+  //   Hardware-driven status for the beam-weight plane. Every bit is synchronised out
+  //   of the core clock domain, so it is a snapshot of a free-running block rather than
+  //   a handshake - except the two BUSY bits, which are exactly the flow control.
+  //   [0:0] ACTIVE_BANK (ROHW)
+  //       The bank the matrix is beamforming with. Changes only when the first beam
+  //       group of a start-of-frame beat is issued (SPEC 7.5), which the RTL asserts as
+  //       a_coeff_swap_at_sof inside the reused store.
+  //   [1:1] SWAP_PENDING (ROHW)
+  //       A swap has been requested and is waiting for the next frame boundary.
+  //   [2:2] WR_BUSY (ROHW)
+  //       A weight write is in flight across the clock-domain crossing. A WEIGHT_DATA
+  //       write issued while this is set is refused.
+  //   [3:3] SWAP_BUSY (ROHW)
+  //       A swap request is in flight across the crossing. A second SWAP_REQ while this
+  //       is set is refused and sets SWAP_OVERRUN.
+  //   [8:8] WR_REJECT (ROHW)
+  //       Sticky: at least one weight write since the last completed swap targeted the
+  //       ACTIVE bank, or an index outside the elaborated bank, and was dropped.
+  //       Cleared by WEIGHT_CTRL.STATUS_CLEAR.
+  //   [9:9] SWAP_OVERRUN (ROHW)
+  //       Sticky: a swap request was refused because one was already in flight. Cleared
+  //       by WEIGHT_CTRL.STATUS_CLEAR.
+  //   [31:16] N_WEIGHTS (ROHW)
+  //       Weights per bank in the elaborated design (N_BEAMS * N_ANTENNAS), reported by
+  //       hardware so software can size a load without a build-time constant.
+  localparam int unsigned REGMAP_COEFF_WEIGHT_STATUS_INDEX = 7;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_COEFF_WEIGHT_STATUS_ADDR = 16'h501C;
+  localparam int unsigned REGMAP_COEFF_WEIGHT_STATUS_ACTIVE_BANK_LSB = 0;
+  localparam int unsigned REGMAP_COEFF_WEIGHT_STATUS_ACTIVE_BANK_WIDTH = 1;
+  localparam logic [31:0] REGMAP_COEFF_WEIGHT_STATUS_ACTIVE_BANK_MASK = 32'h00000001;
+  localparam int unsigned REGMAP_COEFF_WEIGHT_STATUS_SWAP_PENDING_LSB = 1;
+  localparam int unsigned REGMAP_COEFF_WEIGHT_STATUS_SWAP_PENDING_WIDTH = 1;
+  localparam logic [31:0] REGMAP_COEFF_WEIGHT_STATUS_SWAP_PENDING_MASK = 32'h00000002;
+  localparam int unsigned REGMAP_COEFF_WEIGHT_STATUS_WR_BUSY_LSB = 2;
+  localparam int unsigned REGMAP_COEFF_WEIGHT_STATUS_WR_BUSY_WIDTH = 1;
+  localparam logic [31:0] REGMAP_COEFF_WEIGHT_STATUS_WR_BUSY_MASK = 32'h00000004;
+  localparam int unsigned REGMAP_COEFF_WEIGHT_STATUS_SWAP_BUSY_LSB = 3;
+  localparam int unsigned REGMAP_COEFF_WEIGHT_STATUS_SWAP_BUSY_WIDTH = 1;
+  localparam logic [31:0] REGMAP_COEFF_WEIGHT_STATUS_SWAP_BUSY_MASK = 32'h00000008;
+  localparam int unsigned REGMAP_COEFF_WEIGHT_STATUS_WR_REJECT_LSB = 8;
+  localparam int unsigned REGMAP_COEFF_WEIGHT_STATUS_WR_REJECT_WIDTH = 1;
+  localparam logic [31:0] REGMAP_COEFF_WEIGHT_STATUS_WR_REJECT_MASK = 32'h00000100;
+  localparam int unsigned REGMAP_COEFF_WEIGHT_STATUS_SWAP_OVERRUN_LSB = 9;
+  localparam int unsigned REGMAP_COEFF_WEIGHT_STATUS_SWAP_OVERRUN_WIDTH = 1;
+  localparam logic [31:0] REGMAP_COEFF_WEIGHT_STATUS_SWAP_OVERRUN_MASK = 32'h00000200;
+  localparam int unsigned REGMAP_COEFF_WEIGHT_STATUS_N_WEIGHTS_LSB = 16;
+  localparam int unsigned REGMAP_COEFF_WEIGHT_STATUS_N_WEIGHTS_WIDTH = 16;
+  localparam logic [31:0] REGMAP_COEFF_WEIGHT_STATUS_N_WEIGHTS_MASK = 32'hFFFF0000;
+
+  // WEIGHT_PARALLELISM @ 0x5020 (ROHW)
+  //   The elaborated beamformer geometry, driven by hardware from
+  //   rtl/beamformer/beamformer.sv's tput_* ports. SPEC 7.5: 'Do not silently reduce
+  //   throughput to meet utilization. Any time multiplexing must be visible in
+  //   parameters and reported throughput.' These four fields plus WEIGHT_THROUGHPUT are
+  //   that visibility, and they are folded in at elaboration so a build cannot report a
+  //   shape it does not have.
+  //   [7:0] N_ANTENNAS (ROHW)
+  //       Antennas summed by each dot product.
+  //   [15:8] N_BEAMS (ROHW)
+  //       Beams the matrix produces per frequency bin.
+  //   [23:16] BIN_PAR (ROHW)
+  //       Frequency bins carried by one input beat, each as a complete N_ANTENNAS
+  //       vector.
+  //   [31:24] BEAM_PAR (ROHW)
+  //       Beams computed per cycle by the elaborated engine. Equal to N_BEAMS when
+  //       there is no time multiplexing.
+  localparam int unsigned REGMAP_COEFF_WEIGHT_PARALLELISM_INDEX = 8;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_COEFF_WEIGHT_PARALLELISM_ADDR = 16'h5020;
+  localparam int unsigned REGMAP_COEFF_WEIGHT_PARALLELISM_N_ANTENNAS_LSB = 0;
+  localparam int unsigned REGMAP_COEFF_WEIGHT_PARALLELISM_N_ANTENNAS_WIDTH = 8;
+  localparam logic [31:0] REGMAP_COEFF_WEIGHT_PARALLELISM_N_ANTENNAS_MASK = 32'h000000FF;
+  localparam int unsigned REGMAP_COEFF_WEIGHT_PARALLELISM_N_BEAMS_LSB = 8;
+  localparam int unsigned REGMAP_COEFF_WEIGHT_PARALLELISM_N_BEAMS_WIDTH = 8;
+  localparam logic [31:0] REGMAP_COEFF_WEIGHT_PARALLELISM_N_BEAMS_MASK = 32'h0000FF00;
+  localparam int unsigned REGMAP_COEFF_WEIGHT_PARALLELISM_BIN_PAR_LSB = 16;
+  localparam int unsigned REGMAP_COEFF_WEIGHT_PARALLELISM_BIN_PAR_WIDTH = 8;
+  localparam logic [31:0] REGMAP_COEFF_WEIGHT_PARALLELISM_BIN_PAR_MASK = 32'h00FF0000;
+  localparam int unsigned REGMAP_COEFF_WEIGHT_PARALLELISM_BEAM_PAR_LSB = 24;
+  localparam int unsigned REGMAP_COEFF_WEIGHT_PARALLELISM_BEAM_PAR_WIDTH = 8;
+  localparam logic [31:0] REGMAP_COEFF_WEIGHT_PARALLELISM_BEAM_PAR_MASK = 32'hFF000000;
+
+  // WEIGHT_THROUGHPUT @ 0x5024 (ROHW)
+  //   The derived throughput of the elaborated beamformer. BEAM_MUX is the
+  //   time-multiplex factor N_BEAMS/BEAM_PAR: the block accepts one input beat every
+  //   BEAM_MUX cycles and emits one output beat per cycle, each carrying BEAM_PAR beams
+  //   of BIN_PAR bins, so sustained bins per cycle is BIN_PAR/BEAM_MUX. Reading a value
+  //   greater than 1 in BEAM_MUX is the design telling software that its input rate is
+  //   reduced - which is precisely what SPEC 7.5 forbids doing silently.
+  //   [7:0] BEAM_MUX (ROHW)
+  //       N_BEAMS / BEAM_PAR. 1 when every beam is computed in parallel and there is no
+  //       multiplexing at all.
+  //   [23:8] BEAM_BINS_PER_CYCLE (ROHW)
+  //       BIN_PAR * BEAM_PAR: the engine's arithmetic throughput in beam-bins per
+  //       cycle. Invariant under the multiplex, because multiplexing trades input rate
+  //       for engine reuse and nothing else.
+  localparam int unsigned REGMAP_COEFF_WEIGHT_THROUGHPUT_INDEX = 9;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_COEFF_WEIGHT_THROUGHPUT_ADDR = 16'h5024;
+  localparam int unsigned REGMAP_COEFF_WEIGHT_THROUGHPUT_BEAM_MUX_LSB = 0;
+  localparam int unsigned REGMAP_COEFF_WEIGHT_THROUGHPUT_BEAM_MUX_WIDTH = 8;
+  localparam logic [31:0] REGMAP_COEFF_WEIGHT_THROUGHPUT_BEAM_MUX_MASK = 32'h000000FF;
+  localparam int unsigned REGMAP_COEFF_WEIGHT_THROUGHPUT_BEAM_BINS_PER_CYCLE_LSB = 8;
+  localparam int unsigned REGMAP_COEFF_WEIGHT_THROUGHPUT_BEAM_BINS_PER_CYCLE_WIDTH = 16;
+  localparam logic [31:0] REGMAP_COEFF_WEIGHT_THROUGHPUT_BEAM_BINS_PER_CYCLE_MASK = 32'h00FFFF00;
+
   // reset value of the stored bits
   localparam logic [REGMAP_COEFF_N_REGS*32-1:0] REGMAP_COEFF_RESET = {
+      32'h00000000,  // [9]
+      32'h00000000,  // [8]
+      32'h00000000,  // [7]
+      32'h00000000,  // [6]
+      32'h80000000,  // [5]
+      32'h00000001,  // [4]
       32'h00000000,  // [3]
       32'h00000000,  // [2]
       32'h80000000,  // [1]
@@ -975,6 +1179,12 @@ package regmap_pkg;
   };
   // bits a software write may set or clear (RW)
   localparam logic [REGMAP_COEFF_N_REGS*32-1:0] REGMAP_COEFF_WMASK = {
+      32'h00000000,  // [9]
+      32'h00000000,  // [8]
+      32'h00000000,  // [7]
+      32'hFFFFFFFF,  // [6]
+      32'h8000FFFF,  // [5]
+      32'h00000001,  // [4]
       32'h00000000,  // [3]
       32'hFFFFFFFF,  // [2]
       32'h8000FFFF,  // [1]
@@ -982,6 +1192,12 @@ package regmap_pkg;
   };
   // bits cleared by writing 1, set by hardware (W1C)
   localparam logic [REGMAP_COEFF_N_REGS*32-1:0] REGMAP_COEFF_W1CMASK = {
+      32'h00000000,  // [9]
+      32'h00000000,  // [8]
+      32'h00000000,  // [7]
+      32'h00000000,  // [6]
+      32'h00000000,  // [5]
+      32'h00000000,  // [4]
       32'h00000000,  // [3]
       32'h00000000,  // [2]
       32'h00000000,  // [1]
@@ -989,6 +1205,12 @@ package regmap_pkg;
   };
   // bits that pulse for one cycle and read 0 (RWP)
   localparam logic [REGMAP_COEFF_N_REGS*32-1:0] REGMAP_COEFF_PULSEMASK = {
+      32'h00000000,  // [9]
+      32'h00000000,  // [8]
+      32'h00000000,  // [7]
+      32'h00000000,  // [6]
+      32'h00000000,  // [5]
+      32'h00000300,  // [4]
       32'h00000000,  // [3]
       32'h00000000,  // [2]
       32'h00000000,  // [1]
@@ -996,6 +1218,12 @@ package regmap_pkg;
   };
   // bits read from the hardware input, not from storage (ROHW)
   localparam logic [REGMAP_COEFF_N_REGS*32-1:0] REGMAP_COEFF_HWMASK = {
+      32'h00FFFFFF,  // [9]
+      32'hFFFFFFFF,  // [8]
+      32'hFFFF030F,  // [7]
+      32'h00000000,  // [6]
+      32'h00000000,  // [5]
+      32'h00000000,  // [4]
       32'hFFFF030F,  // [3]
       32'h00000000,  // [2]
       32'h00000000,  // [1]

@@ -357,6 +357,119 @@ MATRICES: dict[str, dict] = {
             },
         ],
     },
+
+    # -----------------------------------------------------------------------
+    # SPEC 18 item 6: "One beamforming dot product" (issue #12).
+    #
+    # rtl/beamformer/bf_dot.sv at N_ANT = 16, the SPEC 7.5 nominal antenna
+    # count. This is the design's DOMINANT DSP CONSUMER and the atom the
+    # full-scale matrix is BIN_PAR x BEAM_PAR copies of, so the SPEC 18
+    # projection — how many DSP blocks a 16-beam by 8-bin by 16-antenna matrix
+    # costs — is this point's DSP count times that product. Measuring it rather
+    # than multiplying the complex-multiplier point by sixteen is the whole
+    # difference between calibration and arithmetic: issue #10 found that a
+    # systolic FIR buys no DSP cascade because the complex multiply has already
+    # consumed the block's adder, and whether a 37-bit accumulation tree hanging
+    # off sixteen multipliers changes the mapping is exactly that kind of
+    # question.
+    #
+    # ONE AXIS, TWO POINTS: ADD_REG_EVERY, 1 against 2. A register after every
+    # tree level (four stages at 16 antennas) against a register after every
+    # second level (two stages, two 37-bit adders in series). The two produce the
+    # SAME INTEGER — there is no saturation inside the tree, so addition is
+    # associative — which is what makes this a pure cost comparison, and
+    # sim/verilator/tops/beamformer_top.sv proves the equality in the same run.
+    #
+    # NOT SWEPT, and in the open:
+    #   * the multiplier pipeline depth. Issue #9 swept it exhaustively in
+    #     isolation and issue #10 confirmed at the FIR lane that the calibrated
+    #     default of 4 carries into an accumulating kernel at no cost. Repeating
+    #     it here would be sixteen copies of an answered question.
+    #   * MULT3. Same reason, and issue #9's answer was unambiguous on this
+    #     device: one more DSP block placed, 29-35 more ALMs, slower at every
+    #     depth.
+    #   * N_ANT. 16 is the SPEC 7.5 maximum and the only value the full-scale
+    #     projection needs; a smaller dot product is a smaller multiple of the
+    #     same atom.
+    # -----------------------------------------------------------------------
+    "bf_dot": {
+        "description": "SPEC 7.5 beamforming dot product, 16 antennas: "
+                       "adder-tree pipelining stride",
+        "top": "bf_dot_wrap",
+        "axes": {
+            "add_reg_every": [1, 2],
+            "n_ant": [16],
+        },
+        "points": [
+            {
+                "id": "bfdot_a16_reg1",
+                "label": "N_ANT=16 ADD_REG_EVERY=1",
+                "params": {"N_ANT": 16, "MULT_PIPE_STAGES": 4,
+                           "ADD_REG_EVERY": 1, "VARIANT_SEL": 0},
+            },
+            {
+                "id": "bfdot_a16_reg2",
+                "label": "N_ANT=16 ADD_REG_EVERY=2",
+                "params": {"N_ANT": 16, "MULT_PIPE_STAGES": 4,
+                           "ADD_REG_EVERY": 2, "VARIANT_SEL": 0},
+            },
+        ],
+    },
+
+    # -----------------------------------------------------------------------
+    # SPEC 18 item 7: "One complete beam" (issue #12).
+    #
+    # rtl/beamformer/beamformer.sv as a matrix slice: BIN_PAR = 2 bins per beat
+    # x BEAM_PAR = 4 beams per cycle over N_ANT = 16 antennas out of N_BEAMS = 8.
+    # That is 8 dot products of 16 antennas — the same arithmetic as one complete
+    # beam evaluated at 8 bins per cycle — but in the SHAPE the design actually
+    # builds, which one isolated beam row would not price:
+    #
+    #   * whether BIN_PAR dot products sharing one antenna vector and BEAM_PAR
+    #     sharing one weight row still map two multiplies per DSP block at width,
+    #   * what the 8 x 16 x 2 x 32-bit weight store maps to and what the
+    #     beam-group output mux over it costs,
+    #   * the per-BLOCK costs that do not scale with dot products: the credit
+    #     gate, the hold register, the metadata path, the output elastic buffer,
+    #   * whether the critical path is still inside the arithmetic at this
+    #     fanout, or has moved into the weight mux or the frame-boundary swap
+    #     cone — issue #10 found that cone on the critical path of a FIR lane.
+    #
+    # BEAM_MUX = N_BEAMS / BEAM_PAR = 2, so this point also prices the time
+    # multiplex machinery SPEC 7.5 requires to be visible. A point at
+    # BEAM_PAR = N_BEAMS would optimise the mux away and report a matrix the
+    # full-scale design will not build.
+    #
+    # TWO POINTS, the same axis as the dot product, so the block-level answer to
+    # "does halving the tree registers pay" can be compared against the
+    # atom-level one rather than assumed to carry.
+    # -----------------------------------------------------------------------
+    "bf_matrix": {
+        "description": "SPEC 7.5 beamforming matrix slice, 2 bins x 4 beams "
+                       "x 16 antennas out of 8 beams",
+        "top": "bf_matrix_wrap",
+        "axes": {
+            "add_reg_every": [1, 2],
+            "bin_par": [2],
+            "beam_par": [4],
+        },
+        "points": [
+            {
+                "id": "bfmat_b2x4a16_reg1",
+                "label": "2 bins x 4 beams x 16 ant ADD_REG_EVERY=1",
+                "params": {"N_ANT": 16, "N_BEAMS": 8, "BIN_PAR": 2,
+                           "BEAM_PAR": 4, "MULT_PIPE_STAGES": 4,
+                           "ADD_REG_EVERY": 1, "VARIANT_SEL": 0},
+            },
+            {
+                "id": "bfmat_b2x4a16_reg2",
+                "label": "2 bins x 4 beams x 16 ant ADD_REG_EVERY=2",
+                "params": {"N_ANT": 16, "N_BEAMS": 8, "BIN_PAR": 2,
+                           "BEAM_PAR": 4, "MULT_PIPE_STAGES": 4,
+                           "ADD_REG_EVERY": 2, "VARIANT_SEL": 0},
+            },
+        ],
+    },
 }
 
 # Per-kernel note recorded in the exported JSON, explaining what was left out of
@@ -394,6 +507,26 @@ PRUNING_NOTES: dict[str, str] = {
         "a 16-word by 32-bit line is far below an M20K's useful geometry and "
         "far above what should be spent on ALM registers; AUTO against MLAB is "
         "the question that is actually open. See scripts/run_calibration.py."),
+    "bf_dot": (
+        "Two points on one axis: the adder-tree pipelining stride, a register "
+        "per level against a register per two levels, at the SPEC 7.5 nominal "
+        "16 antennas. The multiplier pipeline depth and the MULT3 variant are "
+        "not swept because issue #9 answered both exhaustively in isolation and "
+        "issue #10 confirmed the depth answer carries into an accumulating "
+        "kernel; repeating either here would be sixteen copies of an answered "
+        "question. N_ANT is not an axis because 16 is the SPEC 7.5 maximum and "
+        "the only value the full-scale DSP projection needs. See "
+        "scripts/run_calibration.py."),
+    "bf_matrix": (
+        "Two points, the same adder-tree axis as the dot product, so the "
+        "block-level answer can be compared against the atom-level one rather "
+        "than assumed to carry. BIN_PAR and BEAM_PAR are not axes: the slice is "
+        "chosen at 2 bins x 4 beams because that is 8 dot products, the same "
+        "arithmetic as one complete beam at the full-scale 8 bins per cycle, "
+        "and because BEAM_PAR < N_BEAMS is what keeps the time-multiplex "
+        "machinery in the measured design. A wider slice would be a multiple of "
+        "this one plus the same fixed block cost. See "
+        "scripts/run_calibration.py."),
     "fft_core": (
         "Three points. The scaling schedule is deliberately NOT an axis: it "
         "changes which quantisations saturate, not what they cost, and the "
