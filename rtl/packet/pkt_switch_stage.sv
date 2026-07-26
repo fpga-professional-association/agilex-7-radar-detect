@@ -544,36 +544,115 @@ module pkt_switch_stage
     end
   end
 
-  logic [15:0] wait_max_now;
-  always_comb begin
-    wait_max_now = 16'd0;
-    for (int unsigned i = 0; i < RADIX; i = i + 1) begin
+  // ---------------------------------------------------------------------------
+  // Reducing the per-buffer maxima to one number — PIPELINED, and the SPEC 18
+  // sweep is why.
+  //
+  // The first version was one combinational max tree over all RADIX*N_VC 16-bit
+  // counters feeding the accumulate comparison, and the first calibration point
+  // measured it as THE CRITICAL PATH of the whole switch:
+  //
+  //     u_kernel|wait_q[2][0][1] -> u_kernel|LessThan_15  logic depth 12
+  //     Fmax 186.3 MHz against a 400 MHz packet_clk target
+  //
+  // A sixteen-way max over 16-bit values is four levels of comparator-plus-mux,
+  // and the Fitter's retiming limit for the domain came back "Insufficient
+  // Registers" — there was nothing in that cone to retime with. The datapath
+  // this block exists for was nowhere near the top of the list; a MONITORING
+  // value was.
+  //
+  // So the reduction is now a two-stage registered tree: per port over its
+  // channels, then across ports. Each stage is two comparator levels for a
+  // radix-4, four-VC switch, and there are two register boundaries in the cone
+  // for the Hyper-Retimer to work with instead of none.
+  //
+  // The cost is TWO CYCLES OF LAG on `tel_max_wait`, and it is free of
+  // consequences by construction: every value in the chain is monotone
+  // non-decreasing until `tel_clear`, so a pipelined maximum can only ever be
+  // BEHIND the true one, never wrong, and it catches up two cycles after the
+  // peak. A monitoring register that reports last-but-two's watermark is exactly
+  // as useful as one that reports this cycle's; a switch that runs at half its
+  // clock target to compute it is not.
+  // ---------------------------------------------------------------------------
+  logic [15:0] wait_port_q [RADIX];
+
+  for (genvar i = 0; i < RADIX; i = i + 1) begin : g_wait_port
+    logic [15:0] port_now;
+    always_comb begin
+      port_now = 16'd0;
       for (int unsigned v = 0; v < N_VC; v = v + 1) begin
-        if (wait_q[i][v] > wait_max_now) wait_max_now = wait_q[i][v];
+        if (wait_q[i][v] > port_now) port_now = wait_q[i][v];
       end
+    end
+    always_ff @(posedge clk) begin
+      if (!rst_n || tel_clear) begin
+        wait_port_q[i] <= 16'd0;
+      end else if (port_now > wait_port_q[i]) begin
+        wait_port_q[i] <= port_now;
+      end
+    end
+  end
+
+  logic [15:0] wait_all_now;
+  always_comb begin
+    wait_all_now = 16'd0;
+    for (int unsigned i = 0; i < RADIX; i = i + 1) begin
+      if (wait_port_q[i] > wait_all_now) wait_all_now = wait_port_q[i];
     end
   end
 
   always_ff @(posedge clk) begin
     if (!rst_n || tel_clear) begin
       wait_max_q <= 16'd0;
-    end else if (wait_max_now > wait_max_q) begin
-      wait_max_q <= wait_max_now;
+    end else if (wait_all_now > wait_max_q) begin
+      wait_max_q <= wait_all_now;
     end
   end
 
   assign tel_max_wait = wait_max_q;
 
-  logic [OCC_W-1:0] high_max;
-  always_comb begin
-    high_max = '0;
-    for (int unsigned i = 0; i < RADIX; i = i + 1) begin
+  // The same treatment for the buffer high-water mark, for the same reason and
+  // at a much lower price: OCC_W is three bits at the calibrated depth, so this
+  // tree was never going to be the limiter, but leaving one monitoring reduction
+  // combinational and pipelining the other would be a trap for whoever deepens
+  // the buffers next.
+  logic [OCC_W-1:0] high_port_q [RADIX];
+  logic [OCC_W-1:0] high_all_now;
+
+  for (genvar i = 0; i < RADIX; i = i + 1) begin : g_high_port
+    logic [OCC_W-1:0] hp_now;
+    always_comb begin
+      hp_now = '0;
       for (int unsigned v = 0; v < N_VC; v = v + 1) begin
-        if (fifo_high[i][v] > high_max) high_max = fifo_high[i][v];
+        if (fifo_high[i][v] > hp_now) hp_now = fifo_high[i][v];
+      end
+    end
+    always_ff @(posedge clk) begin
+      if (!rst_n || tel_clear) begin
+        high_port_q[i] <= '0;
+      end else if (hp_now > high_port_q[i]) begin
+        high_port_q[i] <= hp_now;
       end
     end
   end
-  assign tel_hiwater = high_max;
+
+  always_comb begin
+    high_all_now = '0;
+    for (int unsigned i = 0; i < RADIX; i = i + 1) begin
+      if (high_port_q[i] > high_all_now) high_all_now = high_port_q[i];
+    end
+  end
+
+  logic [OCC_W-1:0] high_max_q;
+  always_ff @(posedge clk) begin
+    if (!rst_n || tel_clear) begin
+      high_max_q <= '0;
+    end else if (high_all_now > high_max_q) begin
+      high_max_q <= high_all_now;
+    end
+  end
+
+  assign tel_hiwater = high_max_q;
 
   wire [31:0]  c_flits, c_stall;
   logic [63:0] unused_snap;

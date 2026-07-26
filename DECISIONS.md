@@ -3078,3 +3078,39 @@ the shared PORT. The distinction is now stated in ARCHITECTURE.md §3.6 as a pro
 design: virtual channels isolate inside the fabric and do not isolate an ingress port's own
 serial message interface, and the fix for that — if a later integration needs one — is a per-VC
 message interface per port, not a change to the fabric.
+
+**Decision 16 — the telemetry reduction is PIPELINED, and the SPEC §18 sweep is the only
+reason anyone would know it had to be.** The fairness metric's per-buffer counters were reduced
+to one number by a combinational sixteen-way max tree feeding the accumulate comparison. It is
+a monitoring value; nothing in the datapath reads it; it looked free. The first calibration
+point measured it as **the critical path of the entire switch**:
+
+```text
+critical_source        u_kernel|wait_q[2][0][1]
+critical_destination   u_kernel|LessThan_15~1_...
+logic_depth            12
+reg2reg_in_kernel      1
+fmax_mhz               186.320      (against a 400 MHz packet_clk target)
+retiming_limit         Clock Domain clk | Insufficient Registers
+```
+
+A sixteen-way max over 16-bit values is four levels of comparator-plus-mux, there was no
+register inside the cone for the Hyper-Retimer to move, and the Fitter said so in as many
+words. The datapath the block exists for — the 517-bit crossbar, the two arbiters, the credit
+counters — was nowhere near the top of the list.
+
+The reduction is now a two-stage registered tree: per port across its channels, then across
+ports. Two comparator levels per stage at radix 4 and four VCs, and two register boundaries in
+the cone instead of none. The cost is two cycles of lag on `tel_max_wait`, and it is free of
+consequences by construction: every value in the chain is monotone non-decreasing until
+`tel_clear`, so a pipelined maximum can only ever be BEHIND the true one and never wrong, and
+it catches up two cycles after the peak. The buffer high-water reduction got the same treatment
+at a much lower price — three bits at the calibrated depth, never going to be the limiter — on
+the grounds that leaving one monitoring reduction combinational and pipelining the other is a
+trap for whoever deepens the buffers next.
+
+This is the finding worth carrying out of this issue. The prohibition SPEC §7.8 writes down is
+about the crossbar, and the reflex it produces is to spend the design effort there; what
+actually limited this block on first measurement was a piece of instrumentation that no
+functional test can see and no amount of reading the RTL suggests. The before-and-after numbers
+are in the table below, measured at the same point, on the same seed, with the same tool.
