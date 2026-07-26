@@ -57,6 +57,11 @@ rtl/control/reg_block_scratch.sv
 rtl/control/reg_block_coeff.sv
 rtl/control/reg_block_covar.sv
 rtl/control/reg_block_cfar.sv
+
+// The SPEC 7.3 history / corner-turn window at 0xA000 (issue #15). Like the
+// covariance and CFAR windows, its hardware inputs are tied off in control_top:
+// this build tests the register plane, not the kernel.
+rtl/control/reg_block_history.sv
 rtl/control/reg_fabric.sv
 
 // ---- deliberately dead block (simulation only) -------------------------

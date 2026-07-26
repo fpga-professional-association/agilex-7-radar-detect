@@ -334,6 +334,18 @@ if {$phase eq "compile"} {
     kv dsp_used     [kv_num_of $kvmap {{DSP Blocks Needed*} {*Total DSP Blocks*} {*DSP Blocks*}}]
     kv m20k_used    [kv_num_of $kvmap {{M20K blocks} {*M20K blocks*}}]
     kv mlab_used    [kv_num_of $kvmap {{*Memory LABs*} {*MLAB blocks*}}]
+    # Memory BITS as well as memory BLOCKS. A block count alone cannot tell one
+    # M20K used at full occupancy from one M20K used at a twentieth of it, and
+    # for the SPEC 18 item 8 history sweep that distinction IS the question: the
+    # whole point of asking the same capacity at three aspect ratios is to find
+    # out how much of each block Quartus actually fills.
+    #
+    # The patterns name the EXACT row first, for the reason
+    # quartus/scripts/report_utilization.tcl spells out at its label table: a
+    # loose "*MLAB*" glob matches "Total MLAB memory bits" as readily as the MLAB
+    # block count, and the resulting record looks plausible while being nonsense.
+    kv m20k_bits [kv_num_of $kvmap {{Total block memory bits} {*block memory bits*}}]
+    kv mlab_bits [kv_num_of $kvmap {{Total MLAB memory bits} {*MLAB memory bits*}}]
     kv pins_used    [kv_num_of $kvmap {{I/O pins} {*I/O pins*}}]
     kv combinational_aluts [kv_num_of $kvmap {{*Combinational ALUT*}}]
 
@@ -414,6 +426,47 @@ if {$phase eq "compile"} {
     kv mult_18x19 [kv_num_of $kvmap {{*18x19*} {*19x18*} {*18x18*}}]
     kv mult_27x27 [kv_num_of $kvmap {{*27x27*}}]
 
+    # --- RAM detail ----------------------------------------------------------
+    # The mirror of the DSP scrape above, and for the memory kernels it is the
+    # PRIMARY EVIDENCE rather than a supplement. The Fitter RAM Summary is the
+    # only place that says, per instantiated memory, what depth x width Quartus
+    # chose, which memory mode it used (simple dual port, true dual port, ROM),
+    # which block type it landed in and how many blocks that took. Two points
+    # with the same M20K count can have entirely different rows here — that is
+    # exactly the difference the aspect-ratio sweep exists to see — and no
+    # summary total can reconstruct it afterwards.
+    #
+    # Every row is kept VERBATIM for the same reason the DSP rows are: the column
+    # set differs between device families and Quartus releases, and "report what
+    # it did" is the deliverable when the mapping is a surprise.
+    set ram_rows {}
+    foreach row $rows {
+        if {[llength $row] < 1} { continue }
+        set label [string trim [lindex $row 0]]
+        if {[string match -nocase "*M20K*" $label] ||
+            [string match -nocase "*MLAB*" $label] ||
+            [string match -nocase "*Memory LAB*" $label] ||
+            [string match -nocase "*memory bit*" $label] ||
+            [string match -nocase "*RAM*" $label]} {
+            lappend ram_rows [join $row " | "]
+        }
+    }
+    set ram_panel [find_panel $panels {
+        {*RAM Summary*}
+        {*Fitter RAM Summary*}
+        {*RAM Blocks*}
+    }]
+    if {$ram_panel ne ""} {
+        kv ram_panel $ram_panel
+        foreach row [panel_rows $ram_panel] {
+            lappend ram_rows "\[ram panel\] [join $row { | }]"
+        }
+    }
+    text_write [file join $point_dir ram.txt] \
+        "every resource row mentioning a memory block, plus the RAM summary panel" \
+        $ram_rows
+    kv ram_detail_rows [llength $ram_rows]
+
     # --- resource by entity --------------------------------------------------
     set ent_rows [panel_rows $ent_panel]
     set ent_flat {}
@@ -435,10 +488,20 @@ if {$phase eq "compile"} {
             if {[llength $row] < 2} { continue }
             if {![string match -nocase "*u_kernel*" [lindex $row 0]]} { continue }
             kv kernel_entity_row [join $row " | "]
+            # kernel_mlab_used is matched on "Memory LAB", i.e. LABs configured
+            # as memory, and NOT on a bare "*MLAB*" glob. On the by-entity panel
+            # the only MLAB column some releases carry is "MLAB memory bits", and
+            # recording a bit count under a name ending in _used is precisely the
+            # mistake quartus/scripts/report_utilization.tcl warns about at its
+            # label table. If the column does not exist the key is simply absent
+            # and the record shows null, which is the honest answer; the design
+            # wide bit counts are in mlab_bits and the per-memory breakdown is in
+            # ram.txt.
             foreach {key pat} {kernel_alm_used     {ALMs needed*}
                                kernel_comb_aluts   {Combinational ALUT*}
                                kernel_alm_reg_used {Dedicated Logic Register*}
                                kernel_m20k_used    {M20K*}
+                               kernel_mlab_used    {*Memory LAB*}
                                kernel_dsp_used     {DSP Blocks needed*}} {
                 for {set c 0} {$c < [llength $hdr]} {incr c} {
                     if {[string match -nocase $pat [string trim [lindex $hdr $c]]]} {
@@ -695,6 +758,37 @@ if {$netlist_ok} {
                                      [string match "*u_kernel*" $rto]) ? 1 : 0}]
     } else {
         kv reg2reg_note "no register-to-register path found"
+    }
+
+    # --- were the RAM registers absorbed into the hard block? ----------------
+    # SPEC 23 requires registers around M20Ks and SPEC 18 names "input and output
+    # register choices" as an axis to sweep, so a sweep that varies IN_REG/OUT_REG
+    # has to be able to say whether the tool actually took them. The timing
+    # netlist answers it directly: -src_unregistered_ram is true for a path whose
+    # source is a memory output that did NOT get a register absorbed into the
+    # block, i.e. the read data came out into the fabric raw. A point where this
+    # is zero had its registers absorbed; a point where it is not did not, and its
+    # ALM register count and its Fmax should both show it.
+    #
+    # This is the closest thing in this repository to a purpose-built measurement
+    # of that question, and it is taken exactly as quartus/scripts/
+    # report_retiming.tcl takes it: over a 200-path sample, each query wrapped in
+    # `catch` because the option does not exist on every release and a missing
+    # option must degrade to "not measured" rather than kill the phase.
+    set unregistered_ram 0
+    set ram_paths_sampled 0
+    catch {
+        set paths [get_timing_paths -setup -npaths 200 -detail path_only]
+        foreach_in_collection p $paths {
+            incr ram_paths_sampled
+            set u ""
+            catch {set u [get_path_info $p -src_unregistered_ram]}
+            if {$u ne "" && $u} { incr unregistered_ram }
+        }
+    }
+    if {$ram_paths_sampled > 0} {
+        kv unregistered_ram_paths $unregistered_ram
+        kv ram_paths_sampled      $ram_paths_sampled
     }
 
     # --- retiming detail -----------------------------------------------------

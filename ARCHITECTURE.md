@@ -76,7 +76,194 @@ TODO — populated by issue #6.
 
 ### 3.4 Memory and corner turn (`rtl/memory/`)
 
-TODO — populated by issue #15.
+The SPEC §7.3 time-frequency history: FFT frames in, beamformer vectors out, with the
+transpose between them done by the memory's own banking rather than by a network. Write
+side in `core_clk`, read side in `history_clk` (SPEC §8).
+
+| Path | Parameters | Issue | Function |
+|---|---|---|---|
+| `rtl/packages/history_pkg.sv` | — | #15 | The address algebra, the response layout and the geometry predicate, once. `hist_geom_t`, `hist_stored_bin` / `hist_lane_of_bin` / `hist_beat_of_bin`, `hist_bitrev`, `hist_meta_pack` / `hist_meta_unpack`, and the M20K projection helper `hist_m20k_per_bank`. Integer type is `hist_uint_t`, not `uint_t` (issue #10 decision 9). |
+| `rtl/memory/history_bank.sv` | `WIDTH`, `DEPTH`, `IN_REG`, `OUT_REG`, `STORAGE` (`auto`/`m20k`/`mlab`/`regs`) | #15 | One independently addressed bank: simple dual port, write clock and read clock independent, registers on both faces (SPEC §23), one `ramstyle` literal per named generate branch. Knows nothing about frames or antennas, which is what lets the SPEC §18 sweep compile it alone. Read latency 3. |
+| `rtl/memory/history_core.sv` | `N_ANT`, `FFT_SIZE`, `LANES`, `FRAMES_MAX`, `SAMPLE_W`, `INPUT_BIT_REVERSED`, `STORAGE`, `SYNC_STAGES`, field geometries | #15 | The subsystem: `N_ANT × LANES` banks, per-antenna write sequencers, the frame barrier, the rotating slot pointer with overwrite-oldest, the registered read fanout, the three CDC crossings and the six counters. Write side never stalls; read latency 6 with no backpressure. |
+| `rtl/control/reg_block_history.sv` | `IDX_W`, geometry (checks only) | #15 | The SPEC §9 window at `0xA000`. Thirteen registers: controls, programmable depth, rotation status, hardware-reported geometry, six counters and a W1C fault vector. |
+
+Simulation-only companions:
+
+| Path | Issue | Function |
+|---|---|---|
+| `sim/assertions/history_assertions.sv` | #15 | The SPEC §14 property set. Instantiated inside `history_core` under `` `ifndef SYNTHESIS ``, not bound, so it holds in the calibration wrapper too. Includes the two covers that make SPEC §7.3's "no globally broadcast address and enable network" checkable rather than merely asserted. |
+| `sim/verilator/tops/history_top.sv` | #15 | Unit-test top: three geometries behind one port set, selected by `dut_sel`. |
+| `quartus/calibration/history_bank_wrap.sv`, `history_core_wrap.sv` | #15 | SPEC §18 item 8 wrappers. Linted by `make lint` through `files_history.f`; never in a simulation top. |
+
+#### The corner turn, as algebra (NORMATIVE)
+
+Write order and read order disagree, and that disagreement is the whole problem:
+
+```text
+WRITE   one antenna at a time, frequency-sequential.
+        In a cycle, antenna a delivers LANES samples of its own FFT frame.
+READ    one frequency bin at a time, antenna-parallel.
+        In a cycle, the consumer wants bin b of EVERY antenna at once.
+```
+
+The subsystem does not solve this with a transpose buffer or a crossbar. It chooses the
+**bank dimension to be the one the read needs in parallel** — the antenna — so the memory
+performs the turn:
+
+```text
+    BANK(a, l)  =  a * LANES + l           a = antenna, l = arrival lane
+    ADDR(s, k)  =  s * M + k               s = frame slot, k = beat index
+                                           M = BEATS_PER_FRAME = FFT_SIZE / LANES
+```
+
+`FRAMES_MAX` and `M` are both powers of two, so `ADDR` is the concatenation `{s, k}` — no
+multiplier, no adder.
+
+Consequences, and they are the design:
+
+* a write touches one bank per lane, and those banks belong to one antenna. Two antennas
+  share no bank, so **writes are collision-free by construction rather than by
+  arbitration**, and the ingest is full rate with `s_ready` tied high;
+* a read of bin `b` enables one lane's bank in **every** antenna — `N_ANT` banks — and each
+  returns the same bin for a different antenna. That is the antenna vector, in one cycle,
+  with no multiplexer and no transpose;
+* the other `(LANES-1) × N_ANT` banks are idle during that read. Read bandwidth is one bin
+  per cycle against a write bandwidth of `LANES` bins per cycle per antenna. Up to `LANES`
+  bins could be served per cycle if they fell on distinct lanes; that headroom is real,
+  recorded, and deliberately not spent here (see the read contract below).
+
+**Lane assignment is positional, not arithmetic.** `l` is the sample's position in the
+arriving beat, not `bin mod LANES`. This is exactly what `rtl/fft/fft_core.sv` hands over:
+
+```text
+    beat k, slot q  =  X[ m + q * (FFT_SIZE / LANES) ]  =  X[ q * M + m ]
+        m = k                      when the FFT's reorder stage is present
+        m = bitrev_{log2 M}(k)     when it is skipped (REORDER = 0)
+```
+
+Issue #11 chose to pair bins half a spectrum apart so its own reorder buffer could be two
+banks read at one address. This block inherits the same gift in a stronger form: **the slot
+index is the high bits of the bin and the beat index is the low bits**, so
+
+```text
+    bin      b  =  l * M + m
+    lane     l  =  b / M          a bit slice, not a divider
+    position m  =  b % M          a bit slice, not a modulo
+    beat     k  =  m,  or  bitrev_{log2 M}(m)
+```
+
+Every one of those is a wire permutation on a power-of-two geometry. The corner turn costs
+no arithmetic on either side.
+
+#### Bit-reversal absorption
+
+`INPUT_BIT_REVERSED = 1` lets the upstream FFT run with `REORDER = 0`. It changes the read
+address decode from `b % M` to `bitrev(b % M)` — a rewiring — and changes the write side not
+at all, because the write side never needs a bin index. Issue #11's own sweep priced its
+reorder stage at **+170 ALMs, +4 M20K, +7 MLAB, −7.6 MHz and one frame of latency**
+(DECISIONS.md, issue #11 finding 4); absorbing it here deletes all of that and adds nothing.
+Both settings are verified against the model. The recommendation to issue #17, which owns
+both blocks, is `REORDER = 0` upstream and `INPUT_BIT_REVERSED = 1` here.
+
+#### Rotation, occupancy and the readable set
+
+Frame `f` lives in slot `f mod DEPTH`, `DEPTH` register-programmable over `1..FRAMES_MAX`.
+A frame is complete only when **every** antenna has finished it, so the published pointer is
+`frames_done = min over antennas`, computed as a barrier (N_ANT equality comparators,
+advanced once per frame) rather than as a minimum tree.
+
+```text
+    occupancy      =  min(frames_done, DEPTH)
+    overwrite_cnt  =  max(frames_done - DEPTH, 0)
+    readable       =  min(frames_done, DEPTH - 2)
+```
+
+The overwrite policy is **overwrite-oldest, unconditionally**: a history buffer that stalled
+its own ingest would back-pressure the FFT and ultimately the front end, which SPEC §7.3
+forbids by asking for continuous writes. What the block owes instead is exact bookkeeping,
+and it delivers it — the C++ model asserts all three numbers at every instant.
+
+`readable` is **two** slots short of the depth, not one, and the second slot is the
+interesting one. The first is the frame being written. The second absorbs one frame of
+**publication lag**: the reader works from a pointer that crossed a handshake, so between the
+writer finishing frame `F` and the read domain seeing `F+1`, the writer is already filling
+`slot(F+1)`. A `depth-1` bound would let a maximum-offset request address exactly that slot
+— and the collision counter would not see it, because the collision test uses the same stale
+pointer. Excluding one further slot moves the maximum-offset request to `slot(F+2)`, which
+needs two frame completions to reach. `a_history_publication_fresh` checks that the one-frame
+margin holds. The price is one frame slot; a programmed depth of 1 or 2 therefore leaves
+nothing readable, which is legal and reported.
+
+#### The read contract (NORMATIVE — issue #16 depends on this literally)
+
+**Request**, `history_clk`, valid/ready:
+
+| Field | Width | Meaning |
+|---|---|---|
+| `rd_req_bin` | `HIST_PORT_W` = 16 | Natural frequency-bin index, `0 .. FFT_SIZE-1`. Anything else is answered with `HIST_FLAG_OUT_OF_RANGE` and the error counter advanced. |
+| `rd_req_frame_off` | 16 | Frames back from the newest **complete** frame. `0` = newest, valid over `0 .. readable-1`. |
+
+`frame_off` is relative, not absolute, on purpose: an absolute frame number would force every
+consumer to track the write side's progress and would make every request racy against
+rotation.
+
+**Response**, `history_clk`, a SPEC §5 stream. Every response is a complete one-beat frame
+(`sof = eof = 1`); `seq` is the block's own response counter and advances by exactly one per
+response. The `data` field is
+
+```text
+    data = { meta , ant[N-1] , ... , ant[1] , ant[0] }
+```
+
+with antenna 0 in the **low** bits and each antenna's sample packed as
+`fxp_pkg::fxp_complex_t` — `{im, re}`, real in the low half. A consumer slices antenna `a` at
+`a * 2 * SAMPLE_W` and needs no knowledge of `history_pkg` to read a sample. `meta` sits
+**above** the antenna vector, so widening the antenna count moves no antenna's offset:
+
+```text
+    meta = { flags , frame_id , frame_off , bin }        bin at the bottom
+    flags = { stale , collision , out_of_range }         out_of_range at bit 0
+```
+
+packed by `hist_meta_pack()` / `hist_meta_unpack()`. `frame_id` is the **absolute** frame
+number served, resolved when the request was accepted — a consumer needs it to detect that a
+rotation overtook a long-lived request, which `frame_off` alone cannot express. The flags are
+also mirrored into the stream's `user` field, so a monitor that only decodes the SPEC §5
+bundle can still see them.
+
+Metadata travels inside `data` rather than on `user`/`stream_id` because it does not fit
+them (`bin` alone is 10 bits at `FFT_SIZE = 1024` against `STREAM_MAX_USER_W = 8`), and on
+the stream rather than on a sideband because SPEC §5 requires one interface at every module
+boundary. The cost is `hist_meta_w()` bits that the beamformer eventually discards; issue #16
+strips them when it assembles beamformer vectors, which it must do anyway because it
+re-groups bins.
+
+**Ordering** is request order, always: the read path is a fixed-latency pipeline with an
+elastic output, so there is no reordering mechanism to go wrong and no tag to match.
+**Backpressure** is unrestricted — a consumer may stall indefinitely and nothing about the
+returned values changes, which `test_history`'s backpressure-invariance pass checks by
+requiring a byte-identical response sequence at four stall profiles.
+
+**One bin per cycle** is what the port serves. Assembling the `BIN_PAR × N_ANT` beat
+`rtl/beamformer/beamformer.sv` consumes is issue #16's job; this port produces the
+`BIN_PAR = 1` case of that beat, plus metadata, which is the shape `beamformer_pkg`'s own
+header calls "exactly what issue #16's frequency alignment network produces".
+
+#### No globally broadcast address or enable network (SPEC §7.3, §23)
+
+* **Write:** there is no shared write address at all. Antenna `a` owns its beat counter, its
+  slot register and its address; the address fans out to that antenna's `LANES` banks and
+  nowhere else. Fanout is `LANES`, independent of `N_ANT`.
+* **Read:** one logical address per cycle is shared by `N_ANT` banks — that is what a corner
+  turn *is* — and it is distributed as a two-level registered tree: `history_core` registers
+  it once per antenna, and every `history_bank` registers address and enable again on its own
+  input. No register in the design drives every bank.
+* **Enable:** only the addressed lane is enabled, so `LANES-1` of every `LANES` banks are
+  held still on any read cycle. The enable is not a broadcast even logically.
+
+The assertion set checks the observable consequences: `a_history_lane_onehot0` (at most one
+lane enabled) and `c_history_write_enables_differ` (a cycle in which the antennas disagree
+about writing, which one shared enable could not produce).
 
 ### 3.5 DSP kernels (`rtl/common/`, `rtl/pfb/`, `rtl/fft/`, `rtl/beamformer/`, `rtl/covariance/`, `rtl/cfar/`)
 
@@ -598,8 +785,20 @@ TODO — populated by issues #3, #17, #20, #24.
 Logical domains defined by SPEC §8 (`core_clk`, `history_clk`, `packet_clk`,
 `memory_clk`, `cfg_clk`, `telemetry_clk`) with their benchmark constraint targets.
 
-TODO — populated by issue #6 (domain definition and CDC primitives) and issue #3
-(SDC constraint capture).
+As of issue #15 two of them carry real design logic:
+
+| Domain | Constraint | What is in it |
+|---|---|---|
+| `core_clk` | 450 MHz | the whole processing datapath: PFB, FFT, beamformer, covariance, CFAR, and the WRITE side of the history (frame sequencers, rotation policy, the SPEC §9 history window) |
+| `history_clk` | 400 MHz | the READ side of the history: request decode, the registered read fanout, the banks' read ports, the response stream and its three counters |
+| `cfg_clk` | 100 MHz | coefficient and weight programming (issues #10, #12) |
+
+The remaining domains are constrained in `quartus/constraints/clocks.sdc` and are populated
+by later issues (`packet_clk` by #18, `memory_clk` by #24, `telemetry_clk` by #19).
+
+The 450:400 ratio is 9:8, and `sim/tests/test_history.cpp` sweeps exactly that ratio and its
+inverse alongside the shared table's gross ratios — a pointer crossing is least likely to be
+accidentally safe at a ratio close to, but not equal to, one.
 
 ## 5. Clock-domain crossings
 
@@ -618,6 +817,8 @@ Two tops are covered as of issue #10:
 |---|---|---|---|
 | `cdc_prims_top` | `sim/verilator/files_cdc.f` | 24 | 0 |
 | `pfb_top` | `sim/verilator/files_pfb.f` | 32 | 0 |
+| `beamformer_top` | `sim/verilator/files_beamformer.f` | 47 | 0 |
+| `history_top` | `sim/verilator/files_history.f` | 40 | 0 |
 
 The polyphase build is the first **design** block with a configuration-to-core seam of its
 own. `coeff_bank` and `pfb_bank` are tagged as composites — the same arrangement
@@ -633,6 +834,33 @@ real synchronizers nested under it:
 The address and the data cross as a single handshake payload on purpose: crossing them as
 independent synchronised buses is exactly the multibit crossing SPEC §8 prohibits, and would
 let one bit of an address be sampled from a different cycle than its data.
+
+The history subsystem (issue #15) is the first block whose seam is between two PROCESSING
+domains rather than between configuration and core, and it is the first appearance of
+`history_clk`:
+
+| Crossing | Mechanism | Direction | Payload |
+|---|---|---|---|
+| frame-pointer publication | `cdc_handshake` (four-phase) | core → history | `{force_unsafe, readable, depth, done_slot, frames_done}` as ONE transfer |
+| counter clear | `cdc_pulse` (toggle) | core → history | 1-bit event |
+| read-side counters | `cdc_handshake` (four-phase) | history → core | `{errors, collisions, reads}`, 96 bits, one transfer |
+| the banks themselves | `history_bank_sdp`, **zero stages** | core → history | 32-bit words, `N_ANT × LANES` instances |
+
+**The publication bundle is a handshake and not a Gray pointer**, which is worth stating
+because a Gray pointer is the obvious choice and is wrong here. What the read side needs is
+not one counter but a CONSISTENT SET. Gray coding guarantees only that a value sampled
+mid-change resolves to the old or the new value of *that* counter; it says nothing about two
+counters sampled together. A reader that took `done_slot` from after a depth change and
+`depth` from before it would compute a slot belonging to neither configuration, silently.
+`cdc_handshake` moves the whole bundle as one payload that never passes through a
+synchroniser — the case SPEC §8's multibit prohibition explicitly carves out.
+
+**The banks are tagged with `cdc_stages = "0"`, and that is the honest value.** A
+`history_bank` contains no synchroniser; nothing in it makes it safe to read a word while it
+is being written. What makes the design safe is the tagged pointer crossing above and the
+readable-set bound derived from it. The inventory therefore shows a zero-stage bulk path
+guarded by a tagged pointer crossing, which is the actual architecture rather than a
+reassuring omission.
 
 ## 6. Interfaces
 

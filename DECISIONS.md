@@ -2859,3 +2859,244 @@ geometry and 4 161 at the SPEC 11 full-scale geometry, which is where a running-
 rewrite (decision 5) would start to pay. Both are measurements waiting to be made, not results. Issue #10's decision 13 is
 the standing warning that applies here too: lint clean is not the same as synthesizable, and
 this kernel has not yet been through Quartus.
+
+---
+
+## 2026-07-26 — Time-frequency history and corner turn: banking, rotation, the read contract  (issue #15)
+
+**Context.** SPEC §7.3 asks for a banked memory that stores FFT frames by antenna, time and
+frequency, takes continuous writes, serves beamformer reads by common frequency bin, keeps a
+programmable history depth in multiple independently addressable banks with double buffering
+or rotating frame banks, avoids a single globally broadcast address and enable network, and
+exposes occupancy, overwrite, collision and error counters. SPEC §8 puts the read side in its
+own `history_clk` domain. SPEC §18 item 8 asks for one M20K history bank to be swept before
+full-scale parameters are frozen. The block sits between the FFT (#11) and the frequency
+alignment network (#16), so its output contract is #16's input contract.
+
+**Decision 1 — the bank dimension is the ANTENNA, and the memory performs the corner turn.**
+`BANK(a, l) = a * LANES + l`, where `l` is the sample's position in the arriving beat.
+`N_ANT × LANES` banks, each `FRAMES_MAX × BEATS_PER_FRAME` words of one complex sample.
+
+This is the whole design and everything else follows from it. A write touches one bank per
+lane and those banks belong to one antenna, so two antennas can never contend — **writes are
+collision-free by construction rather than by arbitration**, which is why `s_ready` is tied
+high and the ingest is full rate with no arbiter, no queue and no condition under which a
+beat cannot be taken. A read of bin `b` enables one lane's bank in every antenna, and each
+returns the same bin for a different antenna: that is the antenna vector, assembled in one
+cycle, with no multiplexer and no transpose.
+
+*Consequences.* Read bandwidth is one bin per cycle against a write bandwidth of `LANES`
+bins per cycle per antenna, because `(LANES-1) × N_ANT` banks are idle on any read cycle.
+That headroom is real — the banks are independent, so up to `LANES` bins could be served per
+cycle if they fell on distinct lanes — and it is deliberately not spent here: giving #16 a
+wider but lane-CONSTRAINED port would push the constraint into its scheduler and make the two
+blocks' correctness joint. The address algebra already supports it unchanged.
+*Alternatives rejected:* a transpose buffer, or a write crossbar. Both buy read flexibility
+by making the ingest stallable, and a stalled ingest back-pressures the FFT and ultimately the
+front end, which is exactly what "supports continuous writes" forbids.
+
+**Decision 2 — the address is `{slot, beat}`, and the corner turn costs no arithmetic.**
+`FRAMES_MAX`, `FFT_SIZE` and `LANES` are all required to be powers of two, so
+`ADDR(s, k) = s * M + k` is a concatenation rather than a multiply, and the read-side decode
+`lane = b / M`, `m = b % M` is two bit slices rather than a divider and a modulo. The
+run-time `DEPTH` is deliberately NOT constrained to a power of two — the modulo lives on the
+write path's own counter, where it is a compare-and-reset.
+
+This is only free because of what issue #11 already chose. `fft_core` emits
+`beat k, slot q = X[q*M + m]` — the two slots of a beat are half a spectrum apart, not
+adjacent, because that let #11's reorder buffer be two banks read at one address. The
+consequence here is stronger: **the slot index is the high bits of the bin and the beat index
+is the low bits**, so the inverse mapping is a slice in both directions.
+
+**Decision 3 — the bit-reversal is absorbed here, and the recommendation to #17 is to spend
+it.** `INPUT_BIT_REVERSED` changes the read address decode from `b % M` to `bitrev(b % M)` —
+a wire permutation — and changes the write side not at all, because positional lane
+assignment means the write side never needs a bin index. Issue #11's sweep priced its reorder
+stage at **+170 ALMs, +4 M20K, +7 MLAB, −7.6 MHz and one frame of latency** (issue #11,
+finding 4). Absorbing it deletes all of that and adds nothing.
+
+*Consequences.* Both settings are elaborated and verified against the model, and DUT 1 of
+`history_top` runs bit-reversed with `LANES = 2` so the two mechanisms are exercised
+together. The parameter is not hard-wired, because the choice couples two blocks and belongs
+to the issue that owns both (#17); what this entry leaves #17 is a position and a number
+rather than a question.
+
+**Decision 4 — overwrite-oldest, unconditionally, with exact bookkeeping.** A history that
+stalled its own ingest to preserve old frames would back-pressure the front end, which in a
+radar pipeline is a worse failure than losing the oldest frame. What the block owes instead
+is arithmetic that is exact at every instant, and the C++ model asserts all of it:
+`occupancy = min(frames_done, DEPTH)`, `overwrite = max(frames_done − DEPTH, 0)`.
+
+**Decision 5 — a frame is complete only when EVERY antenna has finished it, computed as a
+barrier.** `frames_done` advances when every antenna's frame counter differs from it, which
+for monotone counters is exactly the minimum and costs `N_ANT` equality comparators instead
+of `N_ANT−1` magnitude comparators. It moves once per frame, not once per beat, so it is off
+the datapath. Skew is COUNTED rather than assumed away: an antenna running a whole depth
+ahead of the barrier is about to overwrite a live slot, and `HISTORY_SKEW` counts it — **on
+the rising edge of the condition, not while it holds**, because skew is an episode and a
+level count would report a number that depends on how long a test happened to leave the
+antennas apart, which no reference model can predict.
+
+**Decision 6 — the readable set is `min(frames_done, DEPTH − 2)`, and the second excluded
+slot is the interesting one.** The first is the frame being written. The second absorbs one
+frame of PUBLICATION LAG, and getting this wrong is a defect the collision counter cannot
+see.
+
+The reader works from a pointer that crossed a handshake. Between the writer finishing frame
+`F` — which makes the pointer read `F+1` — and the read domain seeing `F+1`, the writer is
+already filling `slot(F+1)`. A reader still working from `frames_done = F`, allowed the full
+`DEPTH−1` offsets, addresses exactly `slot(F+1)` at its maximum offset. It reads the slot
+being written, gets a frame that is half one and half another, and **the collision test does
+not fire, because it is made against the same stale pointer**. Excluding one further slot
+moves the maximum-offset request to `slot(F+2)`, which the writer reaches only after two more
+frame completions.
+
+*Consequences.* One frame slot is spent, and it is the honest price of putting the read side
+in its own clock domain. A programmed depth of 1 or 2 leaves nothing readable — legal,
+reported through `HISTORY_STATUS.OCCUPANCY` and the out-of-range flag, and tested. The
+one-frame margin is checked rather than assumed by `a_history_publication_fresh`, because a
+future configuration with a frame shorter than a handshake round trip would break it as
+unexplained corruption at maximum frame offset, which is the least diagnosable failure this
+block has. Every geometry `history_top` builds keeps `BEATS_PER_FRAME ≥ 32` for that reason.
+*This decision came from reasoning about the crossing, not from a failing test* — the
+`DEPTH−1` bound would have passed every test in the suite at every clock ratio tried, which
+is precisely why it is written down here.
+
+**Decision 7 — the publication bundle crosses as ONE handshake, not as a Gray pointer.** The
+read side needs `{frames_done, done_slot, depth, readable, force_unsafe}` to agree with each
+other. Gray coding is valid for a single monotone counter: it guarantees that a value sampled
+mid-change resolves to the old or the new value of *that* counter, and says nothing about two
+counters sampled together. A reader that took `done_slot` from after a depth change and
+`depth` from before it would compute a slot belonging to neither configuration, silently.
+`cdc_handshake` transfers the whole bundle as one payload that never passes through a
+synchroniser — the case SPEC §8's multibit prohibition explicitly carves out. The same
+argument applies in the other direction to the three read-side counters, which cross together
+as 96 bits so a reader can never mix two snapshots.
+
+*Consequences.* The cost is latency, and it is bounded: the publisher re-offers whenever the
+bundle changes and the crossing is idle, so the read side is never more than one handshake
+behind, against a frame of at least 32 core cycles. Three crossings in total, one per SPEC §8
+mechanism (handshake, pulse, handshake), all through `rtl/cdc/` primitives.
+
+**Decision 8 — the collision counter is made reachable by fault injection, because a counter
+that cannot fire is a counter nobody has tested.** In correct operation `HISTORY_COLLISION`
+is identically zero: the readable set excludes the in-flight slot by construction, so it is a
+defect detector rather than a statistic. `HISTORY_CTRL.FORCE_UNSAFE` removes the readable-set
+clamp so an out-of-range request reaches the slot being written, the counter increments, and
+the C++ model predicts the count exactly. It is a SPEC §9 fault-injection field, not a mode
+for production use.
+
+**Decision 9 — the read response carries its metadata INSIDE the SPEC §5 `data` field.**
+`data = {meta, ant[N−1] … ant[0]}` with antenna 0 at bit 0 and `meta = {flags, frame_id,
+frame_off, bin}` above the vector. Metadata does not fit `user` and `stream_id` (`bin` alone
+is 10 bits at `FFT_SIZE = 1024` against `STREAM_MAX_USER_W = 8`), and a sideband bus
+qualified by `valid` would be a second interface with none of SPEC §5's protocol checking.
+`meta` sits above the vector so that widening the antenna count moves no antenna's offset.
+
+*Consequences.* Issue #16 strips `meta` when it assembles beamformer beats — which it must do
+anyway, because it re-groups bins — and antenna 0 at bit 0 with `{im, re}` packing means the
+`BIN_PAR = 1` case of `beamformer_pkg`'s input layout falls straight out. `frame_id` is
+ABSOLUTE, and it is what lets a consumer detect that a rotation overtook a long-lived
+request; `frame_off` alone cannot express that. The flags are additionally mirrored into
+`user`, so a monitor that decodes only the SPEC §5 bundle still sees them, and the test
+checks the two statements against each other.
+
+**Decision 10 — a depth change DISCARDS the history, at a frame boundary.** Changing `DEPTH`
+remaps every frame slot, so every stored frame is at an address the new mapping reads as a
+different frame. There is no reinterpretation that preserves the data. The apply therefore
+waits until no antenna is mid-frame and then restarts empty, bumping `HISTORY_STATUS.EPOCH`
+so software can tell "no frames yet" from "frames from before a reconfiguration".
+*Alternative rejected:* a change that may only GROW the depth, which can preserve data but
+only between powers of two, and which makes the set of legal transitions a table nobody will
+read.
+
+**Decision 11 — the SPEC §9 window is at `0xA000`, claiming "Active bank selection" and
+"Frame counts".** Both are literal: the rotating frame-bank pointer with its programmable
+depth, and the completed-frame counter that decides what a read may ask for. The window
+claims no group of its own because `scripts/gen_regmap.py`'s `SPEC9_GROUPS` is a verbatim
+copy of SPEC §9's list and has none for a memory; adding one would make the copy stop being a
+copy. Every register is in `core_clk`, the write side, because that is where the rotation
+policy lives. `0xA000` was the first free window; `regmap_version` goes to 1.6.0, and
+`test_control_regs`' "gap above the last declared window" probe moves to `0xB000`.
+
+**Decision 12 — `history_pkg` names its integer type `hist_uint_t`, and avoids `time` and
+`table`.** The first is issue #10's decision 9 applied a fifth time: `fxp_pkg`, `stream_pkg`,
+`covar_pkg` and `cfar_pkg` each export a `uint_t`, and a name visible through two wildcard
+imports is ambiguous under IEEE 1800 §26.3 — Quartus rejects it outright and Verilator
+accepts it silently.
+
+The second is the same class of trap issue #14's decision 12 records about `cell`, and worth
+recording because this block's subject matter walks straight into it: **`time` and `table`
+are both SystemVerilog keywords**, and both are the most natural word for something this
+block owns — the time axis, and the frame-slot table. The time axis is spelled `frame` and a
+lookup is spelled `map`.
+
+**Decision 13 — every geometry helper in `history_pkg` is guarded by `hist_geom_ok(g)`.** Two
+things fall out, one of them mechanical. A derived quantity is only DEFINED for a legal
+geometry, so an illegal one yields a benign 1 rather than a plausible number that propagates
+into a port width. And the guard reads every field of the struct, which is what makes each
+function a total use of its argument: without it `verilator --lint-only --Wall` reports
+UNUSEDSIGNAL on the unread fields of every helper that needs two of five — thirteen warnings,
+one per accessor. The alternatives are worse: loose scalar arguments reintroduce the "four of
+five, correctly" defect the struct exists to prevent, and a file-wide UNUSEDSIGNAL waiver
+silences the rule everywhere else in the package too. The cost is zero — every call site is
+an elaboration-time constant.
+
+A related mechanical note, recorded because it will recur: **a package `localparam` that the
+elaborated hierarchy never reads is reported as UNUSEDPARAM**, and `files.f` lists
+`history_pkg.sv` for a top that does not yet instantiate `history_core`. `stream_pkg` and
+`cdc_pkg` solve this by exporting functions instead of localparams. This package needs two of
+its constants in port declarations, so it keeps them and gives each one a reader inside the
+package (`hist_port_fits`, `hist_req_meta_w`) — both of which a caller wanted anyway.
+
+**Decision 14 — the SPEC §14 property set is TWO single-clock checkers, not one straddling
+both domains.** `scripts/cdc_inventory.py --strict` reports any instantiated module with two
+clock-like ports and no `(* cdc_primitive *)` tag, which is the correct default. Tagging a
+checker would put a crossing in the SPEC §8 inventory that does not exist in the hardware,
+and an inventory with an imaginary entry is worse than one with a missing entry. Every other
+checker in `sim/assertions/` takes a single `clk` for the same reason.
+
+The two prohibitions SPEC §7.3 states as bans on NETS are checked as the consequences a
+broadcast design could not produce: `c_history_write_enables_differ` covers a cycle in which
+the antennas disagree about writing, and `a_history_lane_onehot0` requires that at most one
+lane's banks are read-enabled. A design that regressed to a broadcast net would fail the
+cover, not merely look different.
+
+**Decision 15 — `history_bank` is tagged as a CDC primitive with `cdc_stages = "0"`.** The
+bank has two clock ports, so the inventory would report it either way; what the tag adds is
+the honest value. A `history_bank` contains no synchroniser, and nothing in it makes it safe
+to read a word while it is being written. What makes the design safe is the tagged pointer
+crossing and the readable-set bound derived from it. The inventory therefore shows a
+zero-stage bulk path guarded by a tagged pointer crossing, which is the actual architecture
+rather than a reassuring omission. The same tag is what licenses `no_rw_check` on every M20K
+in the subsystem, and `a_history_no_safe_collision` is the property that discharges it.
+
+**Verification.** `sim/tests/test_history.cpp`, nine passes over three geometries and five
+core:history clock ratios including 9:8 and 8:9 — the SPEC §8 constraint pair and its
+inverse, added locally rather than to the shared `clock_ratios.h` table so that every other
+CDC test in the suite does not grow two ratios it has no reason to want. What is predicted
+EXACTLY is everything in a quiesced phase: every sample, every flag, every metadata field and
+all six counters, over more than two full rotations of the buffer. What is predicted BY
+IDENTITY is the concurrent phase, where full-rate writes run with reads in flight: the
+response's absolute `frame_id` and `bin` are fed back into the pure stimulus generator, so a
+wrong bank, a wrong slot, a wrong lane or a stale pointer all land as a mismatch, while the
+frame the pointer happens to be on is not predicted — that is a function of the clock ratio,
+and SPEC §12.5 forbids assuming it.
+
+The fault-injection proof required by the gate: swapping the read bank-select from the high
+bin bits to the low ones produced a wall of `data` mismatches on the `LANES = 2` geometry
+within one second of simulation, at `9to8_core_fast`, each naming the bin, the frame, the
+antenna and both values. Reverted, the suite passes on seeds 1, 2 and 3 in 1.6 s each.
+
+**Calibration.** SPEC §18 item 8 is `make calibrate-history`:
+`quartus/calibration/history_bank_calib` sweeps one bank at three aspect ratios of the SAME
+16 384-bit capacity (512×32, 1K×16, 256×64) plus a no-input/output-register point, and
+`history_core_calib` prices a four-bank slice reached two ways (4 antennas × 1 lane, and
+2 × 2 bit-reversed) so the block's fixed cost is the difference between them rather than an
+argument. The extraction was extended for this sweep, because the existing path recorded M20K
+and MLAB BLOCK COUNTS and no memory BITS — which cannot distinguish one M20K used at full
+occupancy from one used at a twentieth, and that is precisely the question a geometry sweep
+asks. `calibrate.tcl` now also captures the Fitter RAM Summary panel verbatim as `ram.txt`
+and samples `-src_unregistered_ram`, which is the closest thing this repo has to a
+purpose-built "were the RAM registers absorbed into the hard block?" measurement — SPEC §23's
+rule for M20Ks, and one of SPEC §18's seven named axes.
