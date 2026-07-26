@@ -41,6 +41,7 @@ rtl/packages/cdc_pkg.sv
 // place so the lane, the coefficient bank, the polyphase bank and the C++ model
 // cannot disagree.
 rtl/packages/pfb_pkg.sv
+rtl/packages/covar_pkg.sv
 
 // ---- protocol assertions (SPEC 14) -------------------------------------
 // Simulation-only. Instantiated inside every stream primitive under
@@ -63,6 +64,7 @@ sim/assertions/seq_checker_assertions.sv
 // credit argument are checked wherever those modules are used.
 sim/assertions/pfb_assertions.sv
 sim/assertions/coeff_bank_checker.sv
+sim/assertions/covar_assertions.sv
 
 // ---- stream primitives (SPEC 5) ----------------------------------------
 rtl/stream/stream_skid_buffer.sv
@@ -147,6 +149,13 @@ rtl/fft/fft_dit_merge.sv
 rtl/fft/fft_reorder.sv
 rtl/fft/fft_core.sv
 rtl/fft/streaming_fft.sv
+
+// ---- power and covariance engine (SPEC 7.6, issue #13) -----------------
+// power_calc and integrator first: covar_engine is built out of the second one
+// and out of rtl/common/complex_multiplier.sv, already listed above.
+rtl/covariance/power_calc.sv
+rtl/covariance/integrator.sv
+rtl/covariance/covar_engine.sv
 
 // ---- simulation top (SPEC 4.1) -----------------------------------------
 sim/verilator/tops/benchmark_sim_top.sv

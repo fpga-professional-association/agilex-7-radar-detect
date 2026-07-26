@@ -7,10 +7,10 @@ for the register and control plane ([SPEC.md](../SPEC.md) §9, issue #7). Edit t
 and re-run the generator; `make regmap-check` fails the build on any hand edit here or
 on a source change that was never regenerated.
 
-- Register-map version: **1.2.0** (schema 1)
+- Register-map version: **1.3.0** (schema 1)
 - Interface: 32-bit data, 16-bit byte address, 4 byte enables
 - Window per block: `0x1000` bytes
-- Blocks declared: 9 (7 implemented), registers implemented: 53
+- Blocks declared: 10 (8 implemented), registers implemented: 60
 
 ## Access types
 
@@ -38,6 +38,7 @@ the non-writable bits (`error=0`).
 | `cfar` | `0x6000`–`0x6FFF` | 0 | planned (#14, #16) | CFAR settings; Integration settings |
 | `counters` | `0x7000`–`0x7FFF` | 21 | implemented | Stream counters; Stall counters; FIFO high-water marks; Overflow and saturation counts; Frame counts; Sequence errors; CDC errors; Snapshot and debug control |
 | `debug` | `0x8000`–`0x8FFF` | 0 | planned (#19) | Snapshot and debug control |
+| `covar` | `0x9000`–`0x9FFF` | 7 | implemented | Integration settings |
 
 Any address outside every implemented window, any address inside a window but beyond
 that block's last register, any unaligned address, a write with no byte enables set,
@@ -52,9 +53,9 @@ Fixed identification of the control plane itself. Every field is a constant fold
 | Offset | Address | Register | Access | Reset | Description |
 |---|---|---|---|---|---|
 | `0x000` | `0x0000` | `MAGIC` | RO | `0x52414441` | Constant marker. Reading 0x52414441 ('RADA') at block base proves a control plane is present and the address decode is alive. |
-| `0x004` | `0x0004` | `VERSION` | RO | `0x01020001` | Register-map version, from regmap_version in the source of truth. Static build data, deliberately not a git describe: the same source tree must produce the same register contents on any machine, and a VCS-derived value would make the generated artefacts depend on checkout state. |
-| `0x008` | `0x0008` | `GEOMETRY` | RO | `0x10203509` | Shape of the register plane, so a discovery walk needs no compiled-in constants. |
-| `0x00C` | `0x000C` | `CAPABILITY` | RO | `0x000000BF` | One bit per declared block, set when that block is implemented in this build. Bit i is block i in declaration order; a planned block reads 0 and its window returns error. |
+| `0x004` | `0x0004` | `VERSION` | RO | `0x01030001` | Register-map version, from regmap_version in the source of truth. Static build data, deliberately not a git describe: the same source tree must produce the same register contents on any machine, and a VCS-derived value would make the generated artefacts depend on checkout state. |
+| `0x008` | `0x0008` | `GEOMETRY` | RO | `0x10203C0A` | Shape of the register plane, so a discovery walk needs no compiled-in constants. |
+| `0x00C` | `0x000C` | `CAPABILITY` | RO | `0x000002BF` | One bit per declared block, set when that block is implemented in this build. Bit i is block i in declaration order; a planned block reads 0 and its window returns error. |
 
 ### `ID.MAGIC` — `0x0000`
 
@@ -67,7 +68,7 @@ Fixed identification of the control plane itself. Every field is a constant fold
 | Bits | Field | Access | Reset | Source | Description |
 |---|---|---|---|---|---|
 | `31:24` | `MAJOR` | RO | `0x1` | — | Incompatible layout change. |
-| `23:16` | `MINOR` | RO | `0x2` | — | Registers or fields added. |
+| `23:16` | `MINOR` | RO | `0x3` | — | Registers or fields added. |
 | `15:8` | `PATCH` | RO | `0x0` | — | Documentation-only change. |
 | `7:0` | `SCHEMA` | RO | `0x1` | — | Source-of-truth schema version. |
 
@@ -75,8 +76,8 @@ Fixed identification of the control plane itself. Every field is a constant fold
 
 | Bits | Field | Access | Reset | Source | Description |
 |---|---|---|---|---|---|
-| `7:0` | `N_BLOCKS` | RO | `0x9` | — | Declared blocks, implemented and planned. |
-| `15:8` | `N_REGS` | RO | `0x35` | — | Implemented registers across all blocks. |
+| `7:0` | `N_BLOCKS` | RO | `0xA` | — | Declared blocks, implemented and planned. |
+| `15:8` | `N_REGS` | RO | `0x3C` | — | Implemented registers across all blocks. |
 | `23:16` | `DATA_W` | RO | `0x20` | — | Register data width in bits. |
 | `31:24` | `ADDR_W` | RO | `0x10` | — | Register address width in bits. |
 
@@ -84,7 +85,7 @@ Fixed identification of the control plane itself. Every field is a constant fold
 
 | Bits | Field | Access | Reset | Source | Description |
 |---|---|---|---|---|---|
-| `31:0` | `BLOCK_MASK` | RO | `0xBF` | — | Implemented-block bitmap. |
+| `31:0` | `BLOCK_MASK` | RO | `0x2BF` | — | Implemented-block bitmap. |
 
 ## `build_params` — `0x1000`
 
@@ -551,6 +552,73 @@ PLANNED. Snapshot capture, trigger configuration and debug readback.
 
 **Planned, not implemented in this build** (owning issues: #19).
 The window is reserved and every access to it returns `error=1`.
+
+## `covar` — `0x9000`
+
+Integration settings for the SPEC 7.6 power and covariance engine (rtl/covariance/, issue #13): the programmable window length, the exponential-averaging mode and its shift, the per-pair enable mask, the pair table, the deterministic flush, and the accumulator-protection status. Everything writable here is latched by rtl/covariance/integrator.sv at a window boundary and never mid-window, so a write can lengthen or shorten the NEXT window but can never change the interval a result already covers. Software that needs a change to take effect at once writes the register and then pulses COVAR_CTRL.FLUSH, which drains the open window with its truncated marker and restarts the block from its post-reset state.
+
+| Offset | Address | Register | Access | Reset | Description |
+|---|---|---|---|---|---|
+| `0x000` | `0x9000` | `COVAR_CTRL` | MIXED | `0x00000031` | Master controls. FLUSH and SAT_CLEAR are write-1-pulse and read back zero, because they are events rather than modes. |
+| `0x004` | `0x9004` | `COVAR_WINDOW` | RW | `0x00000010` | Programmable integration window (SPEC 7.6). |
+| `0x008` | `0x9008` | `COVAR_PAIR_ENABLE` | RW | `0x00000001` | Runtime enable, one bit per covariance pair (SPEC 7.6, 'runtime enable per covariance pair'). |
+| `0x00C` | `0x900C` | `COVAR_PAIR_TABLE` | MIXED | `0x00000000` | Pair table programming port. One entry per write: set INDEX, X_SEL and Y_SEL, then pulse WRITE. The table takes effect at the next COVAR_CTRL.FLUSH rather than at a window boundary; rtl/covariance/covar_engine.sv section 4 explains why a multiplier pipeline deeper than one cycle cannot re-point a pair cleanly at a window edge. |
+| `0x010` | `0x9010` | `COVAR_STATUS` | ROHW | `0x00000000` | Hardware-driven status. The geometry fields let software size its own buffers without compiled-in constants, exactly as the build-parameter block does for the rest of the design. |
+| `0x014` | `0x9014` | `COVAR_SAT_STATUS` | W1C | `0x00000000` | Accumulator protection (SPEC 7.6 'accumulator protection', SPEC 6 overflow flags). Sticky, write 1 to clear; also cleared by COVAR_CTRL.SAT_CLEAR and by COVAR_CTRL.FLUSH. |
+| `0x018` | `0x9018` | `COVAR_SAT_COUNT` | ROHW | `0x00000000` | Count of saturation events, highest across the block's accumulators. Saturates at all-ones rather than wrapping: a wrapped counter can read zero on a permanently clamping datapath, which is the one reading that must never be produced. |
+
+### `COVAR.COVAR_CTRL` — `0x9000`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `0` | `ENABLE` | RW | `0x1` | — | Global accumulate enable. Cleared, the integrators admit no samples and emit nothing. Latched at a window boundary, so clearing it mid-window lets that window finish rather than truncating it. |
+| `1` | `EXP_MODE` | RW | `0x0` | — | 0: block integration, acc += x over COVAR_WINDOW.LENGTH samples, cleared at each boundary. 1: exponential averaging, y += (x - y) >> EXP_K per sample, reported every COVAR_WINDOW.LENGTH samples and NOT cleared at the boundary. rtl/covariance/integrator.sv section 4 states the exact fixed-point behaviour. |
+| `7:4` | `EXP_K` | RW | `0x3` | — | Exponential-averaging shift k, 0..15. k = 0 is a pass-through. The update truncates toward -infinity, so a constant target is approached from below and the filter settles inside (x - 2^k, x]. |
+| `8` | `FLUSH` | RWP | `0x0` | — | Drain every open window, mark each result flushed (and truncated when short), then restart the block in its post-reset state: zero accumulators, zero sample counts, window_id back to zero, sticky saturation cleared, and the pair table reloaded from COVAR_PAIR_TABLE. |
+| `9` | `SAT_CLEAR` | RWP | `0x0` | — | Clear the sticky saturation flags and the saturation-event counter without disturbing any window. |
+
+### `COVAR.COVAR_WINDOW` — `0x9004`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `15:0` | `LENGTH` | RW | `0x10` | — | Samples per integration window. Zero is treated as one, so a zero-initialised register plane cannot make the window infinite - which would be indistinguishable from a hang. A signed POWER_W = 40 accumulator integrates terms bounded by 2^31 exactly for LENGTH <= 255 (rtl/packages/covar_pkg.sv section 1); longer windows are legal and may clamp, which COVAR_SAT_STATUS reports. |
+
+### `COVAR.COVAR_PAIR_ENABLE` — `0x9008`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `31:0` | `MASK` | RW | `0x1` | — | Bit p enables pair p. Latched by that pair's accumulators at a window boundary, so a pair disabled mid-window completes the window it is in and a pair enabled mid-window starts at the next one with a full-length window. A disabled pair accumulates nothing and emits nothing; its multiplier still free-runs, because a clock enable on a DSP register is what stops the tool using the block's own pipeline registers. |
+
+### `COVAR.COVAR_PAIR_TABLE` — `0x900C`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `7:0` | `INDEX` | RW | `0x0` | — | Pair index to program. |
+| `15:8` | `X_SEL` | RW | `0x0` | — | Source index for X. An index beyond the elaborated source count reads source 0; out of range is defined rather than undefined, because a register plane can be programmed with anything. |
+| `23:16` | `Y_SEL` | RW | `0x0` | — | Source index for Y, the conjugated operand. |
+| `24` | `WRITE` | RWP | `0x0` | — | Write the entry named by INDEX. One-cycle pulse; reads back zero. |
+
+### `COVAR.COVAR_STATUS` — `0x9010`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `15:0` | `WINDOW_ID` | ROHW | `0x0` | — | Window id of the most recent result, wrapping at 2^16. Increments by exactly one per emitted window, so a consumer detects a dropped one. |
+| `23:16` | `N_PAIRS` | ROHW | `0x0` | — | Elaborated covariance pair count. |
+| `31:24` | `ACC_W` | ROHW | `0x0` | — | Elaborated accumulator width in bits (SPEC 3 POWER_W). |
+
+### `COVAR.COVAR_SAT_STATUS` — `0x9014`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `0` | `POWER` | W1C | `0x0` | — | The power accumulator clamped at least once since the last clear. |
+| `1` | `CROSS` | W1C | `0x0` | — | A cross-power accumulator clamped at least once since the last clear. |
+| `2` | `TRUNCATED` | W1C | `0x0` | — | At least one window was emitted short of its programmed length. Set only by a flush, because a flush is the only thing that can shorten a window. |
+
+### `COVAR.COVAR_SAT_COUNT` — `0x9018`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `31:0` | `VALUE` | ROHW | `0x0` | — | Saturation-event count. |
 
 ## Regenerating
 

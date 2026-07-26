@@ -816,7 +816,13 @@ int harness::sim_test_main(const SimArgs& args) {
         // Outside every declared window.
         {0xF000u, false, true, 0xF, "address above every window"},
         {0xF004u, true, false, 0xF, "address above every window, write"},
-        {0x9000u, false, true, 0xF, "gap above the last declared window"},
+        // 0x9000 was the gap above the last declared window until the SPEC 9
+        // integration-settings window landed there with issue #13. The gap is
+        // now the next window up, and what is illegal inside the covariance
+        // window is an address past its last register.
+        {0xA000u, false, true, 0xF, "gap above the last declared window"},
+        {regmap::COVAR_BASE + 0x100u, false, true, 0xF,
+         "covar window, no register"},
         // Inside an implemented window, past the block's last register.
         {regmap::ID_BASE + 0x100u, false, true, 0xF, "id window, no register"},
         {regmap::SCRATCH_BASE + 0x0F0u, true, false, 0xF, "scratch window, no register"},

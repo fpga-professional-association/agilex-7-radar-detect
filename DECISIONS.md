@@ -2001,3 +2001,228 @@ re-proven, then a compile. It is **not** made here: issue #11's remit is to
 produce the measurement that says which change to make, and this is it. The
 number to beat is 362.2 MHz, the path is named above, and the bit-exact model and
 the vector set are what will prove the change did not alter the transform.
+
+## 2026-07-25 — Power and covariance: POWER_W as an exact window bound, conjugation by operand swap, where configuration latches  (issue #13)
+
+Context: SPEC §7.6 asks for `Power = I^2 + Q^2`, a configurable cross-power
+`Rxy = X * conj(Y)` over selected antenna or beam pairs, a programmable integration window,
+accumulator protection, window-boundary metadata, optional exponential averaging, a runtime
+enable per pair, and deterministic reset and flush behaviour. SPEC §3 fixes `POWER_W = 40`.
+This is the third Phase 2 kernel; it consumes the issue #9 complex multiplier and the issue
+#4 numerics package, and it is the first block in the design with a **programmable
+integration state**, so several things settled here are settled for CFAR (#14) and the
+event aggregator (#18) as well.
+
+**Decision 1 — `POWER_W = 40` is not a round number, it is 32 + 8, and the 8 is the exact
+window bound.** With I, Q in Q1.15, one term of anything this block accumulates satisfies
+`|v| <= 2^31`: the power extreme `I = Q = -32768` gives exactly `2^31`, and so does each
+component of a Q1.15 conjugate product. A single term therefore needs 32 signed bits — the
+same "the sum of two Q2.30 products is not Q2.30" fact that made `complex_multiplier`'s
+full-precision port 33 bits wide (issue #9, decision 1). An N-term sum of such terms fits a
+signed w-bit accumulator without clamping iff
+
+```text
+N * 2^31 <= 2^(w-1) - 1        i.e.        N <= 2^(w-32) - 1
+```
+
+so `w = 40` buys **255 samples of provably exact integration, for any input**. That is the
+whole content of SPEC §3's `POWER_W`, and `covar_pkg` exports the relation in both
+directions (`covar_acc_w_required`, `covar_window_max_exact`) so that a longer exact window
+is obtained by calling a function rather than by guessing a width.
+
+At N = 256 the bound is missed by exactly one LSB, and only by the single input sequence in
+which every sample is the extreme — 256 copies of `X = Y = (-32768, -32768)` sum to exactly
+`+2^39` against a maximum of `2^39 - 1`. That is not a hypothetical to be waved at: it is a
+directed test, and `test_covariance` drives both it and the 255-sample case that must sum
+exactly. Beyond the bound the accumulator clamps, never wraps, and raises a sticky flag
+through `fxp_sticky_flags` — the standing reason being that a wrapped power estimate is
+indistinguishable from a target to the CFAR stage downstream, whereas a clamp degrades
+monotonically and is visibly flagged.
+
+**Decision 2 — one SIGNED accumulator for both power and cross-power, even though power is
+provably non-negative.** An unsigned accumulator for the power path would buy one bit
+(exact to 511 rather than 255) at the price of a second saturation rule, a second C++ model
+path, and a second set of corner tests — and `fxp_pkg` has no unsigned clamp, so it would
+also be the first quantisation in the design not expressed as a call into the shared
+package. `power_calc` therefore presents its result in a signed `POWER_W` field with the
+top eight bits zero, and `integrator` is instantiated identically behind the power path and
+behind each half of a covariance pair. The width note is in `power_calc.sv` section 1.
+
+**Decision 3 — `power_calc` has no saturation flag, because saturation is impossible, and
+the impossibility is asserted rather than declared.** `max(I^2 + Q^2) = 2^31 < 2^39 - 1`.
+A flag that can never fire is worse than no flag: it invites a consumer to believe the
+datapath is monitored when the monitoring is one module downstream. What the module carries
+instead is `a_power_range` and `a_power_matches_pkg`, checked on every qualified output
+against `fxp_pkg`'s own multiply on a shadow copy of the operands — the same arrangement
+`complex_multiplier` uses for its arithmetic core.
+
+**Decision 4 — the conjugate is formed by REWIRING the multiplier, never by negating
+`y.im`.** The obvious wiring, `b = (y.re, -y.im)`, is wrong on the first input a reviewer
+tries: `y.im = -32768` is a legal Q1.15 value whose negation is `+32768`, which does not fit
+16 bits. Negating it either saturates (wrong product) or wraps back to `-32768` (wrong
+sign), and either way the extreme corner — the corner decision 1's whole analysis is built
+on — would be silently incorrect.
+
+The engine instead feeds the issue #9 kernel the Y operand with its halves EXCHANGED,
+`b = {re: y.im, im: y.re}`, and reads
+
+```text
+p_re = x.re*y.im - x.im*y.re = -Im(X conj(Y))
+p_im = x.re*y.re + x.im*y.im = +Re(X conj(Y))
+
+  ->   Rxy.re = p_im        Rxy.im = -p_re
+```
+
+The negation moves from a 16-bit OPERAND, where `-32768` overflows, to the 33-bit exact
+PRODUCT port, where `|p_re| <= 2^31` and the field holds `[-2^32, 2^32-1]` — so it cannot
+overflow for any input, and it costs one adder rather than one multiplier. No new
+arithmetic, no saturation, `complex_multiplier` used exactly as it is, in genuine conjugate
+mode. The directed test that keeps it honest is `X = Y`, which must give `Rxx.re == power`
+and `Rxx.im == 0` exactly, on every corner; the fault injection that proved the oracle
+bites was reverting this one expression.
+
+`ROUND_OUT = 0` on every instance: the accumulator consumes the exact 33-bit product,
+because quantising each term back to Q1.15 before summing 255 of them would throw away
+precisely the bits the 40-bit accumulator exists to keep. The rounding network optimises
+away entirely.
+
+**Decision 5 — the input contract is a PARALLEL source vector, not a time-multiplexed pair
+stream.** SPEC §3 puts this block after the frequency-alignment network and the beamforming
+matrix, both of which exist to produce all channels for one instant in the same beat. A
+serialised `(X, Y)` pair stream would need a re-serialiser whose only job is to undo that,
+would cap the input rate at one vector per enabled pair — a 10x reduction at the SPEC §11
+medium size, where the full upper triangle of four sources is ten pairs — and would need an
+elastic buffer and a ready chain, which is exactly the convention every other Phase 2
+kernel avoids (issue #9, decision 4).
+
+The price is DSPs: one complex multiplier per pair, forty of them at medium against a DSP
+column of several thousand. The trade is not close at that size. It does **not** stay
+comfortable at full scale: sixteen sources with a full upper triangle is 136 pairs = 544
+DSPs at MULT4, which is where `MULT3` (three multipliers, bit-identical — issue #9,
+decision 2, so it is a pure resource decision) and a pruned pair list start to matter. Both
+are already parameters here, and the full-scale pair count is a SPEC §18 measurement rather
+than a number chosen in this file.
+
+**Decision 6 — the per-pair enable gates the ACCUMULATION, not the multiply, and it latches
+at a window boundary.** An enable on a DSP register is what stops the tool using the
+block's own pipeline registers (SPEC §23; measured in issue #9), and a per-pair mask is
+exactly the kind of high-fanout control that should not reach a datapath register. So a
+disabled pair still computes a product and that product goes nowhere. Because
+`integrator`'s `cfg_enable` latches at a boundary, a pair disabled mid-window FINISHES the
+window it is in and then stops, and a pair enabled mid-window starts at the NEXT window with
+a full-length one. Neither ever produces a partial window as a side effect of a register
+write: the only thing that shortens a window is an explicit flush, and a flush marks it.
+
+**Decision 7 — a configuration boundary is "no window open AND none opening", and the
+second half of that is load-bearing.** Window length, mode, exponential shift and enable
+latch at a window close, at a flush, or in an idle cycle. The idle term is what lets a
+DISABLED block be enabled again — a disabled block accepts no samples, closes no windows,
+and would therefore never see another boundary. The `!accept` term is what stops a length
+written in the same cycle as a window's FIRST sample from latching while that sample is
+already being counted.
+
+That second term was not in the first implementation, and it is here because
+`a_covar_truncated_implies_flushed` fired during bring-up: the window ran to a length that
+was never in force when it opened, overshot, and was reported truncated without having been
+flushed. The lesson is worth the paragraph — the visible symptom of a configuration-timing
+defect is a metadata inconsistency, several cycles removed from the cause, on a stimulus
+that has to change the length at exactly the wrong cycle. An assertion inside the module
+turned that into an immediate named failure; a scoreboard alone would have reported a wrong
+accumulator value and left the diagnosis open.
+
+**Decision 8 — the pair TABLE latches only on reset and flush, which is deliberately
+stricter than the enable rule.** The multiplier is `CMULT_PIPE_STAGES` deep, so at any
+instant there are products in flight formed from the selectors as they were several cycles
+ago. A selector change timed against the integrator's window boundary would still let a
+handful of old-source products land in the new window: a boundary that is exact at the
+accumulator is not exact at the multiplier input, and pretending otherwise is how a block
+acquires a rare, timing-dependent wrong answer. Re-pointing a pair is therefore: write the
+table, pulse `FLUSH`. The per-window runtime control SPEC §7.6 actually asks for is the
+per-pair ENABLE, which has no such hazard because a disabled pair's in-flight products are
+discarded rather than misattributed.
+
+**Decision 9 — flush is defined as an EQUIVALENCE, not as a list of side effects.** "After
+a flush the module is in the state it is in one cycle after reset release, and any partial
+window has been emitted first." Concretely that includes resetting `window_id` to zero and
+clearing the sticky saturation state, both of which are easy to leave out and neither of
+which a list-shaped specification would make testable. Written as an equivalence it is
+directly checkable, and `test_covariance` checks it the obvious way: the same stimulus run
+from reset and again after a flush must produce byte-identical result streams, window ids
+included. Software that wants to keep the saturation history reads it before flushing;
+`SAT_CLEAR` exists for the opposite case.
+
+**Decision 10 — exponential averaging TRUNCATES, and the resulting dead band is documented
+rather than discovered.** The update is `y += (x - y) >>> k` through `fxp_pkg::fxp_trunc`,
+i.e. floor division. The project rule is round-to-nearest-even everywhere a value is
+QUANTISED, and this is deliberately not that: it is the loop gain of the one feedback path
+in the block that cannot be pipelined, since `y` is needed next cycle. Rounding inside that
+loop buys a fraction of an LSB of DC accuracy and costs the closure of the accumulator loop,
+on a block whose output feeds a software-programmable threshold.
+
+The consequences are exact and are checked against the model rather than tolerated:
+`k = 0` is a pass-through; for `x > y` the increment is zero whenever `0 < x - y < 2^k`, so
+rising convergence stalls in a dead band and never quite reaches the target; for `x < y` the
+increment is at most `-1` always, so falling convergence never stalls. The fixed set for a
+constant `x` is `y in (x - 2^k, x]` — biased low by up to one shift quantum, exactly. The
+test asserts that interval in both directions for every `k` it can settle inside its cycle
+budget (`k <= 6`; a `k = 15` filter needs on the order of `2^15 * 20` samples, and claiming
+convergence the run never observed would be worse than not claiming it). Every `k` from 0
+to 15 is still checked bit-exactly against the model.
+
+**Decision 11 — the SPEC §9 group "Integration settings" gets a real window, at 0x9000.**
+It was the one group in SPEC §9 that no implemented block claimed — it was parked on the
+planned CFAR window. `rtl/control/reg_block_covar.sv` implements it: window length,
+exponential mode and shift, per-pair enable mask, a pair-table programming port, the FLUSH
+and SAT_CLEAR pulses, and the accumulator-protection status coming back as W1C sticky bits
+plus a saturating event count.
+
+The pair table is a PROGRAMMING PORT (index, X, Y, then a WRITE pulse) rather than N
+registers, for the reason the coefficient window is one: a table sized by `N_PAIRS` would
+make the generated, machine-readable register map depend on an elaboration parameter. The
+block additionally checks its generated reset values and field widths against `covar_pkg`
+at elaboration, because `control/regmap.json` and `rtl/packages/covar_pkg.sv` are two files
+and two files drift.
+
+Two consequences worth recording. `control_top` gains the block with its hardware inputs
+tied off — the same arrangement, and the same reason, as the coefficient window (issue #7,
+decision 5): control_top is the register plane's own test bench, and wiring a live
+covariance engine into it would make a register-plane failure and a covariance failure
+indistinguishable. And `test_control_regs` had `0x9000` in its "gap above the last declared
+window" list; the gap moved to `0xA000` and the covariance window joined the
+"inside an implemented window, past the last register" list instead.
+
+**Decision 12 — `covar_pkg` exports its widths as functions as well as localparams.**
+Same measured reason `stream_pkg` gives for its latency constants: `verilator --lint-only
+--Wall` reports a package localparam that a given build happens not to reference as a dead
+parameter, and this package is deliberately lintable one top at a time (`files_covar.f`,
+`files_control.f`, `files.f`). The localparam remains the definition; the function's body
+references it, which makes it "used" in every build, and a function is dead in none. Two of
+those functions — `covar_window_max_exact` and `covar_acc_w_required` — are load-bearing
+rather than cosmetic: they are decision 1's inequality, and the test checks them against an
+independent C++ implementation at the bound and one past it.
+
+**Decision 13 — a pre-existing defect in `sim-tiny` had to be fixed to run the gate.** The
+`sim-tiny` recipe on `main` was missing the `$(BUILD_VERILATOR)` command word on the
+`fft_top` fast build, so the line was passed to the shell as a bare
+`--top fft_top --files ...` and the binary the recipe then ran had never been built:
+
+```text
+[sim-tiny] ===== seed 3 : test_fft =====
+/bin/sh: 1: ./sim/verilator/build/fast_tiny_fft_top/Vfft_top_test_fft: not found
+[sim-tiny] FAILED (seeds: 1 2 3)
+```
+
+`make sim-tiny` therefore failed on a clean checkout of `main` before any of this issue's
+work existed. The fix is one line restored, and it is recorded here rather than folded
+silently into this issue's diff because it means the issue #11 gate transcript was produced
+by an invocation that has not been reproducible since it landed.
+
+**Calibration.** SPEC §18 evidence for this kernel is deferred; the pull request states why
+and what a sweep would measure. What the design DOES claim about mapping, and therefore what
+a later sweep has to check, is written down where it can be falsified: `power_calc` states
+that `I^2 + Q^2` should map to ONE DSP in sum-of-two-multipliers mode (the two products and
+their sum are one combinational expression between two registers, and neither register has a
+clock enable or a reset, which are the three things that stop the fold), and `covar_engine`
+states that a pair costs one `complex_multiplier`. Both are measurements waiting to be made,
+not results. Issue #10's decision 13 is the standing warning that applies here: lint clean
+is not the same as synthesizable, and this kernel has not yet been through Quartus.

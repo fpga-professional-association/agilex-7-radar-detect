@@ -21,15 +21,15 @@ package regmap_pkg;
   localparam int unsigned REGMAP_STRB_W = 4;
   localparam int unsigned REGMAP_WINDOW_BYTES = 4096;
   localparam int unsigned REGMAP_WINDOW_W = 12;
-  localparam int unsigned REGMAP_N_BLOCKS = 9;
-  localparam int unsigned REGMAP_N_BLOCKS_IMPL = 7;
-  localparam int unsigned REGMAP_N_REGS_TOTAL = 53;
-  localparam logic [31:0] REGMAP_BLOCK_MASK = 32'h000000BF;
+  localparam int unsigned REGMAP_N_BLOCKS = 10;
+  localparam int unsigned REGMAP_N_BLOCKS_IMPL = 8;
+  localparam int unsigned REGMAP_N_REGS_TOTAL = 60;
+  localparam logic [31:0] REGMAP_BLOCK_MASK = 32'h000002BF;
 
   // ---- implemented block windows, in fabric port order ----
   // The fabric decodes one master port onto these windows; index i here is index i
   // on every per-block port array of rtl/control/reg_fabric.sv.
-  localparam logic [REGMAP_N_BLOCKS_IMPL*REGMAP_ADDR_W-1:0] REGMAP_IMPL_BASE = {16'h7000, 16'h5000, 16'h4000, 16'h3000, 16'h2000, 16'h1000, 16'h0000};
+  localparam logic [REGMAP_N_BLOCKS_IMPL*REGMAP_ADDR_W-1:0] REGMAP_IMPL_BASE = {16'h9000, 16'h7000, 16'h5000, 16'h4000, 16'h3000, 16'h2000, 16'h1000, 16'h0000};
   //   [0] id            base 0x0000  4 registers
   //   [1] build_params  base 0x1000  12 registers
   //   [2] ctrl          base 0x2000  4 registers
@@ -37,6 +37,7 @@ package regmap_pkg;
   //   [4] scratch       base 0x4000  4 registers
   //   [5] coeff         base 0x5000  4 registers
   //   [6] counters      base 0x7000  21 registers
+  //   [7] covar         base 0x9000  7 registers
 
   // -------------------------------------------------------------------------
   // Block 0: id — implemented
@@ -128,9 +129,9 @@ package regmap_pkg;
 
   // reset value of the stored bits
   localparam logic [REGMAP_ID_N_REGS*32-1:0] REGMAP_ID_RESET = {
-      32'h000000BF,  // [3]
-      32'h10203509,  // [2]
-      32'h01020001,  // [1]
+      32'h000002BF,  // [3]
+      32'h10203C0A,  // [2]
+      32'h01030001,  // [1]
       32'h52414441  // [0]
   };
   // bits a software write may set or clear (RW)
@@ -1558,5 +1559,237 @@ package regmap_pkg;
   localparam int unsigned REGMAP_DEBUG_SIZE = 4096;
   localparam int unsigned REGMAP_DEBUG_N_REGS = 0;
   // No registers in this build: every access to 0x8000..0x8FFF returns error=1.
+
+  // -------------------------------------------------------------------------
+  // Block 9: covar — implemented
+  // SPEC 9 groups: Integration settings
+  // Integration settings for the SPEC 7.6 power and covariance engine (rtl/covariance/,
+  // issue #13): the programmable window length, the exponential-averaging mode and its
+  // shift, the per-pair enable mask, the pair table, the deterministic flush, and the
+  // accumulator-protection status. Everything writable here is latched by
+  // rtl/covariance/integrator.sv at a window boundary and never mid-window, so a write
+  // can lengthen or shorten the NEXT window but can never change the interval a result
+  // already covers. Software that needs a change to take effect at once writes the
+  // register and then pulses COVAR_CTRL.FLUSH, which drains the open window with its
+  // truncated marker and restarts the block from its post-reset state.
+  // -------------------------------------------------------------------------
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_COVAR_BASE = 16'h9000;
+  localparam int unsigned REGMAP_COVAR_SIZE = 4096;
+  localparam int unsigned REGMAP_COVAR_N_REGS = 7;
+  localparam int unsigned REGMAP_COVAR_INDEX = 7;  // fabric port index
+
+  // COVAR_CTRL @ 0x9000 (MIXED)
+  //   Master controls. FLUSH and SAT_CLEAR are write-1-pulse and read back zero,
+  //   because they are events rather than modes.
+  //   [0:0] ENABLE (RW)
+  //       Global accumulate enable. Cleared, the integrators admit no samples and emit
+  //       nothing. Latched at a window boundary, so clearing it mid-window lets that
+  //       window finish rather than truncating it.
+  //   [1:1] EXP_MODE (RW)
+  //       0: block integration, acc += x over COVAR_WINDOW.LENGTH samples, cleared at
+  //       each boundary. 1: exponential averaging, y += (x - y) >> EXP_K per sample,
+  //       reported every COVAR_WINDOW.LENGTH samples and NOT cleared at the boundary.
+  //       rtl/covariance/integrator.sv section 4 states the exact fixed-point
+  //       behaviour.
+  //   [7:4] EXP_K (RW)
+  //       Exponential-averaging shift k, 0..15. k = 0 is a pass-through. The update
+  //       truncates toward -infinity, so a constant target is approached from below and
+  //       the filter settles inside (x - 2^k, x].
+  //   [8:8] FLUSH (RWP)
+  //       Drain every open window, mark each result flushed (and truncated when short),
+  //       then restart the block in its post-reset state: zero accumulators, zero
+  //       sample counts, window_id back to zero, sticky saturation cleared, and the
+  //       pair table reloaded from COVAR_PAIR_TABLE.
+  //   [9:9] SAT_CLEAR (RWP)
+  //       Clear the sticky saturation flags and the saturation-event counter without
+  //       disturbing any window.
+  localparam int unsigned REGMAP_COVAR_COVAR_CTRL_INDEX = 0;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_COVAR_COVAR_CTRL_ADDR = 16'h9000;
+  localparam int unsigned REGMAP_COVAR_COVAR_CTRL_ENABLE_LSB = 0;
+  localparam int unsigned REGMAP_COVAR_COVAR_CTRL_ENABLE_WIDTH = 1;
+  localparam logic [31:0] REGMAP_COVAR_COVAR_CTRL_ENABLE_MASK = 32'h00000001;
+  localparam int unsigned REGMAP_COVAR_COVAR_CTRL_EXP_MODE_LSB = 1;
+  localparam int unsigned REGMAP_COVAR_COVAR_CTRL_EXP_MODE_WIDTH = 1;
+  localparam logic [31:0] REGMAP_COVAR_COVAR_CTRL_EXP_MODE_MASK = 32'h00000002;
+  localparam int unsigned REGMAP_COVAR_COVAR_CTRL_EXP_K_LSB = 4;
+  localparam int unsigned REGMAP_COVAR_COVAR_CTRL_EXP_K_WIDTH = 4;
+  localparam logic [31:0] REGMAP_COVAR_COVAR_CTRL_EXP_K_MASK = 32'h000000F0;
+  localparam int unsigned REGMAP_COVAR_COVAR_CTRL_FLUSH_LSB = 8;
+  localparam int unsigned REGMAP_COVAR_COVAR_CTRL_FLUSH_WIDTH = 1;
+  localparam logic [31:0] REGMAP_COVAR_COVAR_CTRL_FLUSH_MASK = 32'h00000100;
+  localparam int unsigned REGMAP_COVAR_COVAR_CTRL_SAT_CLEAR_LSB = 9;
+  localparam int unsigned REGMAP_COVAR_COVAR_CTRL_SAT_CLEAR_WIDTH = 1;
+  localparam logic [31:0] REGMAP_COVAR_COVAR_CTRL_SAT_CLEAR_MASK = 32'h00000200;
+
+  // COVAR_WINDOW @ 0x9004 (RW)
+  //   Programmable integration window (SPEC 7.6).
+  //   [15:0] LENGTH (RW)
+  //       Samples per integration window. Zero is treated as one, so a zero-initialised
+  //       register plane cannot make the window infinite - which would be
+  //       indistinguishable from a hang. A signed POWER_W = 40 accumulator integrates
+  //       terms bounded by 2^31 exactly for LENGTH <= 255 (rtl/packages/covar_pkg.sv
+  //       section 1); longer windows are legal and may clamp, which COVAR_SAT_STATUS
+  //       reports.
+  localparam int unsigned REGMAP_COVAR_COVAR_WINDOW_INDEX = 1;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_COVAR_COVAR_WINDOW_ADDR = 16'h9004;
+  localparam int unsigned REGMAP_COVAR_COVAR_WINDOW_LENGTH_LSB = 0;
+  localparam int unsigned REGMAP_COVAR_COVAR_WINDOW_LENGTH_WIDTH = 16;
+  localparam logic [31:0] REGMAP_COVAR_COVAR_WINDOW_LENGTH_MASK = 32'h0000FFFF;
+
+  // COVAR_PAIR_ENABLE @ 0x9008 (RW)
+  //   Runtime enable, one bit per covariance pair (SPEC 7.6, 'runtime enable per
+  //   covariance pair').
+  //   [31:0] MASK (RW)
+  //       Bit p enables pair p. Latched by that pair's accumulators at a window
+  //       boundary, so a pair disabled mid-window completes the window it is in and a
+  //       pair enabled mid-window starts at the next one with a full-length window. A
+  //       disabled pair accumulates nothing and emits nothing; its multiplier still
+  //       free-runs, because a clock enable on a DSP register is what stops the tool
+  //       using the block's own pipeline registers.
+  localparam int unsigned REGMAP_COVAR_COVAR_PAIR_ENABLE_INDEX = 2;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_COVAR_COVAR_PAIR_ENABLE_ADDR = 16'h9008;
+  localparam int unsigned REGMAP_COVAR_COVAR_PAIR_ENABLE_MASK_LSB = 0;
+  localparam int unsigned REGMAP_COVAR_COVAR_PAIR_ENABLE_MASK_WIDTH = 32;
+  localparam logic [31:0] REGMAP_COVAR_COVAR_PAIR_ENABLE_MASK_MASK = 32'hFFFFFFFF;
+
+  // COVAR_PAIR_TABLE @ 0x900C (MIXED)
+  //   Pair table programming port. One entry per write: set INDEX, X_SEL and Y_SEL,
+  //   then pulse WRITE. The table takes effect at the next COVAR_CTRL.FLUSH rather than
+  //   at a window boundary; rtl/covariance/covar_engine.sv section 4 explains why a
+  //   multiplier pipeline deeper than one cycle cannot re-point a pair cleanly at a
+  //   window edge.
+  //   [7:0] INDEX (RW)
+  //       Pair index to program.
+  //   [15:8] X_SEL (RW)
+  //       Source index for X. An index beyond the elaborated source count reads source
+  //       0; out of range is defined rather than undefined, because a register plane
+  //       can be programmed with anything.
+  //   [23:16] Y_SEL (RW)
+  //       Source index for Y, the conjugated operand.
+  //   [24:24] WRITE (RWP)
+  //       Write the entry named by INDEX. One-cycle pulse; reads back zero.
+  localparam int unsigned REGMAP_COVAR_COVAR_PAIR_TABLE_INDEX = 3;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_COVAR_COVAR_PAIR_TABLE_ADDR = 16'h900C;
+  localparam int unsigned REGMAP_COVAR_COVAR_PAIR_TABLE_INDEX_LSB = 0;
+  localparam int unsigned REGMAP_COVAR_COVAR_PAIR_TABLE_INDEX_WIDTH = 8;
+  localparam logic [31:0] REGMAP_COVAR_COVAR_PAIR_TABLE_INDEX_MASK = 32'h000000FF;
+  localparam int unsigned REGMAP_COVAR_COVAR_PAIR_TABLE_X_SEL_LSB = 8;
+  localparam int unsigned REGMAP_COVAR_COVAR_PAIR_TABLE_X_SEL_WIDTH = 8;
+  localparam logic [31:0] REGMAP_COVAR_COVAR_PAIR_TABLE_X_SEL_MASK = 32'h0000FF00;
+  localparam int unsigned REGMAP_COVAR_COVAR_PAIR_TABLE_Y_SEL_LSB = 16;
+  localparam int unsigned REGMAP_COVAR_COVAR_PAIR_TABLE_Y_SEL_WIDTH = 8;
+  localparam logic [31:0] REGMAP_COVAR_COVAR_PAIR_TABLE_Y_SEL_MASK = 32'h00FF0000;
+  localparam int unsigned REGMAP_COVAR_COVAR_PAIR_TABLE_WRITE_LSB = 24;
+  localparam int unsigned REGMAP_COVAR_COVAR_PAIR_TABLE_WRITE_WIDTH = 1;
+  localparam logic [31:0] REGMAP_COVAR_COVAR_PAIR_TABLE_WRITE_MASK = 32'h01000000;
+
+  // COVAR_STATUS @ 0x9010 (ROHW)
+  //   Hardware-driven status. The geometry fields let software size its own buffers
+  //   without compiled-in constants, exactly as the build-parameter block does for the
+  //   rest of the design.
+  //   [15:0] WINDOW_ID (ROHW)
+  //       Window id of the most recent result, wrapping at 2^16. Increments by exactly
+  //       one per emitted window, so a consumer detects a dropped one.
+  //   [23:16] N_PAIRS (ROHW)
+  //       Elaborated covariance pair count.
+  //   [31:24] ACC_W (ROHW)
+  //       Elaborated accumulator width in bits (SPEC 3 POWER_W).
+  localparam int unsigned REGMAP_COVAR_COVAR_STATUS_INDEX = 4;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_COVAR_COVAR_STATUS_ADDR = 16'h9010;
+  localparam int unsigned REGMAP_COVAR_COVAR_STATUS_WINDOW_ID_LSB = 0;
+  localparam int unsigned REGMAP_COVAR_COVAR_STATUS_WINDOW_ID_WIDTH = 16;
+  localparam logic [31:0] REGMAP_COVAR_COVAR_STATUS_WINDOW_ID_MASK = 32'h0000FFFF;
+  localparam int unsigned REGMAP_COVAR_COVAR_STATUS_N_PAIRS_LSB = 16;
+  localparam int unsigned REGMAP_COVAR_COVAR_STATUS_N_PAIRS_WIDTH = 8;
+  localparam logic [31:0] REGMAP_COVAR_COVAR_STATUS_N_PAIRS_MASK = 32'h00FF0000;
+  localparam int unsigned REGMAP_COVAR_COVAR_STATUS_ACC_W_LSB = 24;
+  localparam int unsigned REGMAP_COVAR_COVAR_STATUS_ACC_W_WIDTH = 8;
+  localparam logic [31:0] REGMAP_COVAR_COVAR_STATUS_ACC_W_MASK = 32'hFF000000;
+
+  // COVAR_SAT_STATUS @ 0x9014 (W1C)
+  //   Accumulator protection (SPEC 7.6 'accumulator protection', SPEC 6 overflow
+  //   flags). Sticky, write 1 to clear; also cleared by COVAR_CTRL.SAT_CLEAR and by
+  //   COVAR_CTRL.FLUSH.
+  //   [0:0] POWER (W1C)
+  //       The power accumulator clamped at least once since the last clear.
+  //   [1:1] CROSS (W1C)
+  //       A cross-power accumulator clamped at least once since the last clear.
+  //   [2:2] TRUNCATED (W1C)
+  //       At least one window was emitted short of its programmed length. Set only by a
+  //       flush, because a flush is the only thing that can shorten a window.
+  localparam int unsigned REGMAP_COVAR_COVAR_SAT_STATUS_INDEX = 5;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_COVAR_COVAR_SAT_STATUS_ADDR = 16'h9014;
+  localparam int unsigned REGMAP_COVAR_COVAR_SAT_STATUS_POWER_LSB = 0;
+  localparam int unsigned REGMAP_COVAR_COVAR_SAT_STATUS_POWER_WIDTH = 1;
+  localparam logic [31:0] REGMAP_COVAR_COVAR_SAT_STATUS_POWER_MASK = 32'h00000001;
+  localparam int unsigned REGMAP_COVAR_COVAR_SAT_STATUS_CROSS_LSB = 1;
+  localparam int unsigned REGMAP_COVAR_COVAR_SAT_STATUS_CROSS_WIDTH = 1;
+  localparam logic [31:0] REGMAP_COVAR_COVAR_SAT_STATUS_CROSS_MASK = 32'h00000002;
+  localparam int unsigned REGMAP_COVAR_COVAR_SAT_STATUS_TRUNCATED_LSB = 2;
+  localparam int unsigned REGMAP_COVAR_COVAR_SAT_STATUS_TRUNCATED_WIDTH = 1;
+  localparam logic [31:0] REGMAP_COVAR_COVAR_SAT_STATUS_TRUNCATED_MASK = 32'h00000004;
+
+  // COVAR_SAT_COUNT @ 0x9018 (ROHW)
+  //   Count of saturation events, highest across the block's accumulators. Saturates at
+  //   all-ones rather than wrapping: a wrapped counter can read zero on a permanently
+  //   clamping datapath, which is the one reading that must never be produced.
+  //   [31:0] VALUE (ROHW)
+  //       Saturation-event count.
+  localparam int unsigned REGMAP_COVAR_COVAR_SAT_COUNT_INDEX = 6;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_COVAR_COVAR_SAT_COUNT_ADDR = 16'h9018;
+  localparam int unsigned REGMAP_COVAR_COVAR_SAT_COUNT_VALUE_LSB = 0;
+  localparam int unsigned REGMAP_COVAR_COVAR_SAT_COUNT_VALUE_WIDTH = 32;
+  localparam logic [31:0] REGMAP_COVAR_COVAR_SAT_COUNT_VALUE_MASK = 32'hFFFFFFFF;
+
+  // reset value of the stored bits
+  localparam logic [REGMAP_COVAR_N_REGS*32-1:0] REGMAP_COVAR_RESET = {
+      32'h00000000,  // [6]
+      32'h00000000,  // [5]
+      32'h00000000,  // [4]
+      32'h00000000,  // [3]
+      32'h00000001,  // [2]
+      32'h00000010,  // [1]
+      32'h00000031  // [0]
+  };
+  // bits a software write may set or clear (RW)
+  localparam logic [REGMAP_COVAR_N_REGS*32-1:0] REGMAP_COVAR_WMASK = {
+      32'h00000000,  // [6]
+      32'h00000000,  // [5]
+      32'h00000000,  // [4]
+      32'h00FFFFFF,  // [3]
+      32'hFFFFFFFF,  // [2]
+      32'h0000FFFF,  // [1]
+      32'h000000F3  // [0]
+  };
+  // bits cleared by writing 1, set by hardware (W1C)
+  localparam logic [REGMAP_COVAR_N_REGS*32-1:0] REGMAP_COVAR_W1CMASK = {
+      32'h00000000,  // [6]
+      32'h00000007,  // [5]
+      32'h00000000,  // [4]
+      32'h00000000,  // [3]
+      32'h00000000,  // [2]
+      32'h00000000,  // [1]
+      32'h00000000  // [0]
+  };
+  // bits that pulse for one cycle and read 0 (RWP)
+  localparam logic [REGMAP_COVAR_N_REGS*32-1:0] REGMAP_COVAR_PULSEMASK = {
+      32'h00000000,  // [6]
+      32'h00000000,  // [5]
+      32'h00000000,  // [4]
+      32'h01000000,  // [3]
+      32'h00000000,  // [2]
+      32'h00000000,  // [1]
+      32'h00000300  // [0]
+  };
+  // bits read from the hardware input, not from storage (ROHW)
+  localparam logic [REGMAP_COVAR_N_REGS*32-1:0] REGMAP_COVAR_HWMASK = {
+      32'hFFFFFFFF,  // [6]
+      32'h00000000,  // [5]
+      32'hFFFFFFFF,  // [4]
+      32'h00000000,  // [3]
+      32'h00000000,  // [2]
+      32'h00000000,  // [1]
+      32'h00000000  // [0]
+  };
 
 endpackage : regmap_pkg

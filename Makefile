@@ -58,9 +58,10 @@
 # issue #5 with the stream-primitive and negative-assertion tests, by issue #7
 # with the register/control plane, by issue #6 with the FIFO and CDC
 # primitives plus the SPEC 8 CDC inventory report, by issue #8 with the
-# telemetry primitives, by issue #9 with the complex multiplier, and by issue
-# #11 with the streaming FFT), the quartus-* targets (issue #3) and the SPEC 18
-# calibration sweeps `calibrate-cmult` (issue #9) and `calibrate-fft` (#11).
+# telemetry primitives, by issue #9 with the complex multiplier, by issue #11
+# with the streaming FFT, and by issue #13 with the power/covariance engine), the
+# quartus-* targets (issue #3) and the SPEC 18 calibration sweeps
+# `calibrate-cmult` (issue #9) and `calibrate-fft` (#11).
 #
 # Everything else is still a scaffold stub from issue #1. Stubs fail loudly:
 # they print `TODO(issue #N)` and the stub command exits 1. GNU make then
@@ -325,6 +326,29 @@ GEN_FFT_VECTORS  = $(PYTHON) model/python/gen_fft_vectors.py
 FFT_REF_SRC   := model/cpp/test/test_fft_ref.cpp
 FFT_REF_BIN    = $(NUMERICS_DIR)/test_fft_ref
 
+# --- power and covariance engine (issue #13, SPEC 6 / 7.6 / 13.1 / 14) ------
+# An eighth self-contained build, for the reason the others have one: a failure
+# in it is unambiguously a power/covariance failure. covar_top holds power_calc,
+# three integrators (two at POWER_W = 40 and one deliberately narrow at 34, so
+# the accumulator's exact-window bound is reached in four samples instead of
+# 256) and the N_PAIRS cross-power engine in one elaboration.
+#
+#   test_covariance  ten passes: the geometry echo, the power corners including
+#                    the (-32768,-32768) extreme that reaches exactly 2^31,
+#                    power through an integrator, window boundaries and
+#                    mid-window reconfiguration, saturation with its sticky flag
+#                    at both the narrow and the POWER_W bound, exponential
+#                    averaging at every k, the directed cross-power identities
+#                    (X = Y gives a real Rxx equal to the power), random source
+#                    vectors dense and again under bursty gaps with the two
+#                    required to agree, mid-run pair enable/disable, and flush
+#                    determinism. Every window is compared against
+#                    model/cpp/covariance/ on the cycle it is emitted.
+COVAR_TOP     := covar_top
+COVAR_FILES   := sim/verilator/files_covar.f
+COVAR_TEST    := test_covariance
+COVAR_BIN      = sim/verilator/build/fast_tiny_$(COVAR_TOP)/V$(COVAR_TOP)_$(COVAR_TEST)
+
 ifeq ($(HOST_KIND),windows)
   QUARTUS_SH ?= C:/altera_pro/26.1/quartus/bin64/quartus_sh.exe
 else
@@ -373,35 +397,38 @@ define LINT_RECIPE
 	    '$(CONFIG)' 'sim/verilator/lint_waivers.vlt'
 	$(REGMAP_CHECK_RECIPE)
 	$(FFT_TWIDDLE_CHECK_RECIPE)
-	@printf '[lint] 1/10 %s\n' 'benchmark_sim_top'
+	@printf '[lint] 1/11 %s\n' 'benchmark_sim_top'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) --test $(TEST)
-	@printf '[lint] 2/10 %s\n' '$(STREAM_TOP)'
+	@printf '[lint] 2/11 %s\n' '$(STREAM_TOP)'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
 	    --top $(STREAM_TOP) --files $(STREAM_FILES) --test $(STREAM_TEST)
-	@printf '[lint] 3/10 %s\n' '$(VIOL_TOP)'
+	@printf '[lint] 3/11 %s\n' '$(VIOL_TOP)'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
 	    --top $(VIOL_TOP) --files $(VIOL_FILES) --test $(VIOL_TEST)
-	@printf '[lint] 4/10 %s\n' '$(CONTROL_TOP)'
+	@printf '[lint] 4/11 %s\n' '$(CONTROL_TOP)'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
 	    --top $(CONTROL_TOP) --files $(CONTROL_FILES) --test $(CONTROL_TEST)
-	@printf '[lint] 5/10 %s\n' '$(CDC_TOP)'
+	@printf '[lint] 5/11 %s\n' '$(CDC_TOP)'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
 	    --top $(CDC_TOP) --files $(CDC_FILES) --test $(firstword $(CDC_TESTS))
-	@printf '[lint] 6/10 %s\n' '$(CDCV_TOP)'
+	@printf '[lint] 6/11 %s\n' '$(CDCV_TOP)'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
 	    --top $(CDCV_TOP) --files $(CDCV_FILES) --test $(CDCV_TEST)
-	@printf '[lint] 7/10 %s\n' '$(TELEM_TOP)'
+	@printf '[lint] 7/11 %s\n' '$(TELEM_TOP)'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
 	    --top $(TELEM_TOP) --files $(TELEM_FILES) --test $(firstword $(TELEM_TESTS))
-	@printf '[lint] 8/10 %s\n' '$(CMULT_TOP)'
+	@printf '[lint] 8/11 %s\n' '$(CMULT_TOP)'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
 	    --top $(CMULT_TOP) --files $(CMULT_FILES) --test $(CMULT_TEST)
-	@printf '[lint] 9/10 %s\n' '$(PFB_TOP)'
+	@printf '[lint] 9/11 %s\n' '$(PFB_TOP)'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
 	    --top $(PFB_TOP) --files $(PFB_FILES) --test $(PFB_TEST)
-	@printf '[lint] 10/10 %s\n' '$(FFT_TOP)'
+	@printf '[lint] 10/11 %s\n' '$(FFT_TOP)'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
 	    --top $(FFT_TOP) --files $(FFT_FILES) --test $(FFT_TEST)
+	@printf '[lint] 11/11 %s\n' '$(COVAR_TOP)'
+	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
+	    --top $(COVAR_TOP) --files $(COVAR_FILES) --test $(COVAR_TEST)
 endef
 
 # `sim-tiny`: SPEC 12.1 fast build of every simulation top, then every test
@@ -481,11 +508,14 @@ define SIM_TINY_RECIPE
 	    --top $(CMULT_TOP) --files $(CMULT_FILES) --test $(CMULT_TEST)
 	$(BUILD_VERILATOR) --mode fast --config tiny --jobs $(JOBS) \
 	    --top $(PFB_TOP) --files $(PFB_FILES) --test $(PFB_TEST)
+	$(BUILD_VERILATOR) --mode fast --config tiny --jobs $(JOBS) \
 	    --top $(FFT_TOP) --files $(FFT_FILES) --test $(FFT_TEST)
+	$(BUILD_VERILATOR) --mode fast --config tiny --jobs $(JOBS) \
+	    --top $(COVAR_TOP) --files $(COVAR_FILES) --test $(COVAR_TEST)
 	@printf '[sim-tiny] seeds: %s\n' '$(SEEDS)'
 	@printf '[sim-tiny] tests: %s %s %s %s %s %s %s %s %s %s\n' '$(TEST)' '$(STREAM_TEST)' \
 	    '$(VIOL_TEST)' '$(CONTROL_TEST)' '$(CDC_TESTS)' '$(CDCV_TEST)' \
-	    '$(TELEM_TESTS)' '$(CMULT_TEST)' '$(PFB_TEST)' '$(FFT_TEST)'
+	    '$(TELEM_TESTS)' '$(CMULT_TEST)' '$(PFB_TEST)' '$(FFT_TEST)' '$(COVAR_TEST)'
 	@rc=0; for s in $(SEEDS); do \
 	    printf '\n[sim-tiny] ===== seed %s : %s =====\n' "$$s" '$(TEST)'; \
 	    ./$(SIM_TINY_BIN) +seed=$$s +results=$(RESULTS_DIR) || rc=1; \
@@ -513,6 +543,8 @@ define SIM_TINY_RECIPE
 	    ./$(PFB_BIN) +seed=$$s +results=$(RESULTS_DIR) +vectors=$(VECTORS_DIR) || rc=1; \
 	    printf '\n[sim-tiny] ===== seed %s : %s =====\n' "$$s" '$(FFT_TEST)'; \
 	    ./$(FFT_BIN) +seed=$$s +results=$(RESULTS_DIR) +vectors=$(VECTORS_DIR) || rc=1; \
+	    printf '\n[sim-tiny] ===== seed %s : %s =====\n' "$$s" '$(COVAR_TEST)'; \
+	    ./$(COVAR_BIN) +seed=$$s +results=$(RESULTS_DIR) || rc=1; \
 	  done; \
 	  if [ $$rc -ne 0 ]; then \
 	    printf '\n[sim-tiny] FAILED (seeds: %s)\n' '$(SEEDS)' 1>&2; exit 1; \
