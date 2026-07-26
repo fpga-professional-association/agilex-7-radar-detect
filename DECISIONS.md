@@ -2378,7 +2378,7 @@ same defect arrived at by accident.
 
 Not 4096, because the cost is linear and paid by everything: every pack/unpack in the design
 computes in a `STREAM_MAX_PAYLOAD_W`-bit working type, so 4096 would be four times this
-raise's simulation cost, paid by every block, for a geometry nothing yet verifies. @@SIMCOST@@ Raising it to 4096 belongs to the issue that builds the alignment network
+raise's simulation cost, paid by every block, for a geometry nothing yet verifies. **Measured cost of the raise from 256 to 1024: `make sim-tiny SEEDS=1` from a clean build directory went from 144 s to 152 s wall clock on this host — 5.6%, with every one of the eighteen test runs passing at both settings.** Raising it to 4096 belongs to the issue that builds the alignment network
 producing such a beat (#16) and the one that freezes full scale (#20), with their own
 measurement in hand.
 
@@ -2471,3 +2471,132 @@ array appear to depend on itself and the build fails with `UNOPTFLAT`.
 the loop is always broken by a flip-flop. Declaring each level inside its own generate scope
 makes the dependency the acyclic chain it actually is, at the cost of one hierarchical
 reference per level and no waiver.
+
+### Measured calibration data (SPEC §18 items 6 and 7, seed 1)
+
+Seed 1, `AGMF039R47B1E1VC`, Quartus Prime Pro 26.1.0 Build 110, probe constraint 600.24 MHz
+— the same device, the same tool and the same deliberately-unreachable probe issues #9, #10
+and #11 used, so all four sets of numbers are comparable. Four points, all successful. Full
+records in `results/synthesis/calibration_bf_dot.json` and `calibration_bf_matrix.json`
+(generated, not committed); per-point evidence, including the verbatim DSP and retiming
+panels, under `results/synthesis/calibration/`.
+
+| point | DSP | DSP mode | M20K | ALM (total / kernel) | ALUTs | regs (total / kernel) | Hyper (kernel) | Fmax MHz | depth | fit s |
+|---|---|---|---|---|---|---|---|---|---|---|
+| `bfdot_a16_reg1` | 32 | 32× sum of two 18×18 | 0 | 1234 / 651.2 | 1285 | 1478 / 1407 | 109 | 660.1* | 1 | 584 |
+| `bfdot_a16_reg2` | 32 | 32× sum of two 18×18 | 0 | 1241 / 658.2 | 1295 | 871 / 800 | 231 | **460.0** | 2 | 581 |
+| `bfmat_b2x4a16_reg1` | 256 | 256× sum of two 18×18 | 7 | 12146 / 11121.5 | 19086 | 19782 / 18658 | 128 | **413.9** | 3 | 1054 |
+| `bfmat_b2x4a16_reg2` | 256 | 256× sum of two 18×18 | 7 | 9739 / 8715.6 | 13255 | 14109 / 12985 | 76 | **402.4** | 4 | 1053 |
+
+`*` the register-to-register paths met the 600 MHz probe, so that Fmax is a lower bound
+rather than a measured limit. Every other figure is a genuine measured limit. The worst
+register-to-register path is **inside `u_kernel` for all four points**, so none of these
+numbers is bounding the wrapper instead of the kernel; `scripts/run_calibration.py` records
+that per point rather than leaving it for a reader to notice.
+
+**The accumulation tree does not compete with the complex multiply for the DSP block's
+adder.** Every point maps to exactly 2 DSP blocks per complex multiply in `Sum of Two 18x18`
+mode — 32 blocks for a 16-antenna dot product, 256 for eight of them — which is issue #9's
+mapping scaled linearly and completely unchanged by the 37-bit adder tree hanging off it.
+That was the open question this kernel had to answer, because issue #10 found the *opposite*
+result one level down: a systolic FIR buys no DSP cascade precisely because the complex
+multiply has already consumed the block's adder. Here the tree is in fabric by construction
+and the DSPs are untouched, so **DSP count is exactly `2 × N_ANT` per dot product and scales
+exactly linearly**. That is what makes the full-scale projection below arithmetic rather than
+extrapolation.
+
+**The adder-tree pipelining answer INVERTS between the atom and the block, and that is the
+most useful thing this sweep produced.**
+
+At the dot product, `ADD_REG_EVERY = 2` is a disaster for Fmax: it saves 607 kernel registers
+(43%), saves **no ALMs at all** (+7, i.e. the adders are the same adders), and costs
+200 MHz — 660.1 down to 460.0, a 30% loss that lands it 2% above the SPEC §2 450 MHz target
+with no margin. The retimer visibly tried: 231 Hyper-Registers against 109, and still
+`Path Limit`.
+
+At the block, the same axis costs **2.8%** of Fmax (413.9 → 402.4) and saves **22% of kernel
+ALMs** (11121.5 → 8715.6) and **30% of kernel registers** (18658 → 12985). The reason is the
+next finding: at block level the critical path is not in the tree at all, so shortening the
+tree's pipeline stops mattering and only its cost remains.
+
+**Neither block point clears 450 MHz, and the limit is the WEIGHT DISTRIBUTION NETWORK, not
+the arithmetic.** `bfmat_b2x4a16_reg1`'s worst register-to-register path is
+
+```text
+u_kernel|u_weights|u_store|mem[0][25][18]
+   -> u_kernel|g_bin[0].g_beam[1].u_dot|g_mult[6].u_mult|g_reg_in.b_q.im[6]
+```
+
+— the weight store's output, through the beam-group multiplexer, into a multiplier's operand
+register — with the Fitter reporting `Insufficient Registers` rather than `Path Limit`, i.e.
+the path is **register-starved and not logic-starved**. The `reg2` point's path moved
+somewhere else again (`f_im_q.sat_pos -> u_sat_cnt|count_q[6]`, the saturation flag into the
+telemetry counter), which is also not the arithmetic. The arithmetic itself clears 660 MHz.
+
+This is exactly what `bf_matrix_wrap`'s header and `beamformer.sv` section 5 predicted would
+be worth measuring, and it was predicted because issue #10 found the analogous cone — the
+coefficient bank's `bank_sel` into a multiplier operand — on the critical path of a FIR lane.
+Same shape, one level up, and now with a number.
+
+**The structural answer, and why it is NOT made here.** A pipeline register between the
+weight bank's output and the multiplier operand would break that path. It is not free and it
+is not local:
+
+* it costs `BEAM_PAR × N_ANT × 32` flip-flops — 2048 at this slice, **8192** at the full-scale
+  16-beam configuration;
+* it moves the weight-bank swap point. Decision 4 above aligns the swap to the *issue* of the
+  first beam group precisely so the bank in use changes on the cycle the datapath first reads
+  it; inserting a register in the weight path means the beat/`sof` pair driving the bank must
+  move with it, or `a_coeff_swap_at_sof` stops describing the truth.
+
+That is a timing-closure change with a functional blast radius, and SPEC §20 has a procedure
+for exactly that kind of change — one hypothesis, the smallest defensible edit, correctness
+re-proven, then a compile. It is deliberately **not** made in this issue, on the same
+reasoning issue #11 recorded for the FFT's delay-feedback path: this issue's remit is to
+produce the measurement that says which change to make, and this is it. **The number to beat
+is 413.9 MHz, the path is named above, and the bit-exact model, the three-engine equivalence
+and the permutation relation are what will prove the change did not alter a single beam.**
+
+**The seven M20K at the block are the output elastic buffer, not the weight store.** Both dot
+points report M20K = 0 and MLAB = 0: sixteen 32-bit weights are ALM registers. The 8 × 16 × 2
+× 32-bit weight store is likewise not a memory. The seven blocks are the 280-bit output
+payload at the credit-derived depth, which is the same thing issue #10 found at `pfb8` and the
+same note applies — `stream_elastic_buffer`'s header still claims distributed registers "by
+construction", and that claim is wrong at wide payloads.
+
+**Decision 11 — `ADD_REG_EVERY = 1` is the shipped default, on measurement.** At the atom it
+is 200 MHz better for 607 registers and zero ALMs. At the block the two are within 3% of each
+other on Fmax while `reg2` is 22% cheaper — which would argue for `reg2` *if* the block's
+limit were the tree. It is not: the limit is the weight path, and fixing that (above) will
+move the block's Fmax back toward the arithmetic's, at which point the tree's own 200 MHz
+gap starts to matter again. Shipping the configuration with the headroom, and re-measuring
+the axis after the weight path is pipelined, is the order that cannot paint itself into a
+corner. The parameter stays, the sweep entry stays, and issue #20 has both numbers.
+
+### Full-scale DSP projection (SPEC §2, SPEC §18)
+
+DSP scales **exactly** linearly and is measured at both levels (32 per 16-antenna dot
+product at the atom, 256 for eight of them at the block), so this is arithmetic:
+
+| configuration | dot products | DSP blocks | % of 12 300 | sustained bins/cycle |
+|---|---|---|---|---|
+| **16 beams × 8 bins/cycle × 16 antennas, `BEAM_PAR = 16`** | 128 | **4 096** | **33.3%** | 8 |
+| 16 beams × 8 bins/cycle × 16 antennas, `BEAM_PAR = 8` (`BEAM_MUX = 2`) | 64 | 2 048 | 16.7% | 4 |
+| 16 beams × 8 bins/cycle × 16 antennas, `BEAM_PAR = 4` (`BEAM_MUX = 4`) | 32 | 1 024 | 8.3% | 2 |
+
+ALM, projected from the block point's kernel figure of 11121.5 for eight dot products
+(1390 per dot product, which already includes an amortised share of the weight store, the
+beam-group mux, the credit gate and the output buffer): **≈ 178 k ALM, ≈ 13.6% of
+1 305 600**, at `BEAM_PAR = 16`. Treat that as a **lower bound**: the weight-mux part of it
+grows with `N_BEAMS × N_ANT` and with `BEAM_PAR`, both of which double or quadruple from the
+calibrated slice, and the calibration measured 8 beams and `BEAM_PAR = 4`.
+
+**The headline for issue #20.** Against issue #10's measured polyphase projection of
+**4 096 DSP (33%)** for 16 antennas, the beamformer at full parallelism is another
+**4 096 DSP (33%)** — **8 192 of 12 300, 67%, before the FFT, the covariance engine or CFAR**.
+SPEC §2 targets 75–90% total DSP utilisation, so the budget is not comfortable and it is not
+hopeless: it is *tight*, and the beamformer is the single largest lever in it. `BEAM_PAR` is
+that lever, its effect is exactly linear, and SPEC §7.5's insistence that time multiplexing be
+visible in reported throughput is precisely so that pulling it is a recorded architectural
+choice rather than a quiet reduction. The `WEIGHT_PARALLELISM` / `WEIGHT_THROUGHPUT`
+registers exist to make the chosen point readable from a running device.
