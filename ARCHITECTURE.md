@@ -123,6 +123,7 @@ deliberately does not appear inside it.
 | `rtl/pfb/fir_lane.sv` | `TAPS`, `MULT_PIPE_STAGES`, `MULT_VARIANT`, `ACC_STYLE` (`"TREE"`/`"SYSTOLIC"`), `DELAY_STYLE` | #10 | One complex FIR lane. `TAPS` `complex_multiplier` instances at `ROUND_OUT = 0`, accumulated at `pfb_acc_w(TAPS)` bits, quantised **once** at the output. |
 | `rtl/pfb/pfb_bank.sv` | the lane parameters plus `PHASES`, the SPEC §5 metadata geometry, `TELEM_COUNT_W` | #10 | `PHASES` lanes behind one SPEC §5 stream interface, with a credit gate, the metadata alignment path, the output elastic buffer and the SPEC §9 telemetry. |
 | `rtl/control/reg_block_coeff.sv` | `IDX_W` | #10 | The software half: the 0x5000 coefficient window, the COEFF_DATA write strobe and the SWAP_REQ pulse. |
+| `rtl/control/reg_block_covar.sv` | `IDX_W` | #13 | The 0x9000 integration-settings window (SPEC §9 group "Integration settings", implemented nowhere before this issue): window length, exponential mode and shift, per-pair enable mask, pair-table programming port, the FLUSH pulse, and the accumulator-protection status coming back. |
 
 Simulation-only and synthesis-only companions:
 
@@ -232,6 +233,73 @@ must flush, and `sim/tests/test_fft.cpp` does.
 
 Issues #12–#14 populate the remaining block directories; issue #15 consumes this one and
 decides whether `REORDER` is worth its frame of latency.
+
+#### Power and covariance (`rtl/covariance/`, issue #13)
+
+SPEC §7.6: `Power = I² + Q²` per sample, a configurable cross-power
+`Rxy = X · conj(Y)` over selected antenna or beam pairs, both integrated over a
+programmable window with boundary metadata, accumulator protection, optional exponential
+averaging, per-pair runtime enable and deterministic reset/flush.
+
+```text
+                                       cfg: window_len, mode, exp_k, enable, flush
+                                                    |
+  sample ──> power_calc ──POWER_W──> integrator ────┴──> acc / window_id / count /
+             (I²+Q²)                 (Σ or IIR)              flushed / truncated / sat
+
+  src[0..N_SRC-1] ─┬─> mux(pair.x) ─> complex_multiplier ─> p_im ──> integrator ─> Rxy.re
+  (one beat)       └─> mux(pair.y) ─> (b = {re:y.im,      ─> −p_re ─> integrator ─> Rxy.im
+                          swapped)      im:y.re})
+```
+
+| Path | Parameters | Issue | Function |
+|---|---|---|---|
+| `rtl/packages/covar_pkg.sv` | none (functions + widths) | #13 | The block's widths and its window arithmetic: `COVAR_POWER_W = 40`, the per-term bound, the integration mode enum, and `covar_acc_w_required()` / `covar_window_max_exact()` — equation `N ≤ 2^(w−32) − 1` in both directions. The rounding and saturation *rules* stay in `fxp_pkg`; this package never duplicates them. Names its integer type `covar_uint_t`, per DECISIONS.md (issue #10, decision 9). |
+| `rtl/covariance/power_calc.sv` | `PIPE_STAGES` 1–3, `TAG_W` | #13 | `I² + Q²`, exact, in `[0, 2^31]`, presented in a signed `POWER_W` field. Two 16×16 squares and their sum as ONE combinational expression between two registers, so the pair maps to a single DSP in sum-of-two-multipliers mode. No saturation flag, because saturation is impossible by construction; the impossibility is asserted every cycle instead. Latency == `PIPE_STAGES`. |
+| `rtl/covariance/integrator.sv` | `DATA_W`, `ACC_W`, `WINDOW_W`, `SAT_COUNT_W` | #13 | One signed accumulator: block sum or exponential average, programmable window latched at a boundary, window-boundary metadata (`window_id`, `sample_count`, `flushed`, `truncated`), `fxp_sat` protection with an `fxp_sticky_flags` collector, and the deterministic flush. Instantiated once per power channel and twice per covariance pair. |
+| `rtl/covariance/covar_engine.sv` | `N_SRC`, `N_PAIRS`, `CMULT_VARIANT`, `CMULT_PIPE_STAGES`, `ACC_W`, `WINDOW_W`, `SEL_W` | #13 | `N_PAIRS` cross-power channels over a parallel source vector, each one `complex_multiplier` (`ROUND_OUT = 0`) plus two integrators. Per-pair runtime enable gates the accumulation, never the multiply. |
+| `rtl/control/reg_block_covar.sv` | `IDX_W` | #13 | The software half: the 0x9000 integration-settings window, the FLUSH pulse and the pair-table WRITE strobe. Checks its generated reset values against `covar_pkg` at elaboration. |
+
+Simulation-only companions:
+
+| Path | Parameters | Issue | Function |
+|---|---|---|---|
+| `sim/verilator/tops/covar_top.sv` | `N_SRC`, `N_PAIRS` (from `config_pkg`) | #13 | Verification top: `power_calc`, an integrator behind it, a bare integrator on a direct data port, a second bare integrator elaborated at `ACC_W = 34` so its exact-window bound is reached in four samples, and the engine with a pair observation mux. Source vector and pair table are written one entry at a time, which keeps every port ≤ 32 bits at every SPEC §11 size. |
+| `sim/assertions/covar_assertions.sv` | `WINDOW_W`, `ACC_W` | #13 | The SPEC §14 window-metadata property set, instantiated inside every `integrator`; see VERIFICATION_PLAN.md §5.12. |
+
+**Why `POWER_W` is 40.** It is 32 + 8, and both halves are forced. One term — a power or
+one component of a conjugate product — satisfies `|v| ≤ 2^31` and therefore needs 32 signed
+bits (the extreme `I = Q = −32768` gives exactly `2^31`). A signed *w*-bit accumulator sums
+`N` such terms without ever clamping iff `N ≤ 2^(w−32) − 1`, so 40 bits buys **255 samples
+of provably exact integration**. At 256 the bound is missed by one LSB and only by the
+single all-extreme input sequence — which is a directed test, not a hypothesis. Longer
+windows are legal, clamp rather than wrap, and set a sticky flag.
+
+**Conjugation without a negation.** `conj(Y)` cannot be formed by negating `y.im`: `−32768`
+is a legal Q1.15 value whose negation does not fit 16 bits, so the extreme corner would be
+silently wrong. The engine instead feeds the multiplier `b = {re: y.im, im: y.re}` and
+reads `Rxy.re = p_im`, `Rxy.im = −p_re`. The negation moves to the exact 33-bit product
+port, where it cannot overflow for any input, and the issue #9 kernel is used unmodified.
+
+**Input contract: parallel sources, not time-multiplexed pairs.** Everything upstream —
+the alignment network and the beamforming matrix — already produces all channels for one
+instant in the same beat, so a serialised pair stream would need a re-serialiser and would
+cap the input rate at one vector per enabled pair. At the SPEC §11 medium size the full
+upper triangle is 10 pairs = 40 DSPs against a 10× throughput gain. The trade stops being
+one-sided at full scale (136 pairs = 544 DSPs), where `MULT3` and a pruned pair list are
+the levers, and both are already parameters.
+
+**Where configuration takes effect.** The window length, mode, exponential shift and
+per-pair enable latch at a *window boundary* — a close, a flush, or an idle cycle in which
+no window is open and none is opening. The pair *selectors* latch only on reset and flush,
+because the multiplier pipeline means in-flight products would otherwise be misattributed
+across a re-pointing. Re-pointing a pair is therefore: write the table, pulse `FLUSH`.
+
+**Flow control.** No `ready` in or out and no clock enable on the datapath, matching
+`complex_multiplier` and `power_calc`. Gaps in `valid_in` are therefore invariant — the
+same beats in the same order give byte-identical results dense or sparse — and the output
+rate never exceeds the input rate, so nothing needs to back-pressure. Elasticity, when a
+consumer needs it, is a `rtl/stream/` primitive placed after the block.
 
 ### 3.6 Packet fabric (`rtl/packet/`)
 

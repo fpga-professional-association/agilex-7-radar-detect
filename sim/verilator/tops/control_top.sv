@@ -86,6 +86,8 @@ module control_top
     // pulse bits in the same register, so it is the one place where "a pulse
     // fired" and "a bit was stored" have to be separable without the read mux.
     output wire [REGMAP_COUNTERS_N_REGS*32-1:0] obs_counters_pulse,
+    output wire [REGMAP_COVAR_N_REGS*32-1:0]    obs_covar_csr,
+    output wire [REGMAP_COVAR_N_REGS*32-1:0]    obs_covar_pulse,
 
     // ---- control outputs the blocks drive ----
     output wire [31:0]                          obs_block_enable,
@@ -95,6 +97,12 @@ module control_top
     output wire                                 obs_global_enable,
     output wire                                 obs_flush_pulse,
     output wire                                 obs_soft_reset_pulse,
+
+    // ---- the covariance window's configuration outputs (issue #13) ----
+    output wire [15:0]                          obs_covar_window_len,
+    output wire [31:0]                          obs_covar_pair_enable,
+    output wire                                 obs_covar_flush_pulse,
+    output wire [23:0]                          obs_covar_pair_write,
 
     // Invariants of the blocks that have no writable or pulse bits. Both must
     // hold in every cycle of every test.
@@ -336,6 +344,66 @@ module control_top
       .csr          (obs_counters_csr),
       .pulse        (obs_counters_pulse)
   );
+
+  // The integration-settings window (issue #13). A real block rather than a bare
+  // register file, because it owns two strobes a register file cannot produce:
+  // the FLUSH pulse and the pair-table WRITE pulse.
+  //
+  // Its hardware status inputs are tied off HERE, exactly as the coefficient
+  // window's are and for the same reason: control_top is the register plane's
+  // own test bench, and wiring a live rtl/covariance/covar_engine.sv into it
+  // would make a register-plane failure and a covariance failure
+  // indistinguishable. sim/verilator/tops/covar_top.sv drives the engine's
+  // configuration ports directly in the meantime, and the live wiring arrives
+  // with the medium integration (issue #17).
+  wire        covar_cfg_enable_unused, covar_cfg_mode_unused;
+  wire [3:0]  covar_cfg_exp_k_unused;
+  wire        covar_sat_clear_unused;
+  wire        covar_pt_wr_valid;
+  wire [7:0]  covar_pt_wr_index, covar_pt_wr_x, covar_pt_wr_y;
+
+  reg_block_covar #(
+      .IDX_W (IDX_W)
+  ) u_covar (
+      .clk             (clk),
+      .rst_n           (rst_n),
+      .sel             (blk_sel[REGMAP_COVAR_INDEX]),
+      .write_enable    (blk_write_enable),
+      .read_enable     (blk_read_enable),
+      .index           (blk_index),
+      .write_data      (blk_write_data),
+      .byte_enable     (blk_byte_enable),
+      .read_data       (blk_read_data[REGMAP_COVAR_INDEX*REG_DATA_W +: REG_DATA_W]),
+      .ready           (blk_ready[REGMAP_COVAR_INDEX]),
+      .error           (blk_error[REGMAP_COVAR_INDEX]),
+      .cfg_enable      (covar_cfg_enable_unused),
+      .cfg_mode        (covar_cfg_mode_unused),
+      .cfg_exp_k       (covar_cfg_exp_k_unused),
+      .cfg_window_len  (obs_covar_window_len),
+      .cfg_pair_enable (obs_covar_pair_enable),
+      .cfg_flush       (obs_covar_flush_pulse),
+      .cfg_sat_clear   (covar_sat_clear_unused),
+      .pt_wr_valid     (covar_pt_wr_valid),
+      .pt_wr_index     (covar_pt_wr_index),
+      .pt_wr_x         (covar_pt_wr_x),
+      .pt_wr_y         (covar_pt_wr_y),
+      .hw_window_id    (16'd0),
+      .hw_n_pairs      (8'd0),
+      .hw_acc_w        (8'd0),
+      .hw_sat_power    (1'b0),
+      .hw_sat_cross    (1'b0),
+      .hw_truncated    (1'b0),
+      .hw_sat_count    (32'd0),
+      .csr             (obs_covar_csr),
+      .pulse           (obs_covar_pulse)
+  );
+
+  // The pair-table strobe, exported as one word so a test can see that a
+  // COVAR_PAIR_TABLE write with WRITE set produced exactly one request carrying
+  // the fields that were in the register.
+  assign obs_covar_pair_write = covar_pt_wr_valid
+                                  ? {covar_pt_wr_y, covar_pt_wr_x, covar_pt_wr_index}
+                                  : 24'd0;
 
   // Invariants of the blocks with no writable and no pulse bits.
   assign obs_build_storage_zero = ~(|build_csr);

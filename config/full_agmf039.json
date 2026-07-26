@@ -16,7 +16,8 @@
     "PFB_TAPS",
     "N_BEAMS",
     "HISTORY_FRAMES",
-    "PACKET_W"
+    "PACKET_W",
+    "N_COVAR_PAIRS"
   ],
   "invariant_params": [
     "SAMPLE_W",
@@ -32,6 +33,7 @@
     "N_BEAMS": 16,
     "HISTORY_FRAMES": 512,
     "PACKET_W": 512,
+    "N_COVAR_PAIRS": 16,
     "SAMPLE_W": 16,
     "COEFF_W": 16,
     "POWER_W": 40,

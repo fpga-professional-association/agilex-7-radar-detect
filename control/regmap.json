@@ -45,7 +45,7 @@
   ],
   "regmap_version": {
     "major": 1,
-    "minor": 2,
+    "minor": 3,
     "patch": 0,
     "description": "Bump on any change to this file. major: incompatible layout change; minor: registers or fields added; patch: documentation only."
   },
@@ -549,6 +549,83 @@
       "spec_groups": ["Snapshot and debug control"],
       "description": "PLANNED. Snapshot capture, trigger configuration and debug readback.",
       "registers": []
+    },
+    {
+      "name": "covar",
+      "base": "0x9000",
+      "size": "0x1000",
+      "implemented": true,
+      "spec_groups": ["Integration settings"],
+      "description": "Integration settings for the SPEC 7.6 power and covariance engine (rtl/covariance/, issue #13): the programmable window length, the exponential-averaging mode and its shift, the per-pair enable mask, the pair table, the deterministic flush, and the accumulator-protection status. Everything writable here is latched by rtl/covariance/integrator.sv at a window boundary and never mid-window, so a write can lengthen or shorten the NEXT window but can never change the interval a result already covers. Software that needs a change to take effect at once writes the register and then pulses COVAR_CTRL.FLUSH, which drains the open window with its truncated marker and restarts the block from its post-reset state.",
+      "registers": [
+        {
+          "name": "COVAR_CTRL",
+          "offset": "0x000",
+          "description": "Master controls. FLUSH and SAT_CLEAR are write-1-pulse and read back zero, because they are events rather than modes.",
+          "fields": [
+            {"name": "ENABLE",    "lsb": 0, "width": 1, "access": "RW",  "reset": "0x1", "description": "Global accumulate enable. Cleared, the integrators admit no samples and emit nothing. Latched at a window boundary, so clearing it mid-window lets that window finish rather than truncating it."},
+            {"name": "EXP_MODE",  "lsb": 1, "width": 1, "access": "RW",  "reset": "0x0", "description": "0: block integration, acc += x over COVAR_WINDOW.LENGTH samples, cleared at each boundary. 1: exponential averaging, y += (x - y) >> EXP_K per sample, reported every COVAR_WINDOW.LENGTH samples and NOT cleared at the boundary. rtl/covariance/integrator.sv section 4 states the exact fixed-point behaviour."},
+            {"name": "EXP_K",     "lsb": 4, "width": 4, "access": "RW",  "reset": "0x3", "description": "Exponential-averaging shift k, 0..15. k = 0 is a pass-through. The update truncates toward -infinity, so a constant target is approached from below and the filter settles inside (x - 2^k, x]."},
+            {"name": "FLUSH",     "lsb": 8, "width": 1, "access": "RWP", "description": "Drain every open window, mark each result flushed (and truncated when short), then restart the block in its post-reset state: zero accumulators, zero sample counts, window_id back to zero, sticky saturation cleared, and the pair table reloaded from COVAR_PAIR_TABLE."},
+            {"name": "SAT_CLEAR", "lsb": 9, "width": 1, "access": "RWP", "description": "Clear the sticky saturation flags and the saturation-event counter without disturbing any window."}
+          ]
+        },
+        {
+          "name": "COVAR_WINDOW",
+          "offset": "0x004",
+          "description": "Programmable integration window (SPEC 7.6).",
+          "fields": [
+            {"name": "LENGTH", "lsb": 0, "width": 16, "access": "RW", "reset": "0x0010", "description": "Samples per integration window. Zero is treated as one, so a zero-initialised register plane cannot make the window infinite - which would be indistinguishable from a hang. A signed POWER_W = 40 accumulator integrates terms bounded by 2^31 exactly for LENGTH <= 255 (rtl/packages/covar_pkg.sv section 1); longer windows are legal and may clamp, which COVAR_SAT_STATUS reports."}
+          ]
+        },
+        {
+          "name": "COVAR_PAIR_ENABLE",
+          "offset": "0x008",
+          "description": "Runtime enable, one bit per covariance pair (SPEC 7.6, 'runtime enable per covariance pair').",
+          "fields": [
+            {"name": "MASK", "lsb": 0, "width": 32, "access": "RW", "reset": "0x00000001", "description": "Bit p enables pair p. Latched by that pair's accumulators at a window boundary, so a pair disabled mid-window completes the window it is in and a pair enabled mid-window starts at the next one with a full-length window. A disabled pair accumulates nothing and emits nothing; its multiplier still free-runs, because a clock enable on a DSP register is what stops the tool using the block's own pipeline registers."}
+          ]
+        },
+        {
+          "name": "COVAR_PAIR_TABLE",
+          "offset": "0x00C",
+          "description": "Pair table programming port. One entry per write: set INDEX, X_SEL and Y_SEL, then pulse WRITE. The table takes effect at the next COVAR_CTRL.FLUSH rather than at a window boundary; rtl/covariance/covar_engine.sv section 4 explains why a multiplier pipeline deeper than one cycle cannot re-point a pair cleanly at a window edge.",
+          "fields": [
+            {"name": "INDEX", "lsb": 0,  "width": 8, "access": "RW",  "reset": "0x00", "description": "Pair index to program."},
+            {"name": "X_SEL", "lsb": 8,  "width": 8, "access": "RW",  "reset": "0x00", "description": "Source index for X. An index beyond the elaborated source count reads source 0; out of range is defined rather than undefined, because a register plane can be programmed with anything."},
+            {"name": "Y_SEL", "lsb": 16, "width": 8, "access": "RW",  "reset": "0x00", "description": "Source index for Y, the conjugated operand."},
+            {"name": "WRITE", "lsb": 24, "width": 1, "access": "RWP", "description": "Write the entry named by INDEX. One-cycle pulse; reads back zero."}
+          ]
+        },
+        {
+          "name": "COVAR_STATUS",
+          "offset": "0x010",
+          "description": "Hardware-driven status. The geometry fields let software size its own buffers without compiled-in constants, exactly as the build-parameter block does for the rest of the design.",
+          "fields": [
+            {"name": "WINDOW_ID", "lsb": 0,  "width": 16, "access": "ROHW", "description": "Window id of the most recent result, wrapping at 2^16. Increments by exactly one per emitted window, so a consumer detects a dropped one."},
+            {"name": "N_PAIRS",   "lsb": 16, "width": 8,  "access": "ROHW", "description": "Elaborated covariance pair count."},
+            {"name": "ACC_W",     "lsb": 24, "width": 8,  "access": "ROHW", "description": "Elaborated accumulator width in bits (SPEC 3 POWER_W)."}
+          ]
+        },
+        {
+          "name": "COVAR_SAT_STATUS",
+          "offset": "0x014",
+          "description": "Accumulator protection (SPEC 7.6 'accumulator protection', SPEC 6 overflow flags). Sticky, write 1 to clear; also cleared by COVAR_CTRL.SAT_CLEAR and by COVAR_CTRL.FLUSH.",
+          "fields": [
+            {"name": "POWER",     "lsb": 0, "width": 1, "access": "W1C", "description": "The power accumulator clamped at least once since the last clear."},
+            {"name": "CROSS",     "lsb": 1, "width": 1, "access": "W1C", "description": "A cross-power accumulator clamped at least once since the last clear."},
+            {"name": "TRUNCATED", "lsb": 2, "width": 1, "access": "W1C", "description": "At least one window was emitted short of its programmed length. Set only by a flush, because a flush is the only thing that can shorten a window."}
+          ]
+        },
+        {
+          "name": "COVAR_SAT_COUNT",
+          "offset": "0x018",
+          "description": "Count of saturation events, highest across the block's accumulators. Saturates at all-ones rather than wrapping: a wrapped counter can read zero on a permanently clamping datapath, which is the one reading that must never be produced.",
+          "fields": [
+            {"name": "VALUE", "lsb": 0, "width": 32, "access": "ROHW", "description": "Saturation-event count."}
+          ]
+        }
+      ]
     }
   ]
 }

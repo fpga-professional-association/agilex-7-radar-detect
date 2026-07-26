@@ -233,6 +233,60 @@ RESULT: FAIL seed=1 test=test_pfb_bank rtl_vs_model=22028 rtl_vs_vector=1494 ...
 with the first failure on the very first directed set. The injection was reverted; the
 transcript is in the issue #10 pull request.
 
+#### `test_covariance` — power and covariance engine (SPEC §7.6, issue #13)
+
+`covar_top` holds `power_calc`, three integrators and the `N_PAIRS` cross-power engine in
+one elaboration; `sim/tests/test_covariance.cpp` drives all of them from one cycle engine
+and compares **every observable against `model/cpp/covariance/covar_model.hpp` on every
+cycle**. The model is cycle-accurate — one `step()` per clock edge — so an accumulator that
+is right at the end of a window but wrong in the middle, or a window that closes one cycle
+early, fails immediately rather than by luck. Results are matched through a pending queue,
+so a result the RTL emits that the model did not expect, and one the model expected that the
+RTL did not emit, are both named failures.
+
+| Pass | What it drives | What would have to be wrong for it to pass anyway |
+|---|---|---|
+| 1 geometry | the RTL's `cfg_*` echo against the C++ mirror, and `covar_window_max_exact` / `acc_w_required` against each other at the bound and one past it | nothing — the run stops here if they disagree, so no later comparison can be silently wrong |
+| 2 power corners | `(−32768,−32768)` — the `2^31` extreme — zero, ±1 on each component, ±full scale, mixed signs | the squaring, the sign extension into the `POWER_W` field and the closed-form `2^31` claim would all have to be wrong together |
+| 3 power integrated | random samples through `power_calc` **and** the integrator behind it | the seam between a `POWER_W` power and a `POWER_W` accumulator is only exercised here; testing the two separately cannot reach it |
+| 4 windows | lengths 1, 2, 3, 5, 8, 1, 16, 4, each with a flush between, plus a length written mid-window | a window that closed at the wrong count, an id that skipped, or a short result that was not marked |
+| 5 saturation | the narrow (`ACC_W = 34`) integrator past its 3-sample bound in **both** directions, then 256 extreme terms at `POWER_W = 40` (must clamp to `2^39−1`) and 255 (must sum exactly) | the documented bound `N ≤ 2^(w−32) − 1` would have to be wrong in the same direction as the RTL |
+| 6 exponential | every `k` in 0..15 bit-exact; convergence asserted for `k ≤ 6`, where the recursion provably settles inside the test's cycle budget | the dead band `y ∈ (x − 2^k, x]` is checked in both directions and `k = 0` must be an exact pass-through |
+| 7 cross directed | `X = Y` on every corner: `Rxx.re` must equal the power and `Rxx.im` must be **exactly** zero; orthogonal operands must give a zero real part | a conjugate implemented by negating `y.im` fails here at `y.im = −32768`, which is the corner the list exists for |
+| 8 cross random | 400 random source vectors dense, then again under bursty gaps, with the two result streams required to be identical | backpressure invariance — any free-running counter anywhere in the block breaks it |
+| 9 pair enable | the mask flipped twice, mid-window both times | a disabled pair that kept accumulating, or an enable change that manufactured a partial window |
+| 10 flush determinism | the same stimulus from reset and again after a flush that followed 47 saturating samples | a flush that preserved the window id, the accumulator or the sticky flags would produce a different stream |
+
+The model itself carries two independently written cross-power paths — the direct
+definition and the operand-swap wiring the RTL builds — and the test requires them to agree
+on every directed operand before either is used as an oracle, the same discipline
+`model/cpp/fxp/cmult.hpp` applies to MULT3 against MULT4.
+
+A coverage audit closes the run: it fails if the run never observed **both** saturation
+directions, if the random cross-power pass produced no windows, or if the flush pass had
+nothing to compare. A saturation test that never saturated proves nothing.
+
+**Fault injection.** The oracle was proved to bite by dropping the conjugate — reverting
+`covar_engine`'s operand swap to `b = {re: y.re, im: y.im}`, a two-token change — and
+re-running seed 1:
+
+```text
+ERROR [cross] @0 ps: pair 0 Rxy.re: RTL acc=0 id=1 n=1 vs model acc=1 id=1 n=1
+ERROR [cross] @0 ps: pair 0 Rxy.im: RTL acc=-1 id=1 n=1 vs model acc=0 id=1 n=1
+ERROR [cross] @0 ps: pair 1 Rxy.re: RTL acc=0 id=1 n=1 vs model acc=1 id=1 n=1
+...
+```
+
+on the first emitted window of every pair. The injection was reverted and the suite re-run
+green; the transcript is in the issue #13 pull request.
+
+**A defect this suite found in its own RTL.** `a_covar_truncated_implies_flushed` fired
+during bring-up on a window that overshot its own length. The cause was the configuration
+boundary: a length written in the same cycle as a window's *first* sample was latching while
+that sample was already being counted, so the window ran to a length that was never in force
+when it opened. The fix is the `!accept` term in `integrator.sv`'s `boundary`; the assertion
+is what turned a rare, stimulus-dependent wrong answer into an immediate named failure.
+
 ### 4.2 Metamorphic tests (SPEC §13.2)
 
 TODO — populated by issues #10–#14.
@@ -629,6 +683,28 @@ An unprovoked run is a failure:
 
 This is the same expected-failure mechanism §5.2 and §5.6 use for the stream and CDC
 checkers.
+
+### 5.12 Integration-window assertion set (SPEC §14, issue #13)
+
+`sim/assertions/covar_assertions.sv` is instantiated by `rtl/covariance/integrator.sv`
+under `` `ifndef SYNTHESIS`` — not bound from a test — so the window contract holds
+wherever an integrator is used, in the fast build, in every test, with no test-side wiring.
+There is one instance per power channel and **two per covariance pair**, so a tiny build
+already carries seven of them.
+
+| Assertion | Fires on |
+|---|---|
+| `a_covar_count_nonzero` | a result covering zero samples — it would carry no information and still consume a window id, so a consumer counting ids would see a gap it could not explain |
+| `a_covar_count_in_range` | a result covering more samples than the window that was actually running |
+| `a_covar_short_window_is_marked` | SPEC §7.6's "never emit a partial window silently": a short result without `truncated` |
+| `a_covar_full_window_is_not_marked` | the converse — a full-length result claiming to be truncated |
+| `a_covar_truncated_implies_flushed` | a window shortened by anything other than a flush. **This one fired during bring-up and found a real defect** (§4.1) |
+| `a_covar_wid_increments` | a window id that did not advance by exactly one between consecutive normal results |
+| `a_covar_wid_restarts_after_flush` | the first result after a flush carrying a non-zero id. A flush that drains nothing still restarts the id, which is why the checker registers the raw `flush` request rather than watching `flushed` alone |
+| `a_covar_no_result_while_disabled` | a disabled integrator producing anything but the flush that drains what it accumulated while enabled |
+| `a_covar_halves_in_step` | `covar_engine` (inline) — a pair's real and imaginary accumulators disagreeing about when a window closes, which would otherwise surface as a silently mismatched complex result |
+| `a_power_range` | `power_calc` (inline) — a power outside `[0, 2^31]`, i.e. the "saturation is impossible by construction" claim, checked every cycle instead of argued |
+| `a_power_matches_pkg` | `power_calc` (inline) — the squaring against `fxp_pkg::fxp_mul_q15` on a shadow copy of the operands delayed to the same stage |
 
 ## 6. Coverage strategy
 
