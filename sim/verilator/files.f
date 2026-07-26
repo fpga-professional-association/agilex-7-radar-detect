@@ -50,6 +50,12 @@ rtl/packages/covar_pkg.sv
 // covar_pkg above by reference, so it must follow it.
 rtl/packages/cfar_pkg.sv
 
+// SPEC 7.3: the time-frequency history package (issue #15). The bank geometry,
+// the frame-pointer and epoch widths, the request/response field layout and the
+// readable-set rule, in one place so the banks, the corner-turn core, the
+// register block and the C++ model cannot disagree.
+rtl/packages/history_pkg.sv
+
 // ---- protocol assertions (SPEC 14) -------------------------------------
 // Simulation-only. Instantiated inside every stream primitive under
 // `ifndef SYNTHESIS`, so the protocol is checked everywhere the primitives are
@@ -88,6 +94,20 @@ sim/assertions/cfar_assertions.sv
 // coeff_bank_checker above, because rtl/beamformer/weight_bank.sv reuses the
 // store issue #10 built rather than reimplementing it.
 sim/assertions/beamformer_assertions.sv
+
+// And again for the banked history (issue #15): rtl/memory/history_core.sv
+// instantiates its checker under `ifndef SYNTHESIS`, so the SPEC 7.3 rules are
+// checked wherever the block is used — including in the Quartus calibration
+// wrapper no testbench ever drives. The two SPEC 7.3 PROHIBITIONS are the
+// reason it exists: a_history_no_safe_collision is the claim that the readable
+// set excludes the in-flight write slot by construction (the assertion that
+// licenses no_rw_check on every M20K in the subsystem), and
+// a_history_lane_onehot0 plus c_history_write_enables_differ are the ban on a
+// single globally broadcast address and enable network turned into observable
+// consequences a broadcast design could not produce. Must precede rtl/memory/
+// below.
+sim/assertions/history_wr_assertions.sv
+sim/assertions/history_rd_assertions.sv
 
 // ---- stream primitives (SPEC 5) ----------------------------------------
 rtl/stream/stream_skid_buffer.sv
@@ -210,6 +230,31 @@ rtl/covariance/covar_engine.sv
 // verifies it.
 rtl/cfar/cfar_window.sv
 rtl/cfar/cfar_core.sv
+
+// ---- the banked time-frequency history (SPEC 7.3, issue #15) -----------
+// Design RTL, listed here for the reason the FFT is: this list is the single
+// definition of what "the design" is. history_bank first; history_core is built
+// out of it, out of rtl/cdc/cdc_handshake.sv and rtl/cdc/cdc_pulse.sv, out of
+// rtl/common/sync_fifo.sv and rtl/common/perf_counter.sv, and out of
+// the two sim/assertions/history_*_assertions.sv checkers — all already listed
+// above, which is why
+// this section comes last among the design blocks. Not yet instantiated by
+// benchmark_sim_top — the pipeline that consumes it arrives with issue #17 — so
+// until then `make lint` covers it here and sim/verilator/tops/history_top.sv
+// verifies it.
+//
+// This is the first block in files.f that carries a clock-domain seam of its
+// own: the write plane runs in core_clk and the corner-turn read path in
+// history_clk. Nothing in this list drives that second clock yet — benchmark_
+// sim_top is still single-clock — so the crossing is proved by
+// `make cdc-inventory`, which runs --strict over files_history.f, and by
+// test_history's clock-ratio sweep, not by anything elaborated here.
+//
+// The quartus/calibration/history_*_wrap.sv wrappers are deliberately NOT here:
+// they are SPEC 18 calibration harnesses, not design RTL, and files_history.f
+// already lints them.
+rtl/memory/history_bank.sv
+rtl/memory/history_core.sv
 
 // ---- simulation top (SPEC 4.1) -----------------------------------------
 sim/verilator/tops/benchmark_sim_top.sv

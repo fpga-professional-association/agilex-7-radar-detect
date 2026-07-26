@@ -45,7 +45,7 @@
   ],
   "regmap_version": {
     "major": 1,
-    "minor": 5,
+    "minor": 6,
     "patch": 0,
     "description": "Bump on any change to this file. major: incompatible layout change; minor: registers or fields added; patch: documentation only."
   },
@@ -775,6 +775,134 @@
           "description": "Count of saturation events, highest across the block's accumulators. Saturates at all-ones rather than wrapping: a wrapped counter can read zero on a permanently clamping datapath, which is the one reading that must never be produced.",
           "fields": [
             {"name": "VALUE", "lsb": 0, "width": 32, "access": "ROHW", "description": "Saturation-event count."}
+          ]
+        }
+      ]
+    },
+    {
+      "name": "history",
+      "base": "0xA000",
+      "size": "0x1000",
+      "implemented": true,
+      "spec_groups": ["Active bank selection", "Frame counts"],
+      "description": "The SPEC 7.3 time-frequency history and corner turn (rtl/memory/, issue #15). Two SPEC 9 groups land here and both are literal: 'Active bank selection' is the rotating frame-bank pointer and its programmable depth, and 'Frame counts' is the completed-frame counter that decides what a beamformer read is allowed to ask for. The window claims no group of its own because SPEC 9's list has none for a memory, and inventing one would make scripts/gen_regmap.py's copy of that list stop being a copy. CLOCK DOMAIN: every register here is in core_clk, the WRITE side of the subsystem, because that is where the frame sequencers and the rotation policy live. The three read-side counters (HISTORY_READS, HISTORY_COLLISION, HISTORY_ERROR) are produced in history_clk and cross back through one cdc_handshake carrying all three at once, so they are always a consistent snapshot of each other and are at most one crossing stale; a reader that needs them settled should quiesce the traffic first. DEPTH CHANGES DISCARD THE HISTORY: writing HISTORY_DEPTH and pulsing HISTORY_CTRL.DEPTH_APPLY remaps every frame slot, so the block waits for a frame boundary on every antenna and then restarts empty. HISTORY_STATUS.DEPTH_PENDING reports the wait and HISTORY_STATUS.EPOCH counts the applies, so software can tell 'no frames yet' from 'frames from before a reconfiguration'.",
+      "registers": [
+        {
+          "name": "HISTORY_CTRL",
+          "offset": "0x000",
+          "description": "Master controls. The three pulse fields are events rather than modes and read back zero.",
+          "fields": [
+            {"name": "ENABLE",        "lsb": 0,  "width": 1, "access": "RW",  "reset": "0x1", "description": "Global enable. Cleared, the block refuses write beats (s_ready goes low on every antenna) and advances nothing. Read requests are still answered from whatever is stored."},
+            {"name": "FORCE_UNSAFE",  "lsb": 1,  "width": 1, "access": "RW",  "reset": "0x0", "description": "SPEC 9 fault injection. Normally an out-of-range frame offset is CLAMPED to the newest readable frame, which makes HISTORY_COLLISION unreachable by construction. Setting this removes the clamp, so an out-of-range request reaches the slot being written and the collision counter increments. It exists because a counter that cannot be made to fire is a counter nobody has tested; it is not a mode for production use, and rtl/memory/history_core.sv section 4 says why."},
+            {"name": "DEPTH_APPLY",   "lsb": 8,  "width": 1, "access": "RWP", "description": "Arm the value in HISTORY_DEPTH. The change lands at the next instant at which no antenna is mid-frame, and discards the stored history when it does."},
+            {"name": "COUNTER_CLEAR", "lsb": 9,  "width": 1, "access": "RWP", "description": "Zero every counter in this window, on both sides of the clock-domain crossing. The read-side counters are cleared through a toggle synchroniser, so they reach zero a few cycles after the write-side ones do."},
+            {"name": "STATUS_CLEAR",  "lsb": 10, "width": 1, "access": "RWP", "description": "Clear the block's own sticky fault state. HISTORY_FAULT's bits are W1C on top of that, so clearing a bit the block still holds set has no lasting effect until this pulse is issued as well."}
+          ]
+        },
+        {
+          "name": "HISTORY_DEPTH",
+          "offset": "0x004",
+          "description": "Requested history depth, in frames. Takes effect on HISTORY_CTRL.DEPTH_APPLY, never before.",
+          "fields": [
+            {"name": "DEPTH", "lsb": 0, "width": 10, "access": "RW", "reset": "0x000", "description": "Frames of history to retain, 1..FRAMES_MAX. Zero is clamped to one and anything above the elaborated maximum is clamped to it, so a zero-initialised register plane cannot request an illegal geometry. NOTE that the depth after reset is the ELABORATED MAXIMUM and not this field's reset value: nothing is applied until DEPTH_APPLY is pulsed, and HISTORY_STATUS.DEPTH_ACTIVE reports what is actually in force. A depth of 1 or 2 leaves nothing readable, because the readable set is two slots short of the depth - one for the frame being written, one to absorb a frame of publication lag across the clock crossing. That is legal, and it is reported through HISTORY_STATUS.OCCUPANCY."}
+          ]
+        },
+        {
+          "name": "HISTORY_STATUS",
+          "offset": "0x008",
+          "description": "Live state of the rotation. Every field is hardware-driven.",
+          "fields": [
+            {"name": "DEPTH_ACTIVE",  "lsb": 0,  "width": 10, "access": "ROHW", "description": "Depth currently in force. Equals the elaborated maximum until the first DEPTH_APPLY."},
+            {"name": "OCCUPANCY",     "lsb": 10, "width": 10, "access": "ROHW", "description": "Complete frames currently held: min(frames completed, DEPTH_ACTIVE). A frame counts as complete only when EVERY antenna has finished writing it, so this never claims a frame a beamformer read could not assemble."},
+            {"name": "EPOCH",         "lsb": 20, "width": 8,  "access": "ROHW", "description": "Increments on every applied depth change. Modulo 256; software compares it against the value it last saw rather than reading an absolute count."},
+            {"name": "DEPTH_PENDING", "lsb": 28, "width": 1,  "access": "ROHW", "description": "A depth change is armed and waiting for a frame boundary."}
+          ]
+        },
+        {
+          "name": "HISTORY_GEOMETRY",
+          "offset": "0x00C",
+          "description": "Elaborated geometry, part one. Reported by hardware so a consumer can size its own requests without a build-time header, which is the argument CFAR_STATUS makes for its own geometry fields.",
+          "fields": [
+            {"name": "N_ANT",        "lsb": 0,  "width": 8,  "access": "ROHW", "description": "Antennas, and therefore samples in one read response."},
+            {"name": "LANES",        "lsb": 8,  "width": 8,  "access": "ROHW", "description": "Complex samples per write beat (SPEC 11 SAMPLES_PER_CYCLE). Also the number of independently addressed banks per antenna."},
+            {"name": "FRAMES_MAX",   "lsb": 16, "width": 10, "access": "ROHW", "description": "Elaborated maximum history depth, the upper clamp on HISTORY_DEPTH.DEPTH."},
+            {"name": "BIT_REVERSED", "lsb": 26, "width": 1,  "access": "ROHW", "description": "1 when the block absorbs the FFT's bit-reversed beat order in its read addressing, i.e. when rtl/fft/streaming_fft.sv upstream runs with REORDER = 0. Costs nothing here and saves the FFT its whole reorder buffer; rtl/packages/history_pkg.sv section 3 has the measured numbers."}
+          ]
+        },
+        {
+          "name": "HISTORY_GEOMETRY2",
+          "offset": "0x010",
+          "description": "Elaborated geometry, part two.",
+          "fields": [
+            {"name": "FFT_SIZE", "lsb": 0,  "width": 16, "access": "ROHW", "description": "Frequency bins per frame. A read request's bin index is valid over 0..FFT_SIZE-1; anything else is answered with HISTORY_ERROR advanced and the out-of-range flag set in the response metadata."},
+            {"name": "N_BANKS",  "lsb": 16, "width": 16, "access": "ROHW", "description": "Independently addressed memory banks, N_ANT * LANES. Reported because it is the number the SPEC 18 M20K projection is built from."}
+          ]
+        },
+        {
+          "name": "HISTORY_FRAMES_DONE",
+          "offset": "0x014",
+          "description": "Frames completed on every antenna since reset or the last applied depth change. This is the origin the relative frame offset in a read request counts back from.",
+          "fields": [
+            {"name": "VALUE", "lsb": 0, "width": 32, "access": "ROHW", "description": "Modulo 2^32. At the SPEC 8 history_clk and the SPEC 11 full-scale frame length this does not wrap inside any run this project makes."}
+          ]
+        },
+        {
+          "name": "HISTORY_OVERWRITE",
+          "offset": "0x018",
+          "description": "Frames EVICTED by the rotation: max(frames completed - DEPTH_ACTIVE, 0). The honest measure of how much history a consumer lost, and exact at every instant.",
+          "fields": [
+            {"name": "COUNT", "lsb": 0, "width": 32, "access": "ROHW", "description": "Saturating 32-bit counter. Cleared by HISTORY_CTRL.COUNTER_CLEAR; saturates rather than wraps, because a telemetry counter that wraps reports a small number for a large problem."}
+          ]
+        },
+        {
+          "name": "HISTORY_COLLISION",
+          "offset": "0x01C",
+          "description": "Read responses whose addressed frame slot was the slot being written. ZERO IN CORRECT OPERATION: the readable set excludes the in-flight slot by construction, which makes this a defect detector rather than a statistic. HISTORY_CTRL.FORCE_UNSAFE is what makes it reachable, and therefore testable.",
+          "fields": [
+            {"name": "COUNT", "lsb": 0, "width": 32, "access": "ROHW", "description": "Saturating 32-bit counter. Cleared by HISTORY_CTRL.COUNTER_CLEAR; saturates rather than wraps, because a telemetry counter that wraps reports a small number for a large problem. Produced in history_clk and crossed back to core_clk with the other two read-side counters as one consistent bundle, so the three can never be read from different snapshots of each other."}
+          ]
+        },
+        {
+          "name": "HISTORY_ERROR",
+          "offset": "0x020",
+          "description": "Read requests whose bin or frame offset was outside the legal set. The request is still ANSWERED, deterministically and clamped, with the out-of-range flag set in the response metadata: dropping it would break the one-response-per-request invariant the consumer's pipeline is built on, and would turn a software mistake into a hang.",
+          "fields": [
+            {"name": "COUNT", "lsb": 0, "width": 32, "access": "ROHW", "description": "Saturating 32-bit counter. Cleared by HISTORY_CTRL.COUNTER_CLEAR; saturates rather than wraps, because a telemetry counter that wraps reports a small number for a large problem. Produced in history_clk and crossed back to core_clk with the other two read-side counters as one consistent bundle, so the three can never be read from different snapshots of each other."}
+          ]
+        },
+        {
+          "name": "HISTORY_READS",
+          "offset": "0x024",
+          "description": "Read responses produced.",
+          "fields": [
+            {"name": "COUNT", "lsb": 0, "width": 32, "access": "ROHW", "description": "Saturating 32-bit counter. Cleared by HISTORY_CTRL.COUNTER_CLEAR; saturates rather than wraps, because a telemetry counter that wraps reports a small number for a large problem. Produced in history_clk and crossed back to core_clk with the other two read-side counters as one consistent bundle, so the three can never be read from different snapshots of each other."}
+          ]
+        },
+        {
+          "name": "HISTORY_WRITE_BEATS",
+          "offset": "0x028",
+          "description": "Write beats accepted, summed over every antenna. One beat carries LANES complex samples of one antenna's frame.",
+          "fields": [
+            {"name": "COUNT", "lsb": 0, "width": 32, "access": "ROHW", "description": "Saturating 32-bit counter. Cleared by HISTORY_CTRL.COUNTER_CLEAR; saturates rather than wraps, because a telemetry counter that wraps reports a small number for a large problem."}
+          ]
+        },
+        {
+          "name": "HISTORY_SKEW",
+          "offset": "0x02C",
+          "description": "Occasions on which an antenna ran a whole DEPTH_ACTIVE frames ahead of the slowest one, and was therefore about to overwrite a slot the frame barrier still considered live. Counted on the RISING EDGE of the condition, not while it holds: skew is an episode and not a duration, and a level count would report a number that depends on how long the condition happened to last.",
+          "fields": [
+            {"name": "COUNT", "lsb": 0, "width": 32, "access": "ROHW", "description": "Saturating 32-bit counter. Cleared by HISTORY_CTRL.COUNTER_CLEAR; saturates rather than wraps, because a telemetry counter that wraps reports a small number for a large problem."}
+          ]
+        },
+        {
+          "name": "HISTORY_FAULT",
+          "offset": "0x030",
+          "description": "Sticky fault bits, write 1 to clear. The block holds its own copy, so clearing a bit here while the block still holds it set has no lasting effect until HISTORY_CTRL.STATUS_CLEAR is pulsed. Same arrangement, and same reason, as CFAR_FAULT.",
+          "fields": [
+            {"name": "ERROR_SEEN",     "lsb": 0, "width": 1, "access": "W1C", "description": "At least one read request was out of range."},
+            {"name": "COLLISION_SEEN", "lsb": 1, "width": 1, "access": "W1C", "description": "At least one response addressed the slot being written. Unreachable outside fault injection."},
+            {"name": "SKEW_SEEN",      "lsb": 2, "width": 1, "access": "W1C", "description": "At least one antenna ran a full depth ahead of the frame barrier."},
+            {"name": "FRAMING_SEEN",   "lsb": 3, "width": 1, "access": "W1C", "description": "At least one write beat carried a start- or end-of-frame flag at the wrong beat index. A frame one beat short shifts every subsequent bin of that antenna for the rest of the run, and nothing downstream can tell a short frame from a correct one, because both are just words in a bank."}
           ]
         }
       ]

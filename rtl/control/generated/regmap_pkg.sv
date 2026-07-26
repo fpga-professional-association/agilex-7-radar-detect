@@ -21,15 +21,15 @@ package regmap_pkg;
   localparam int unsigned REGMAP_STRB_W = 4;
   localparam int unsigned REGMAP_WINDOW_BYTES = 4096;
   localparam int unsigned REGMAP_WINDOW_W = 12;
-  localparam int unsigned REGMAP_N_BLOCKS = 10;
-  localparam int unsigned REGMAP_N_BLOCKS_IMPL = 9;
-  localparam int unsigned REGMAP_N_REGS_TOTAL = 75;
-  localparam logic [31:0] REGMAP_BLOCK_MASK = 32'h000002FF;
+  localparam int unsigned REGMAP_N_BLOCKS = 11;
+  localparam int unsigned REGMAP_N_BLOCKS_IMPL = 10;
+  localparam int unsigned REGMAP_N_REGS_TOTAL = 88;
+  localparam logic [31:0] REGMAP_BLOCK_MASK = 32'h000006FF;
 
   // ---- implemented block windows, in fabric port order ----
   // The fabric decodes one master port onto these windows; index i here is index i
   // on every per-block port array of rtl/control/reg_fabric.sv.
-  localparam logic [REGMAP_N_BLOCKS_IMPL*REGMAP_ADDR_W-1:0] REGMAP_IMPL_BASE = {16'h9000, 16'h7000, 16'h6000, 16'h5000, 16'h4000, 16'h3000, 16'h2000, 16'h1000, 16'h0000};
+  localparam logic [REGMAP_N_BLOCKS_IMPL*REGMAP_ADDR_W-1:0] REGMAP_IMPL_BASE = {16'hA000, 16'h9000, 16'h7000, 16'h6000, 16'h5000, 16'h4000, 16'h3000, 16'h2000, 16'h1000, 16'h0000};
   //   [0] id            base 0x0000  4 registers
   //   [1] build_params  base 0x1000  12 registers
   //   [2] ctrl          base 0x2000  4 registers
@@ -39,6 +39,7 @@ package regmap_pkg;
   //   [6] cfar          base 0x6000  9 registers
   //   [7] counters      base 0x7000  21 registers
   //   [8] covar         base 0x9000  7 registers
+  //   [9] history       base 0xA000  13 registers
 
   // -------------------------------------------------------------------------
   // Block 0: id — implemented
@@ -130,9 +131,9 @@ package regmap_pkg;
 
   // reset value of the stored bits
   localparam logic [REGMAP_ID_N_REGS*32-1:0] REGMAP_ID_RESET = {
-      32'h000002FF,  // [3]
-      32'h10204B0A,  // [2]
-      32'h01050001,  // [1]
+      32'h000006FF,  // [3]
+      32'h1020580B,  // [2]
+      32'h01060001,  // [1]
       32'h52414441  // [0]
   };
   // bits a software write may set or clear (RW)
@@ -2341,6 +2342,389 @@ package regmap_pkg;
       32'hFFFFFFFF,  // [4]
       32'h00000000,  // [3]
       32'h00000000,  // [2]
+      32'h00000000,  // [1]
+      32'h00000000  // [0]
+  };
+
+  // -------------------------------------------------------------------------
+  // Block 10: history — implemented
+  // SPEC 9 groups: Active bank selection; Frame counts
+  // The SPEC 7.3 time-frequency history and corner turn (rtl/memory/, issue #15). Two
+  // SPEC 9 groups land here and both are literal: 'Active bank selection' is the
+  // rotating frame-bank pointer and its programmable depth, and 'Frame counts' is the
+  // completed-frame counter that decides what a beamformer read is allowed to ask for.
+  // The window claims no group of its own because SPEC 9's list has none for a memory,
+  // and inventing one would make scripts/gen_regmap.py's copy of that list stop being a
+  // copy. CLOCK DOMAIN: every register here is in core_clk, the WRITE side of the
+  // subsystem, because that is where the frame sequencers and the rotation policy live.
+  // The three read-side counters (HISTORY_READS, HISTORY_COLLISION, HISTORY_ERROR) are
+  // produced in history_clk and cross back through one cdc_handshake carrying all three
+  // at once, so they are always a consistent snapshot of each other and are at most one
+  // crossing stale; a reader that needs them settled should quiesce the traffic first.
+  // DEPTH CHANGES DISCARD THE HISTORY: writing HISTORY_DEPTH and pulsing
+  // HISTORY_CTRL.DEPTH_APPLY remaps every frame slot, so the block waits for a frame
+  // boundary on every antenna and then restarts empty. HISTORY_STATUS.DEPTH_PENDING
+  // reports the wait and HISTORY_STATUS.EPOCH counts the applies, so software can tell
+  // 'no frames yet' from 'frames from before a reconfiguration'.
+  // -------------------------------------------------------------------------
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_HISTORY_BASE = 16'hA000;
+  localparam int unsigned REGMAP_HISTORY_SIZE = 4096;
+  localparam int unsigned REGMAP_HISTORY_N_REGS = 13;
+  localparam int unsigned REGMAP_HISTORY_INDEX = 9;  // fabric port index
+
+  // HISTORY_CTRL @ 0xA000 (MIXED)
+  //   Master controls. The three pulse fields are events rather than modes and read
+  //   back zero.
+  //   [0:0] ENABLE (RW)
+  //       Global enable. Cleared, the block refuses write beats (s_ready goes low on
+  //       every antenna) and advances nothing. Read requests are still answered from
+  //       whatever is stored.
+  //   [1:1] FORCE_UNSAFE (RW)
+  //       SPEC 9 fault injection. Normally an out-of-range frame offset is CLAMPED to
+  //       the newest readable frame, which makes HISTORY_COLLISION unreachable by
+  //       construction. Setting this removes the clamp, so an out-of-range request
+  //       reaches the slot being written and the collision counter increments. It
+  //       exists because a counter that cannot be made to fire is a counter nobody has
+  //       tested; it is not a mode for production use, and rtl/memory/history_core.sv
+  //       section 4 says why.
+  //   [8:8] DEPTH_APPLY (RWP)
+  //       Arm the value in HISTORY_DEPTH. The change lands at the next instant at which
+  //       no antenna is mid-frame, and discards the stored history when it does.
+  //   [9:9] COUNTER_CLEAR (RWP)
+  //       Zero every counter in this window, on both sides of the clock-domain
+  //       crossing. The read-side counters are cleared through a toggle synchroniser,
+  //       so they reach zero a few cycles after the write-side ones do.
+  //   [10:10] STATUS_CLEAR (RWP)
+  //       Clear the block's own sticky fault state. HISTORY_FAULT's bits are W1C on top
+  //       of that, so clearing a bit the block still holds set has no lasting effect
+  //       until this pulse is issued as well.
+  localparam int unsigned REGMAP_HISTORY_HISTORY_CTRL_INDEX = 0;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_HISTORY_HISTORY_CTRL_ADDR = 16'hA000;
+  localparam int unsigned REGMAP_HISTORY_HISTORY_CTRL_ENABLE_LSB = 0;
+  localparam int unsigned REGMAP_HISTORY_HISTORY_CTRL_ENABLE_WIDTH = 1;
+  localparam logic [31:0] REGMAP_HISTORY_HISTORY_CTRL_ENABLE_MASK = 32'h00000001;
+  localparam int unsigned REGMAP_HISTORY_HISTORY_CTRL_FORCE_UNSAFE_LSB = 1;
+  localparam int unsigned REGMAP_HISTORY_HISTORY_CTRL_FORCE_UNSAFE_WIDTH = 1;
+  localparam logic [31:0] REGMAP_HISTORY_HISTORY_CTRL_FORCE_UNSAFE_MASK = 32'h00000002;
+  localparam int unsigned REGMAP_HISTORY_HISTORY_CTRL_DEPTH_APPLY_LSB = 8;
+  localparam int unsigned REGMAP_HISTORY_HISTORY_CTRL_DEPTH_APPLY_WIDTH = 1;
+  localparam logic [31:0] REGMAP_HISTORY_HISTORY_CTRL_DEPTH_APPLY_MASK = 32'h00000100;
+  localparam int unsigned REGMAP_HISTORY_HISTORY_CTRL_COUNTER_CLEAR_LSB = 9;
+  localparam int unsigned REGMAP_HISTORY_HISTORY_CTRL_COUNTER_CLEAR_WIDTH = 1;
+  localparam logic [31:0] REGMAP_HISTORY_HISTORY_CTRL_COUNTER_CLEAR_MASK = 32'h00000200;
+  localparam int unsigned REGMAP_HISTORY_HISTORY_CTRL_STATUS_CLEAR_LSB = 10;
+  localparam int unsigned REGMAP_HISTORY_HISTORY_CTRL_STATUS_CLEAR_WIDTH = 1;
+  localparam logic [31:0] REGMAP_HISTORY_HISTORY_CTRL_STATUS_CLEAR_MASK = 32'h00000400;
+
+  // HISTORY_DEPTH @ 0xA004 (RW)
+  //   Requested history depth, in frames. Takes effect on HISTORY_CTRL.DEPTH_APPLY,
+  //   never before.
+  //   [9:0] DEPTH (RW)
+  //       Frames of history to retain, 1..FRAMES_MAX. Zero is clamped to one and
+  //       anything above the elaborated maximum is clamped to it, so a zero-initialised
+  //       register plane cannot request an illegal geometry. NOTE that the depth after
+  //       reset is the ELABORATED MAXIMUM and not this field's reset value: nothing is
+  //       applied until DEPTH_APPLY is pulsed, and HISTORY_STATUS.DEPTH_ACTIVE reports
+  //       what is actually in force. A depth of 1 or 2 leaves nothing readable, because
+  //       the readable set is two slots short of the depth - one for the frame being
+  //       written, one to absorb a frame of publication lag across the clock crossing.
+  //       That is legal, and it is reported through HISTORY_STATUS.OCCUPANCY.
+  localparam int unsigned REGMAP_HISTORY_HISTORY_DEPTH_INDEX = 1;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_HISTORY_HISTORY_DEPTH_ADDR = 16'hA004;
+  localparam int unsigned REGMAP_HISTORY_HISTORY_DEPTH_DEPTH_LSB = 0;
+  localparam int unsigned REGMAP_HISTORY_HISTORY_DEPTH_DEPTH_WIDTH = 10;
+  localparam logic [31:0] REGMAP_HISTORY_HISTORY_DEPTH_DEPTH_MASK = 32'h000003FF;
+
+  // HISTORY_STATUS @ 0xA008 (ROHW)
+  //   Live state of the rotation. Every field is hardware-driven.
+  //   [9:0] DEPTH_ACTIVE (ROHW)
+  //       Depth currently in force. Equals the elaborated maximum until the first
+  //       DEPTH_APPLY.
+  //   [19:10] OCCUPANCY (ROHW)
+  //       Complete frames currently held: min(frames completed, DEPTH_ACTIVE). A frame
+  //       counts as complete only when EVERY antenna has finished writing it, so this
+  //       never claims a frame a beamformer read could not assemble.
+  //   [27:20] EPOCH (ROHW)
+  //       Increments on every applied depth change. Modulo 256; software compares it
+  //       against the value it last saw rather than reading an absolute count.
+  //   [28:28] DEPTH_PENDING (ROHW)
+  //       A depth change is armed and waiting for a frame boundary.
+  localparam int unsigned REGMAP_HISTORY_HISTORY_STATUS_INDEX = 2;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_HISTORY_HISTORY_STATUS_ADDR = 16'hA008;
+  localparam int unsigned REGMAP_HISTORY_HISTORY_STATUS_DEPTH_ACTIVE_LSB = 0;
+  localparam int unsigned REGMAP_HISTORY_HISTORY_STATUS_DEPTH_ACTIVE_WIDTH = 10;
+  localparam logic [31:0] REGMAP_HISTORY_HISTORY_STATUS_DEPTH_ACTIVE_MASK = 32'h000003FF;
+  localparam int unsigned REGMAP_HISTORY_HISTORY_STATUS_OCCUPANCY_LSB = 10;
+  localparam int unsigned REGMAP_HISTORY_HISTORY_STATUS_OCCUPANCY_WIDTH = 10;
+  localparam logic [31:0] REGMAP_HISTORY_HISTORY_STATUS_OCCUPANCY_MASK = 32'h000FFC00;
+  localparam int unsigned REGMAP_HISTORY_HISTORY_STATUS_EPOCH_LSB = 20;
+  localparam int unsigned REGMAP_HISTORY_HISTORY_STATUS_EPOCH_WIDTH = 8;
+  localparam logic [31:0] REGMAP_HISTORY_HISTORY_STATUS_EPOCH_MASK = 32'h0FF00000;
+  localparam int unsigned REGMAP_HISTORY_HISTORY_STATUS_DEPTH_PENDING_LSB = 28;
+  localparam int unsigned REGMAP_HISTORY_HISTORY_STATUS_DEPTH_PENDING_WIDTH = 1;
+  localparam logic [31:0] REGMAP_HISTORY_HISTORY_STATUS_DEPTH_PENDING_MASK = 32'h10000000;
+
+  // HISTORY_GEOMETRY @ 0xA00C (ROHW)
+  //   Elaborated geometry, part one. Reported by hardware so a consumer can size its
+  //   own requests without a build-time header, which is the argument CFAR_STATUS makes
+  //   for its own geometry fields.
+  //   [7:0] N_ANT (ROHW)
+  //       Antennas, and therefore samples in one read response.
+  //   [15:8] LANES (ROHW)
+  //       Complex samples per write beat (SPEC 11 SAMPLES_PER_CYCLE). Also the number
+  //       of independently addressed banks per antenna.
+  //   [25:16] FRAMES_MAX (ROHW)
+  //       Elaborated maximum history depth, the upper clamp on HISTORY_DEPTH.DEPTH.
+  //   [26:26] BIT_REVERSED (ROHW)
+  //       1 when the block absorbs the FFT's bit-reversed beat order in its read
+  //       addressing, i.e. when rtl/fft/streaming_fft.sv upstream runs with REORDER =
+  //       0. Costs nothing here and saves the FFT its whole reorder buffer;
+  //       rtl/packages/history_pkg.sv section 3 has the measured numbers.
+  localparam int unsigned REGMAP_HISTORY_HISTORY_GEOMETRY_INDEX = 3;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_HISTORY_HISTORY_GEOMETRY_ADDR = 16'hA00C;
+  localparam int unsigned REGMAP_HISTORY_HISTORY_GEOMETRY_N_ANT_LSB = 0;
+  localparam int unsigned REGMAP_HISTORY_HISTORY_GEOMETRY_N_ANT_WIDTH = 8;
+  localparam logic [31:0] REGMAP_HISTORY_HISTORY_GEOMETRY_N_ANT_MASK = 32'h000000FF;
+  localparam int unsigned REGMAP_HISTORY_HISTORY_GEOMETRY_LANES_LSB = 8;
+  localparam int unsigned REGMAP_HISTORY_HISTORY_GEOMETRY_LANES_WIDTH = 8;
+  localparam logic [31:0] REGMAP_HISTORY_HISTORY_GEOMETRY_LANES_MASK = 32'h0000FF00;
+  localparam int unsigned REGMAP_HISTORY_HISTORY_GEOMETRY_FRAMES_MAX_LSB = 16;
+  localparam int unsigned REGMAP_HISTORY_HISTORY_GEOMETRY_FRAMES_MAX_WIDTH = 10;
+  localparam logic [31:0] REGMAP_HISTORY_HISTORY_GEOMETRY_FRAMES_MAX_MASK = 32'h03FF0000;
+  localparam int unsigned REGMAP_HISTORY_HISTORY_GEOMETRY_BIT_REVERSED_LSB = 26;
+  localparam int unsigned REGMAP_HISTORY_HISTORY_GEOMETRY_BIT_REVERSED_WIDTH = 1;
+  localparam logic [31:0] REGMAP_HISTORY_HISTORY_GEOMETRY_BIT_REVERSED_MASK = 32'h04000000;
+
+  // HISTORY_GEOMETRY2 @ 0xA010 (ROHW)
+  //   Elaborated geometry, part two.
+  //   [15:0] FFT_SIZE (ROHW)
+  //       Frequency bins per frame. A read request's bin index is valid over
+  //       0..FFT_SIZE-1; anything else is answered with HISTORY_ERROR advanced and the
+  //       out-of-range flag set in the response metadata.
+  //   [31:16] N_BANKS (ROHW)
+  //       Independently addressed memory banks, N_ANT * LANES. Reported because it is
+  //       the number the SPEC 18 M20K projection is built from.
+  localparam int unsigned REGMAP_HISTORY_HISTORY_GEOMETRY2_INDEX = 4;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_HISTORY_HISTORY_GEOMETRY2_ADDR = 16'hA010;
+  localparam int unsigned REGMAP_HISTORY_HISTORY_GEOMETRY2_FFT_SIZE_LSB = 0;
+  localparam int unsigned REGMAP_HISTORY_HISTORY_GEOMETRY2_FFT_SIZE_WIDTH = 16;
+  localparam logic [31:0] REGMAP_HISTORY_HISTORY_GEOMETRY2_FFT_SIZE_MASK = 32'h0000FFFF;
+  localparam int unsigned REGMAP_HISTORY_HISTORY_GEOMETRY2_N_BANKS_LSB = 16;
+  localparam int unsigned REGMAP_HISTORY_HISTORY_GEOMETRY2_N_BANKS_WIDTH = 16;
+  localparam logic [31:0] REGMAP_HISTORY_HISTORY_GEOMETRY2_N_BANKS_MASK = 32'hFFFF0000;
+
+  // HISTORY_FRAMES_DONE @ 0xA014 (ROHW)
+  //   Frames completed on every antenna since reset or the last applied depth change.
+  //   This is the origin the relative frame offset in a read request counts back from.
+  //   [31:0] VALUE (ROHW)
+  //       Modulo 2^32. At the SPEC 8 history_clk and the SPEC 11 full-scale frame
+  //       length this does not wrap inside any run this project makes.
+  localparam int unsigned REGMAP_HISTORY_HISTORY_FRAMES_DONE_INDEX = 5;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_HISTORY_HISTORY_FRAMES_DONE_ADDR = 16'hA014;
+  localparam int unsigned REGMAP_HISTORY_HISTORY_FRAMES_DONE_VALUE_LSB = 0;
+  localparam int unsigned REGMAP_HISTORY_HISTORY_FRAMES_DONE_VALUE_WIDTH = 32;
+  localparam logic [31:0] REGMAP_HISTORY_HISTORY_FRAMES_DONE_VALUE_MASK = 32'hFFFFFFFF;
+
+  // HISTORY_OVERWRITE @ 0xA018 (ROHW)
+  //   Frames EVICTED by the rotation: max(frames completed - DEPTH_ACTIVE, 0). The
+  //   honest measure of how much history a consumer lost, and exact at every instant.
+  //   [31:0] COUNT (ROHW)
+  //       Saturating 32-bit counter. Cleared by HISTORY_CTRL.COUNTER_CLEAR; saturates
+  //       rather than wraps, because a telemetry counter that wraps reports a small
+  //       number for a large problem.
+  localparam int unsigned REGMAP_HISTORY_HISTORY_OVERWRITE_INDEX = 6;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_HISTORY_HISTORY_OVERWRITE_ADDR = 16'hA018;
+  localparam int unsigned REGMAP_HISTORY_HISTORY_OVERWRITE_COUNT_LSB = 0;
+  localparam int unsigned REGMAP_HISTORY_HISTORY_OVERWRITE_COUNT_WIDTH = 32;
+  localparam logic [31:0] REGMAP_HISTORY_HISTORY_OVERWRITE_COUNT_MASK = 32'hFFFFFFFF;
+
+  // HISTORY_COLLISION @ 0xA01C (ROHW)
+  //   Read responses whose addressed frame slot was the slot being written. ZERO IN
+  //   CORRECT OPERATION: the readable set excludes the in-flight slot by construction,
+  //   which makes this a defect detector rather than a statistic.
+  //   HISTORY_CTRL.FORCE_UNSAFE is what makes it reachable, and therefore testable.
+  //   [31:0] COUNT (ROHW)
+  //       Saturating 32-bit counter. Cleared by HISTORY_CTRL.COUNTER_CLEAR; saturates
+  //       rather than wraps, because a telemetry counter that wraps reports a small
+  //       number for a large problem. Produced in history_clk and crossed back to
+  //       core_clk with the other two read-side counters as one consistent bundle, so
+  //       the three can never be read from different snapshots of each other.
+  localparam int unsigned REGMAP_HISTORY_HISTORY_COLLISION_INDEX = 7;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_HISTORY_HISTORY_COLLISION_ADDR = 16'hA01C;
+  localparam int unsigned REGMAP_HISTORY_HISTORY_COLLISION_COUNT_LSB = 0;
+  localparam int unsigned REGMAP_HISTORY_HISTORY_COLLISION_COUNT_WIDTH = 32;
+  localparam logic [31:0] REGMAP_HISTORY_HISTORY_COLLISION_COUNT_MASK = 32'hFFFFFFFF;
+
+  // HISTORY_ERROR @ 0xA020 (ROHW)
+  //   Read requests whose bin or frame offset was outside the legal set. The request is
+  //   still ANSWERED, deterministically and clamped, with the out-of-range flag set in
+  //   the response metadata: dropping it would break the one-response-per-request
+  //   invariant the consumer's pipeline is built on, and would turn a software mistake
+  //   into a hang.
+  //   [31:0] COUNT (ROHW)
+  //       Saturating 32-bit counter. Cleared by HISTORY_CTRL.COUNTER_CLEAR; saturates
+  //       rather than wraps, because a telemetry counter that wraps reports a small
+  //       number for a large problem. Produced in history_clk and crossed back to
+  //       core_clk with the other two read-side counters as one consistent bundle, so
+  //       the three can never be read from different snapshots of each other.
+  localparam int unsigned REGMAP_HISTORY_HISTORY_ERROR_INDEX = 8;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_HISTORY_HISTORY_ERROR_ADDR = 16'hA020;
+  localparam int unsigned REGMAP_HISTORY_HISTORY_ERROR_COUNT_LSB = 0;
+  localparam int unsigned REGMAP_HISTORY_HISTORY_ERROR_COUNT_WIDTH = 32;
+  localparam logic [31:0] REGMAP_HISTORY_HISTORY_ERROR_COUNT_MASK = 32'hFFFFFFFF;
+
+  // HISTORY_READS @ 0xA024 (ROHW)
+  //   Read responses produced.
+  //   [31:0] COUNT (ROHW)
+  //       Saturating 32-bit counter. Cleared by HISTORY_CTRL.COUNTER_CLEAR; saturates
+  //       rather than wraps, because a telemetry counter that wraps reports a small
+  //       number for a large problem. Produced in history_clk and crossed back to
+  //       core_clk with the other two read-side counters as one consistent bundle, so
+  //       the three can never be read from different snapshots of each other.
+  localparam int unsigned REGMAP_HISTORY_HISTORY_READS_INDEX = 9;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_HISTORY_HISTORY_READS_ADDR = 16'hA024;
+  localparam int unsigned REGMAP_HISTORY_HISTORY_READS_COUNT_LSB = 0;
+  localparam int unsigned REGMAP_HISTORY_HISTORY_READS_COUNT_WIDTH = 32;
+  localparam logic [31:0] REGMAP_HISTORY_HISTORY_READS_COUNT_MASK = 32'hFFFFFFFF;
+
+  // HISTORY_WRITE_BEATS @ 0xA028 (ROHW)
+  //   Write beats accepted, summed over every antenna. One beat carries LANES complex
+  //   samples of one antenna's frame.
+  //   [31:0] COUNT (ROHW)
+  //       Saturating 32-bit counter. Cleared by HISTORY_CTRL.COUNTER_CLEAR; saturates
+  //       rather than wraps, because a telemetry counter that wraps reports a small
+  //       number for a large problem.
+  localparam int unsigned REGMAP_HISTORY_HISTORY_WRITE_BEATS_INDEX = 10;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_HISTORY_HISTORY_WRITE_BEATS_ADDR = 16'hA028;
+  localparam int unsigned REGMAP_HISTORY_HISTORY_WRITE_BEATS_COUNT_LSB = 0;
+  localparam int unsigned REGMAP_HISTORY_HISTORY_WRITE_BEATS_COUNT_WIDTH = 32;
+  localparam logic [31:0] REGMAP_HISTORY_HISTORY_WRITE_BEATS_COUNT_MASK = 32'hFFFFFFFF;
+
+  // HISTORY_SKEW @ 0xA02C (ROHW)
+  //   Occasions on which an antenna ran a whole DEPTH_ACTIVE frames ahead of the
+  //   slowest one, and was therefore about to overwrite a slot the frame barrier still
+  //   considered live. Counted on the RISING EDGE of the condition, not while it holds:
+  //   skew is an episode and not a duration, and a level count would report a number
+  //   that depends on how long the condition happened to last.
+  //   [31:0] COUNT (ROHW)
+  //       Saturating 32-bit counter. Cleared by HISTORY_CTRL.COUNTER_CLEAR; saturates
+  //       rather than wraps, because a telemetry counter that wraps reports a small
+  //       number for a large problem.
+  localparam int unsigned REGMAP_HISTORY_HISTORY_SKEW_INDEX = 11;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_HISTORY_HISTORY_SKEW_ADDR = 16'hA02C;
+  localparam int unsigned REGMAP_HISTORY_HISTORY_SKEW_COUNT_LSB = 0;
+  localparam int unsigned REGMAP_HISTORY_HISTORY_SKEW_COUNT_WIDTH = 32;
+  localparam logic [31:0] REGMAP_HISTORY_HISTORY_SKEW_COUNT_MASK = 32'hFFFFFFFF;
+
+  // HISTORY_FAULT @ 0xA030 (W1C)
+  //   Sticky fault bits, write 1 to clear. The block holds its own copy, so clearing a
+  //   bit here while the block still holds it set has no lasting effect until
+  //   HISTORY_CTRL.STATUS_CLEAR is pulsed. Same arrangement, and same reason, as
+  //   CFAR_FAULT.
+  //   [0:0] ERROR_SEEN (W1C)
+  //       At least one read request was out of range.
+  //   [1:1] COLLISION_SEEN (W1C)
+  //       At least one response addressed the slot being written. Unreachable outside
+  //       fault injection.
+  //   [2:2] SKEW_SEEN (W1C)
+  //       At least one antenna ran a full depth ahead of the frame barrier.
+  //   [3:3] FRAMING_SEEN (W1C)
+  //       At least one write beat carried a start- or end-of-frame flag at the wrong
+  //       beat index. A frame one beat short shifts every subsequent bin of that
+  //       antenna for the rest of the run, and nothing downstream can tell a short
+  //       frame from a correct one, because both are just words in a bank.
+  localparam int unsigned REGMAP_HISTORY_HISTORY_FAULT_INDEX = 12;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_HISTORY_HISTORY_FAULT_ADDR = 16'hA030;
+  localparam int unsigned REGMAP_HISTORY_HISTORY_FAULT_ERROR_SEEN_LSB = 0;
+  localparam int unsigned REGMAP_HISTORY_HISTORY_FAULT_ERROR_SEEN_WIDTH = 1;
+  localparam logic [31:0] REGMAP_HISTORY_HISTORY_FAULT_ERROR_SEEN_MASK = 32'h00000001;
+  localparam int unsigned REGMAP_HISTORY_HISTORY_FAULT_COLLISION_SEEN_LSB = 1;
+  localparam int unsigned REGMAP_HISTORY_HISTORY_FAULT_COLLISION_SEEN_WIDTH = 1;
+  localparam logic [31:0] REGMAP_HISTORY_HISTORY_FAULT_COLLISION_SEEN_MASK = 32'h00000002;
+  localparam int unsigned REGMAP_HISTORY_HISTORY_FAULT_SKEW_SEEN_LSB = 2;
+  localparam int unsigned REGMAP_HISTORY_HISTORY_FAULT_SKEW_SEEN_WIDTH = 1;
+  localparam logic [31:0] REGMAP_HISTORY_HISTORY_FAULT_SKEW_SEEN_MASK = 32'h00000004;
+  localparam int unsigned REGMAP_HISTORY_HISTORY_FAULT_FRAMING_SEEN_LSB = 3;
+  localparam int unsigned REGMAP_HISTORY_HISTORY_FAULT_FRAMING_SEEN_WIDTH = 1;
+  localparam logic [31:0] REGMAP_HISTORY_HISTORY_FAULT_FRAMING_SEEN_MASK = 32'h00000008;
+
+  // reset value of the stored bits
+  localparam logic [REGMAP_HISTORY_N_REGS*32-1:0] REGMAP_HISTORY_RESET = {
+      32'h00000000,  // [12]
+      32'h00000000,  // [11]
+      32'h00000000,  // [10]
+      32'h00000000,  // [9]
+      32'h00000000,  // [8]
+      32'h00000000,  // [7]
+      32'h00000000,  // [6]
+      32'h00000000,  // [5]
+      32'h00000000,  // [4]
+      32'h00000000,  // [3]
+      32'h00000000,  // [2]
+      32'h00000000,  // [1]
+      32'h00000001  // [0]
+  };
+  // bits a software write may set or clear (RW)
+  localparam logic [REGMAP_HISTORY_N_REGS*32-1:0] REGMAP_HISTORY_WMASK = {
+      32'h00000000,  // [12]
+      32'h00000000,  // [11]
+      32'h00000000,  // [10]
+      32'h00000000,  // [9]
+      32'h00000000,  // [8]
+      32'h00000000,  // [7]
+      32'h00000000,  // [6]
+      32'h00000000,  // [5]
+      32'h00000000,  // [4]
+      32'h00000000,  // [3]
+      32'h00000000,  // [2]
+      32'h000003FF,  // [1]
+      32'h00000003  // [0]
+  };
+  // bits cleared by writing 1, set by hardware (W1C)
+  localparam logic [REGMAP_HISTORY_N_REGS*32-1:0] REGMAP_HISTORY_W1CMASK = {
+      32'h0000000F,  // [12]
+      32'h00000000,  // [11]
+      32'h00000000,  // [10]
+      32'h00000000,  // [9]
+      32'h00000000,  // [8]
+      32'h00000000,  // [7]
+      32'h00000000,  // [6]
+      32'h00000000,  // [5]
+      32'h00000000,  // [4]
+      32'h00000000,  // [3]
+      32'h00000000,  // [2]
+      32'h00000000,  // [1]
+      32'h00000000  // [0]
+  };
+  // bits that pulse for one cycle and read 0 (RWP)
+  localparam logic [REGMAP_HISTORY_N_REGS*32-1:0] REGMAP_HISTORY_PULSEMASK = {
+      32'h00000000,  // [12]
+      32'h00000000,  // [11]
+      32'h00000000,  // [10]
+      32'h00000000,  // [9]
+      32'h00000000,  // [8]
+      32'h00000000,  // [7]
+      32'h00000000,  // [6]
+      32'h00000000,  // [5]
+      32'h00000000,  // [4]
+      32'h00000000,  // [3]
+      32'h00000000,  // [2]
+      32'h00000000,  // [1]
+      32'h00000700  // [0]
+  };
+  // bits read from the hardware input, not from storage (ROHW)
+  localparam logic [REGMAP_HISTORY_N_REGS*32-1:0] REGMAP_HISTORY_HWMASK = {
+      32'h00000000,  // [12]
+      32'hFFFFFFFF,  // [11]
+      32'hFFFFFFFF,  // [10]
+      32'hFFFFFFFF,  // [9]
+      32'hFFFFFFFF,  // [8]
+      32'hFFFFFFFF,  // [7]
+      32'hFFFFFFFF,  // [6]
+      32'hFFFFFFFF,  // [5]
+      32'hFFFFFFFF,  // [4]
+      32'h07FFFFFF,  // [3]
+      32'h1FFFFFFF,  // [2]
       32'h00000000,  // [1]
       32'h00000000  // [0]
   };

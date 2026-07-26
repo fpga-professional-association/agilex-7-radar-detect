@@ -24,12 +24,12 @@ inline constexpr unsigned kDataWidth = 32;
 inline constexpr unsigned kStrobeWidth = 4;
 inline constexpr std::uint32_t kWindowBytes = 0x1000u;
 inline constexpr std::uint32_t kAddrMask = 0xFFFFu;
-inline constexpr unsigned kBlockCount = 10;
-inline constexpr unsigned kBlockCountImplemented = 9;
-inline constexpr unsigned kRegisterCount = 75;
-inline constexpr std::uint32_t kBlockMask = 0x000002FFu;
+inline constexpr unsigned kBlockCount = 11;
+inline constexpr unsigned kBlockCountImplemented = 10;
+inline constexpr unsigned kRegisterCount = 88;
+inline constexpr std::uint32_t kBlockMask = 0x000006FFu;
 inline constexpr unsigned kVersionMajor = 1;
-inline constexpr unsigned kVersionMinor = 5;
+inline constexpr unsigned kVersionMinor = 6;
 inline constexpr unsigned kVersionPatch = 0;
 
 // Per-bit access classification, matching rtl/control/reg_csr_block.sv.
@@ -78,7 +78,7 @@ inline constexpr unsigned ID_MAGIC_MAGIC_LSB = 0;
 inline constexpr unsigned ID_MAGIC_MAGIC_WIDTH = 32;
 inline constexpr std::uint32_t ID_MAGIC_MAGIC_MASK = 0xFFFFFFFFu;
 inline constexpr std::uint32_t ID_VERSION_ADDR = 0x0004u;
-inline constexpr std::uint32_t ID_VERSION_RESET = 0x01050001u;
+inline constexpr std::uint32_t ID_VERSION_RESET = 0x01060001u;
 inline constexpr unsigned ID_VERSION_MAJOR_LSB = 24;
 inline constexpr unsigned ID_VERSION_MAJOR_WIDTH = 8;
 inline constexpr std::uint32_t ID_VERSION_MAJOR_MASK = 0xFF000000u;
@@ -92,7 +92,7 @@ inline constexpr unsigned ID_VERSION_SCHEMA_LSB = 0;
 inline constexpr unsigned ID_VERSION_SCHEMA_WIDTH = 8;
 inline constexpr std::uint32_t ID_VERSION_SCHEMA_MASK = 0x000000FFu;
 inline constexpr std::uint32_t ID_GEOMETRY_ADDR = 0x0008u;
-inline constexpr std::uint32_t ID_GEOMETRY_RESET = 0x10204B0Au;
+inline constexpr std::uint32_t ID_GEOMETRY_RESET = 0x1020580Bu;
 inline constexpr unsigned ID_GEOMETRY_N_BLOCKS_LSB = 0;
 inline constexpr unsigned ID_GEOMETRY_N_BLOCKS_WIDTH = 8;
 inline constexpr std::uint32_t ID_GEOMETRY_N_BLOCKS_MASK = 0x000000FFu;
@@ -106,7 +106,7 @@ inline constexpr unsigned ID_GEOMETRY_ADDR_W_LSB = 24;
 inline constexpr unsigned ID_GEOMETRY_ADDR_W_WIDTH = 8;
 inline constexpr std::uint32_t ID_GEOMETRY_ADDR_W_MASK = 0xFF000000u;
 inline constexpr std::uint32_t ID_CAPABILITY_ADDR = 0x000Cu;
-inline constexpr std::uint32_t ID_CAPABILITY_RESET = 0x000002FFu;
+inline constexpr std::uint32_t ID_CAPABILITY_RESET = 0x000006FFu;
 inline constexpr unsigned ID_CAPABILITY_BLOCK_MASK_LSB = 0;
 inline constexpr unsigned ID_CAPABILITY_BLOCK_MASK_WIDTH = 32;
 inline constexpr std::uint32_t ID_CAPABILITY_BLOCK_MASK_MASK = 0xFFFFFFFFu;
@@ -817,12 +817,122 @@ inline constexpr unsigned COVAR_COVAR_SAT_COUNT_VALUE_LSB = 0;
 inline constexpr unsigned COVAR_COVAR_SAT_COUNT_VALUE_WIDTH = 32;
 inline constexpr std::uint32_t COVAR_COVAR_SAT_COUNT_VALUE_MASK = 0xFFFFFFFFu;
 
+// history: The SPEC 7.
+inline constexpr std::uint32_t HISTORY_BASE = 0xA000u;
+inline constexpr std::uint32_t HISTORY_HISTORY_CTRL_ADDR = 0xA000u;
+inline constexpr std::uint32_t HISTORY_HISTORY_CTRL_RESET = 0x00000001u;
+inline constexpr unsigned HISTORY_HISTORY_CTRL_ENABLE_LSB = 0;
+inline constexpr unsigned HISTORY_HISTORY_CTRL_ENABLE_WIDTH = 1;
+inline constexpr std::uint32_t HISTORY_HISTORY_CTRL_ENABLE_MASK = 0x00000001u;
+inline constexpr unsigned HISTORY_HISTORY_CTRL_FORCE_UNSAFE_LSB = 1;
+inline constexpr unsigned HISTORY_HISTORY_CTRL_FORCE_UNSAFE_WIDTH = 1;
+inline constexpr std::uint32_t HISTORY_HISTORY_CTRL_FORCE_UNSAFE_MASK = 0x00000002u;
+inline constexpr unsigned HISTORY_HISTORY_CTRL_DEPTH_APPLY_LSB = 8;
+inline constexpr unsigned HISTORY_HISTORY_CTRL_DEPTH_APPLY_WIDTH = 1;
+inline constexpr std::uint32_t HISTORY_HISTORY_CTRL_DEPTH_APPLY_MASK = 0x00000100u;
+inline constexpr unsigned HISTORY_HISTORY_CTRL_COUNTER_CLEAR_LSB = 9;
+inline constexpr unsigned HISTORY_HISTORY_CTRL_COUNTER_CLEAR_WIDTH = 1;
+inline constexpr std::uint32_t HISTORY_HISTORY_CTRL_COUNTER_CLEAR_MASK = 0x00000200u;
+inline constexpr unsigned HISTORY_HISTORY_CTRL_STATUS_CLEAR_LSB = 10;
+inline constexpr unsigned HISTORY_HISTORY_CTRL_STATUS_CLEAR_WIDTH = 1;
+inline constexpr std::uint32_t HISTORY_HISTORY_CTRL_STATUS_CLEAR_MASK = 0x00000400u;
+inline constexpr std::uint32_t HISTORY_HISTORY_DEPTH_ADDR = 0xA004u;
+inline constexpr std::uint32_t HISTORY_HISTORY_DEPTH_RESET = 0x00000000u;
+inline constexpr unsigned HISTORY_HISTORY_DEPTH_DEPTH_LSB = 0;
+inline constexpr unsigned HISTORY_HISTORY_DEPTH_DEPTH_WIDTH = 10;
+inline constexpr std::uint32_t HISTORY_HISTORY_DEPTH_DEPTH_MASK = 0x000003FFu;
+inline constexpr std::uint32_t HISTORY_HISTORY_STATUS_ADDR = 0xA008u;
+inline constexpr std::uint32_t HISTORY_HISTORY_STATUS_RESET = 0x00000000u;
+inline constexpr unsigned HISTORY_HISTORY_STATUS_DEPTH_ACTIVE_LSB = 0;
+inline constexpr unsigned HISTORY_HISTORY_STATUS_DEPTH_ACTIVE_WIDTH = 10;
+inline constexpr std::uint32_t HISTORY_HISTORY_STATUS_DEPTH_ACTIVE_MASK = 0x000003FFu;
+inline constexpr unsigned HISTORY_HISTORY_STATUS_OCCUPANCY_LSB = 10;
+inline constexpr unsigned HISTORY_HISTORY_STATUS_OCCUPANCY_WIDTH = 10;
+inline constexpr std::uint32_t HISTORY_HISTORY_STATUS_OCCUPANCY_MASK = 0x000FFC00u;
+inline constexpr unsigned HISTORY_HISTORY_STATUS_EPOCH_LSB = 20;
+inline constexpr unsigned HISTORY_HISTORY_STATUS_EPOCH_WIDTH = 8;
+inline constexpr std::uint32_t HISTORY_HISTORY_STATUS_EPOCH_MASK = 0x0FF00000u;
+inline constexpr unsigned HISTORY_HISTORY_STATUS_DEPTH_PENDING_LSB = 28;
+inline constexpr unsigned HISTORY_HISTORY_STATUS_DEPTH_PENDING_WIDTH = 1;
+inline constexpr std::uint32_t HISTORY_HISTORY_STATUS_DEPTH_PENDING_MASK = 0x10000000u;
+inline constexpr std::uint32_t HISTORY_HISTORY_GEOMETRY_ADDR = 0xA00Cu;
+inline constexpr std::uint32_t HISTORY_HISTORY_GEOMETRY_RESET = 0x00000000u;
+inline constexpr unsigned HISTORY_HISTORY_GEOMETRY_N_ANT_LSB = 0;
+inline constexpr unsigned HISTORY_HISTORY_GEOMETRY_N_ANT_WIDTH = 8;
+inline constexpr std::uint32_t HISTORY_HISTORY_GEOMETRY_N_ANT_MASK = 0x000000FFu;
+inline constexpr unsigned HISTORY_HISTORY_GEOMETRY_LANES_LSB = 8;
+inline constexpr unsigned HISTORY_HISTORY_GEOMETRY_LANES_WIDTH = 8;
+inline constexpr std::uint32_t HISTORY_HISTORY_GEOMETRY_LANES_MASK = 0x0000FF00u;
+inline constexpr unsigned HISTORY_HISTORY_GEOMETRY_FRAMES_MAX_LSB = 16;
+inline constexpr unsigned HISTORY_HISTORY_GEOMETRY_FRAMES_MAX_WIDTH = 10;
+inline constexpr std::uint32_t HISTORY_HISTORY_GEOMETRY_FRAMES_MAX_MASK = 0x03FF0000u;
+inline constexpr unsigned HISTORY_HISTORY_GEOMETRY_BIT_REVERSED_LSB = 26;
+inline constexpr unsigned HISTORY_HISTORY_GEOMETRY_BIT_REVERSED_WIDTH = 1;
+inline constexpr std::uint32_t HISTORY_HISTORY_GEOMETRY_BIT_REVERSED_MASK = 0x04000000u;
+inline constexpr std::uint32_t HISTORY_HISTORY_GEOMETRY2_ADDR = 0xA010u;
+inline constexpr std::uint32_t HISTORY_HISTORY_GEOMETRY2_RESET = 0x00000000u;
+inline constexpr unsigned HISTORY_HISTORY_GEOMETRY2_FFT_SIZE_LSB = 0;
+inline constexpr unsigned HISTORY_HISTORY_GEOMETRY2_FFT_SIZE_WIDTH = 16;
+inline constexpr std::uint32_t HISTORY_HISTORY_GEOMETRY2_FFT_SIZE_MASK = 0x0000FFFFu;
+inline constexpr unsigned HISTORY_HISTORY_GEOMETRY2_N_BANKS_LSB = 16;
+inline constexpr unsigned HISTORY_HISTORY_GEOMETRY2_N_BANKS_WIDTH = 16;
+inline constexpr std::uint32_t HISTORY_HISTORY_GEOMETRY2_N_BANKS_MASK = 0xFFFF0000u;
+inline constexpr std::uint32_t HISTORY_HISTORY_FRAMES_DONE_ADDR = 0xA014u;
+inline constexpr std::uint32_t HISTORY_HISTORY_FRAMES_DONE_RESET = 0x00000000u;
+inline constexpr unsigned HISTORY_HISTORY_FRAMES_DONE_VALUE_LSB = 0;
+inline constexpr unsigned HISTORY_HISTORY_FRAMES_DONE_VALUE_WIDTH = 32;
+inline constexpr std::uint32_t HISTORY_HISTORY_FRAMES_DONE_VALUE_MASK = 0xFFFFFFFFu;
+inline constexpr std::uint32_t HISTORY_HISTORY_OVERWRITE_ADDR = 0xA018u;
+inline constexpr std::uint32_t HISTORY_HISTORY_OVERWRITE_RESET = 0x00000000u;
+inline constexpr unsigned HISTORY_HISTORY_OVERWRITE_COUNT_LSB = 0;
+inline constexpr unsigned HISTORY_HISTORY_OVERWRITE_COUNT_WIDTH = 32;
+inline constexpr std::uint32_t HISTORY_HISTORY_OVERWRITE_COUNT_MASK = 0xFFFFFFFFu;
+inline constexpr std::uint32_t HISTORY_HISTORY_COLLISION_ADDR = 0xA01Cu;
+inline constexpr std::uint32_t HISTORY_HISTORY_COLLISION_RESET = 0x00000000u;
+inline constexpr unsigned HISTORY_HISTORY_COLLISION_COUNT_LSB = 0;
+inline constexpr unsigned HISTORY_HISTORY_COLLISION_COUNT_WIDTH = 32;
+inline constexpr std::uint32_t HISTORY_HISTORY_COLLISION_COUNT_MASK = 0xFFFFFFFFu;
+inline constexpr std::uint32_t HISTORY_HISTORY_ERROR_ADDR = 0xA020u;
+inline constexpr std::uint32_t HISTORY_HISTORY_ERROR_RESET = 0x00000000u;
+inline constexpr unsigned HISTORY_HISTORY_ERROR_COUNT_LSB = 0;
+inline constexpr unsigned HISTORY_HISTORY_ERROR_COUNT_WIDTH = 32;
+inline constexpr std::uint32_t HISTORY_HISTORY_ERROR_COUNT_MASK = 0xFFFFFFFFu;
+inline constexpr std::uint32_t HISTORY_HISTORY_READS_ADDR = 0xA024u;
+inline constexpr std::uint32_t HISTORY_HISTORY_READS_RESET = 0x00000000u;
+inline constexpr unsigned HISTORY_HISTORY_READS_COUNT_LSB = 0;
+inline constexpr unsigned HISTORY_HISTORY_READS_COUNT_WIDTH = 32;
+inline constexpr std::uint32_t HISTORY_HISTORY_READS_COUNT_MASK = 0xFFFFFFFFu;
+inline constexpr std::uint32_t HISTORY_HISTORY_WRITE_BEATS_ADDR = 0xA028u;
+inline constexpr std::uint32_t HISTORY_HISTORY_WRITE_BEATS_RESET = 0x00000000u;
+inline constexpr unsigned HISTORY_HISTORY_WRITE_BEATS_COUNT_LSB = 0;
+inline constexpr unsigned HISTORY_HISTORY_WRITE_BEATS_COUNT_WIDTH = 32;
+inline constexpr std::uint32_t HISTORY_HISTORY_WRITE_BEATS_COUNT_MASK = 0xFFFFFFFFu;
+inline constexpr std::uint32_t HISTORY_HISTORY_SKEW_ADDR = 0xA02Cu;
+inline constexpr std::uint32_t HISTORY_HISTORY_SKEW_RESET = 0x00000000u;
+inline constexpr unsigned HISTORY_HISTORY_SKEW_COUNT_LSB = 0;
+inline constexpr unsigned HISTORY_HISTORY_SKEW_COUNT_WIDTH = 32;
+inline constexpr std::uint32_t HISTORY_HISTORY_SKEW_COUNT_MASK = 0xFFFFFFFFu;
+inline constexpr std::uint32_t HISTORY_HISTORY_FAULT_ADDR = 0xA030u;
+inline constexpr std::uint32_t HISTORY_HISTORY_FAULT_RESET = 0x00000000u;
+inline constexpr unsigned HISTORY_HISTORY_FAULT_ERROR_SEEN_LSB = 0;
+inline constexpr unsigned HISTORY_HISTORY_FAULT_ERROR_SEEN_WIDTH = 1;
+inline constexpr std::uint32_t HISTORY_HISTORY_FAULT_ERROR_SEEN_MASK = 0x00000001u;
+inline constexpr unsigned HISTORY_HISTORY_FAULT_COLLISION_SEEN_LSB = 1;
+inline constexpr unsigned HISTORY_HISTORY_FAULT_COLLISION_SEEN_WIDTH = 1;
+inline constexpr std::uint32_t HISTORY_HISTORY_FAULT_COLLISION_SEEN_MASK = 0x00000002u;
+inline constexpr unsigned HISTORY_HISTORY_FAULT_SKEW_SEEN_LSB = 2;
+inline constexpr unsigned HISTORY_HISTORY_FAULT_SKEW_SEEN_WIDTH = 1;
+inline constexpr std::uint32_t HISTORY_HISTORY_FAULT_SKEW_SEEN_MASK = 0x00000004u;
+inline constexpr unsigned HISTORY_HISTORY_FAULT_FRAMING_SEEN_LSB = 3;
+inline constexpr unsigned HISTORY_HISTORY_FAULT_FRAMING_SEEN_WIDTH = 1;
+inline constexpr std::uint32_t HISTORY_HISTORY_FAULT_FRAMING_SEEN_MASK = 0x00000008u;
+
 // ---- planned windows (declared, not implemented in this build) ----------
 // debug 0x8000: planned by #19. Accesses return error=1.
 inline constexpr std::uint32_t DEBUG_BASE = 0x8000u;
 
 // ---- tables --------------------------------------------------------------
-inline constexpr BlockInfo kBlocks[10] = {
+inline constexpr BlockInfo kBlocks[11] = {
     {"id", 0x0000u, 0x1000u, true, 4},
     {"build_params", 0x1000u, 0x1000u, true, 12},
     {"ctrl", 0x2000u, 0x1000u, true, 4},
@@ -833,13 +943,14 @@ inline constexpr BlockInfo kBlocks[10] = {
     {"counters", 0x7000u, 0x1000u, true, 21},
     {"debug", 0x8000u, 0x1000u, false, 0},
     {"covar", 0x9000u, 0x1000u, true, 7},
+    {"history", 0xA000u, 0x1000u, true, 13},
 };
 
-inline constexpr RegInfo kRegisters[75] = {
+inline constexpr RegInfo kRegisters[88] = {
     {"id", "MAGIC", 0x0000u, 0, 0, Access::kRo, 0x52414441u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u},
-    {"id", "VERSION", 0x0004u, 0, 1, Access::kRo, 0x01050001u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u},
-    {"id", "GEOMETRY", 0x0008u, 0, 2, Access::kRo, 0x10204B0Au, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u},
-    {"id", "CAPABILITY", 0x000Cu, 0, 3, Access::kRo, 0x000002FFu, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u},
+    {"id", "VERSION", 0x0004u, 0, 1, Access::kRo, 0x01060001u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u},
+    {"id", "GEOMETRY", 0x0008u, 0, 2, Access::kRo, 0x1020580Bu, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u},
+    {"id", "CAPABILITY", 0x000Cu, 0, 3, Access::kRo, 0x000006FFu, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u},
     {"build_params", "N_ANTENNAS", 0x1000u, 1, 0, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
     {"build_params", "SAMPLES_PER_CYCLE", 0x1004u, 1, 1, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
     {"build_params", "FFT_SIZE", 0x1008u, 1, 2, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
@@ -911,19 +1022,32 @@ inline constexpr RegInfo kRegisters[75] = {
     {"covar", "COVAR_STATUS", 0x9010u, 8, 4, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
     {"covar", "COVAR_SAT_STATUS", 0x9014u, 8, 5, Access::kW1c, 0x00000000u, 0x00000000u, 0x00000007u, 0x00000000u, 0x00000000u, 0x00000007u},
     {"covar", "COVAR_SAT_COUNT", 0x9018u, 8, 6, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"history", "HISTORY_CTRL", 0xA000u, 9, 0, Access::kMixed, 0x00000001u, 0x00000003u, 0x00000000u, 0x00000700u, 0x00000000u, 0x00000703u},
+    {"history", "HISTORY_DEPTH", 0xA004u, 9, 1, Access::kRw, 0x00000000u, 0x000003FFu, 0x00000000u, 0x00000000u, 0x00000000u, 0x000003FFu},
+    {"history", "HISTORY_STATUS", 0xA008u, 9, 2, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x1FFFFFFFu, 0x00000000u},
+    {"history", "HISTORY_GEOMETRY", 0xA00Cu, 9, 3, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x07FFFFFFu, 0x00000000u},
+    {"history", "HISTORY_GEOMETRY2", 0xA010u, 9, 4, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"history", "HISTORY_FRAMES_DONE", 0xA014u, 9, 5, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"history", "HISTORY_OVERWRITE", 0xA018u, 9, 6, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"history", "HISTORY_COLLISION", 0xA01Cu, 9, 7, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"history", "HISTORY_ERROR", 0xA020u, 9, 8, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"history", "HISTORY_READS", 0xA024u, 9, 9, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"history", "HISTORY_WRITE_BEATS", 0xA028u, 9, 10, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"history", "HISTORY_SKEW", 0xA02Cu, 9, 11, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"history", "HISTORY_FAULT", 0xA030u, 9, 12, Access::kW1c, 0x00000000u, 0x00000000u, 0x0000000Fu, 0x00000000u, 0x00000000u, 0x0000000Fu},
 };
 
-inline constexpr FieldInfo kFields[190] = {
+inline constexpr FieldInfo kFields[217] = {
     {"id", "MAGIC", "MAGIC", 0, 32, 0xFFFFFFFFu, Access::kRo, 0x52414441u},
     {"id", "VERSION", "MAJOR", 24, 8, 0xFF000000u, Access::kRo, 0x00000001u},
-    {"id", "VERSION", "MINOR", 16, 8, 0x00FF0000u, Access::kRo, 0x00000005u},
+    {"id", "VERSION", "MINOR", 16, 8, 0x00FF0000u, Access::kRo, 0x00000006u},
     {"id", "VERSION", "PATCH", 8, 8, 0x0000FF00u, Access::kRo, 0x00000000u},
     {"id", "VERSION", "SCHEMA", 0, 8, 0x000000FFu, Access::kRo, 0x00000001u},
-    {"id", "GEOMETRY", "N_BLOCKS", 0, 8, 0x000000FFu, Access::kRo, 0x0000000Au},
-    {"id", "GEOMETRY", "N_REGS", 8, 8, 0x0000FF00u, Access::kRo, 0x0000004Bu},
+    {"id", "GEOMETRY", "N_BLOCKS", 0, 8, 0x000000FFu, Access::kRo, 0x0000000Bu},
+    {"id", "GEOMETRY", "N_REGS", 8, 8, 0x0000FF00u, Access::kRo, 0x00000058u},
     {"id", "GEOMETRY", "DATA_W", 16, 8, 0x00FF0000u, Access::kRo, 0x00000020u},
     {"id", "GEOMETRY", "ADDR_W", 24, 8, 0xFF000000u, Access::kRo, 0x00000010u},
-    {"id", "CAPABILITY", "BLOCK_MASK", 0, 32, 0xFFFFFFFFu, Access::kRo, 0x000002FFu},
+    {"id", "CAPABILITY", "BLOCK_MASK", 0, 32, 0xFFFFFFFFu, Access::kRo, 0x000006FFu},
     {"build_params", "N_ANTENNAS", "VALUE", 0, 32, 0xFFFFFFFFu, Access::kRoHw, 0x00000000u},
     {"build_params", "SAMPLES_PER_CYCLE", "VALUE", 0, 32, 0xFFFFFFFFu, Access::kRoHw, 0x00000000u},
     {"build_params", "FFT_SIZE", "VALUE", 0, 32, 0xFFFFFFFFu, Access::kRoHw, 0x00000000u},
@@ -1104,6 +1228,33 @@ inline constexpr FieldInfo kFields[190] = {
     {"covar", "COVAR_SAT_STATUS", "CROSS", 1, 1, 0x00000002u, Access::kW1c, 0x00000000u},
     {"covar", "COVAR_SAT_STATUS", "TRUNCATED", 2, 1, 0x00000004u, Access::kW1c, 0x00000000u},
     {"covar", "COVAR_SAT_COUNT", "VALUE", 0, 32, 0xFFFFFFFFu, Access::kRoHw, 0x00000000u},
+    {"history", "HISTORY_CTRL", "ENABLE", 0, 1, 0x00000001u, Access::kRw, 0x00000001u},
+    {"history", "HISTORY_CTRL", "FORCE_UNSAFE", 1, 1, 0x00000002u, Access::kRw, 0x00000000u},
+    {"history", "HISTORY_CTRL", "DEPTH_APPLY", 8, 1, 0x00000100u, Access::kRwp, 0x00000000u},
+    {"history", "HISTORY_CTRL", "COUNTER_CLEAR", 9, 1, 0x00000200u, Access::kRwp, 0x00000000u},
+    {"history", "HISTORY_CTRL", "STATUS_CLEAR", 10, 1, 0x00000400u, Access::kRwp, 0x00000000u},
+    {"history", "HISTORY_DEPTH", "DEPTH", 0, 10, 0x000003FFu, Access::kRw, 0x00000000u},
+    {"history", "HISTORY_STATUS", "DEPTH_ACTIVE", 0, 10, 0x000003FFu, Access::kRoHw, 0x00000000u},
+    {"history", "HISTORY_STATUS", "OCCUPANCY", 10, 10, 0x000FFC00u, Access::kRoHw, 0x00000000u},
+    {"history", "HISTORY_STATUS", "EPOCH", 20, 8, 0x0FF00000u, Access::kRoHw, 0x00000000u},
+    {"history", "HISTORY_STATUS", "DEPTH_PENDING", 28, 1, 0x10000000u, Access::kRoHw, 0x00000000u},
+    {"history", "HISTORY_GEOMETRY", "N_ANT", 0, 8, 0x000000FFu, Access::kRoHw, 0x00000000u},
+    {"history", "HISTORY_GEOMETRY", "LANES", 8, 8, 0x0000FF00u, Access::kRoHw, 0x00000000u},
+    {"history", "HISTORY_GEOMETRY", "FRAMES_MAX", 16, 10, 0x03FF0000u, Access::kRoHw, 0x00000000u},
+    {"history", "HISTORY_GEOMETRY", "BIT_REVERSED", 26, 1, 0x04000000u, Access::kRoHw, 0x00000000u},
+    {"history", "HISTORY_GEOMETRY2", "FFT_SIZE", 0, 16, 0x0000FFFFu, Access::kRoHw, 0x00000000u},
+    {"history", "HISTORY_GEOMETRY2", "N_BANKS", 16, 16, 0xFFFF0000u, Access::kRoHw, 0x00000000u},
+    {"history", "HISTORY_FRAMES_DONE", "VALUE", 0, 32, 0xFFFFFFFFu, Access::kRoHw, 0x00000000u},
+    {"history", "HISTORY_OVERWRITE", "COUNT", 0, 32, 0xFFFFFFFFu, Access::kRoHw, 0x00000000u},
+    {"history", "HISTORY_COLLISION", "COUNT", 0, 32, 0xFFFFFFFFu, Access::kRoHw, 0x00000000u},
+    {"history", "HISTORY_ERROR", "COUNT", 0, 32, 0xFFFFFFFFu, Access::kRoHw, 0x00000000u},
+    {"history", "HISTORY_READS", "COUNT", 0, 32, 0xFFFFFFFFu, Access::kRoHw, 0x00000000u},
+    {"history", "HISTORY_WRITE_BEATS", "COUNT", 0, 32, 0xFFFFFFFFu, Access::kRoHw, 0x00000000u},
+    {"history", "HISTORY_SKEW", "COUNT", 0, 32, 0xFFFFFFFFu, Access::kRoHw, 0x00000000u},
+    {"history", "HISTORY_FAULT", "ERROR_SEEN", 0, 1, 0x00000001u, Access::kW1c, 0x00000000u},
+    {"history", "HISTORY_FAULT", "COLLISION_SEEN", 1, 1, 0x00000002u, Access::kW1c, 0x00000000u},
+    {"history", "HISTORY_FAULT", "SKEW_SEEN", 2, 1, 0x00000004u, Access::kW1c, 0x00000000u},
+    {"history", "HISTORY_FAULT", "FRAMING_SEEN", 3, 1, 0x00000008u, Access::kW1c, 0x00000000u},
 };
 
 inline constexpr std::size_t kBlockTableSize = sizeof(kBlocks) / sizeof(kBlocks[0]);

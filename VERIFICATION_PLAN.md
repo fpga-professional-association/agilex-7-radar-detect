@@ -466,6 +466,66 @@ also makes the buffer depth independent of the window geometry; at the SPEC §11
 size `D` is 36, and a buffer sized to cover it would have been an M20K's worth of storage
 bought to solve an accounting problem.
 
+### 4.1.x Time-frequency history and corner turn (issue #15)
+
+`sim/tests/test_history.cpp` over `sim/verilator/tops/history_top.sv`. Nine passes, three
+geometries, five core:history clock ratios. Oracle:
+`model/cpp/history/history_model.hpp`.
+
+**Three geometries behind one port set**, selected by `dut_sel`, because the block's
+behaviour depends on its shape in ways one elaboration cannot exercise:
+
+| sel | antennas | bins | lanes | frames_max | bit-reversed | what it is for |
+|---|---|---|---|---|---|---|
+| 0 | 2 | 64 | 1 | 4 | no | the SPEC §11 tiny geometry, verbatim |
+| 1 | 2 | 64 | 2 | 4 | **yes** | more than one lane AND the bit-reversal absorption, together |
+| 2 | 4 | 32 | 1 | 8 | no | four antennas and a deeper rotation |
+
+Sharing the port set is what keeps the driver written once. A suffixed port group per
+geometry would triple the test code and make it possible for two geometries to be driven by
+two subtly different drivers — a way to pass a test the RTL should fail.
+
+**What is predicted exactly, and what is predicted by identity.** The read side works from a
+frame pointer published across a clock-domain crossing, so how many frames it can see at any
+instant is a function of the clock ratio and not of the stimulus. Predicting it would be
+predicting a latency, which SPEC §12.5 forbids. So:
+
+* passes 2, 4, 5, 6 and 7 **quiesce** — writes stop, the pointer settles — and after that the
+  model predicts every returned sample, every flag, every metadata field, the occupancy, the
+  readable bound and all six counters;
+* pass 8 does not quiesce, and checks instead that every response's antenna vector matches
+  the frame *its own metadata claims it came from*, by feeding `(frame_id, bin)` back into
+  the pure stimulus generator. A wrong bank, a wrong slot, a wrong lane or a stale pointer
+  all land as a mismatch; the frame the pointer happens to be on is not predicted.
+
+| Pass | What it does | What would fail it |
+|---|---|---|
+| 1 geometry | the RTL's `geo_*` echo against the C++ `hist::Config` table, and the address round trip `stored_bin -> (lane_of_bin, beat_of_bin)` proved a bijection over every bin of every geometry, before any stimulus | a model configured for a different DUT; a mapping that is not one-to-one, which would silently alias two bins |
+| 2 exact | write `2 × FRAMES_MAX + 3` frames, quiesce, then read EVERY bin at EVERY readable offset | any wrong value, flag, metadata field or counter, over more than two full rotations |
+| 3 ratio sweep | pass 2 again at `1:1` in phase, `1:1` offset, **9:8**, **8:9** and `100:99` drift | a pointer crossing that is safe only at a convenient ratio. 9:8 is the SPEC §8 pair (450 / 400 MHz) and its inverse — the ratios closest to, but not equal to, one, where a crossing is least likely to be accidentally safe |
+| 4 overwrite | depth programmed to 3 — the shallowest that leaves anything readable — then twelve frames | an off-by-one in the readable bound; an overwrite count that is not exactly `frames_done − depth`; offset 0 not serving the newest complete frame |
+| 5 depth change | request a change MID-FRAME, check it reports pending and does not land; finish the frame, check it lands, bumps the epoch and discards the history; refill and re-read exactly | a change applied mid-frame, which would remap every slot under a half-written frame; an epoch that moves early; a history that survives a remap it cannot survive |
+| 6 random | three independent seeded streams of random bins and offsets, one in eight deliberately out of range (including bins past `FFT_SIZE`), with bursty backpressure and randomized write gaps | a clamp that clamps wrong; an error counter that misses a case; anything the directed passes did not reach |
+| 7 collision | out-of-range offsets first WITH the clamp (collision count must stay zero, error count must move) and then with `FORCE_UNSAFE` set (collision count must move) | a clamp that lets a request through; and, in the other direction, a collision counter that cannot be made to fire at all — which is the failure mode of every counter nobody has tested |
+| 8 concurrent | full-rate writes with no gaps, three full rotations, reads in flight throughout, at both 9:8 and 8:9 | a response whose vector does not belong to the frame it claims; a lost, duplicated or reordered response (the block's own sequence number must advance by exactly one every time); a framing, skew or collision fault on well-formed traffic |
+| 9 backpressure | the same request sequence at `none`, `light`, `heavy` and `bursty` | a byte of difference between the four response sequences. Backpressure may change WHEN a response appears; it must never change WHAT it is |
+
+**Proof that the test can fail (SPEC §13, the same discipline as §5.2 and §5.6).** The read
+bank-select was changed from the high bits of the bin index to the low bits — a one-line
+edit, and the single most plausible way to get a corner turn wrong. The `LANES = 2` geometry
+produced a wall of `data` mismatches within one second of simulation, each naming the bin,
+the frame, the antenna, the value received and the value expected. The edit was reverted and
+the suite passes on seeds 1, 2 and 3.
+
+**Runtime.** 1.6 s per seed in the fast build, which is the whole nine-pass suite across all
+three geometries and all five ratios.
+
+**Not covered here, deliberately.** The block's behaviour when the FFT actually drives it —
+that is issue #17's medium-pipeline integration, and it is where `REORDER = 0` upstream meets
+`INPUT_BIT_REVERSED = 1` here for the first time in one elaboration. The register window's
+own behaviour is covered by `test_control_regs`, which walks the generated tables and
+therefore picked the new window up automatically.
+
 ### 4.2 Metamorphic tests (SPEC §13.2)
 
 Populated progressively by issues #10–#14; #10 and #12 have landed.
@@ -972,6 +1032,39 @@ a design intent.
 | `a_cfar_mask_count` | `cfar_window` (inline) — the reference masks selecting a different number of cells from the one the register plane asked for. Fires on EVERY cycle a guard-index off-by-one is present, not only on the cycles where the wrong cell happened to matter (§4.1, variant A) |
 | `a_cfar_bands_disjoint` | `cfar_window` (inline) — the two reference bands overlapping each other, or either of them containing the cell under test. A guard count of zero must still keep the cell out of its own reference window |
 | `a_cfar_guards_valid` | `cfar_window` (inline) — the claim that lets the guard cells go unchecked: whenever both reference bands are complete, every slot between the outermost reference cells is valid too |
+
+### 5.15 History / corner-turn assertion set (SPEC §14, issue #15)
+
+Two checkers, `sim/assertions/history_wr_assertions.sv` in `core_clk` and
+`history_rd_assertions.sv` in `history_clk`, both instantiated by
+`rtl/memory/history_core.sv` under `` `ifndef SYNTHESIS`` rather than bound from a test — so
+the contract holds in the unit-test top, in a future pipeline integration, and in the Quartus
+calibration wrapper that no testbench ever drives.
+
+**Two checkers rather than one.** `scripts/cdc_inventory.py --strict` reports any
+instantiated module with two clock-like ports and no `(* cdc_primitive *)` attribute, which
+is the correct default; a checker straddling both domains would trip it, and tagging the
+checker would put a crossing in the SPEC §8 inventory that does not exist in the hardware. An
+inventory with an imaginary entry is worse than one with a missing entry.
+
+| Assertion | Fires on |
+|---|---|
+| `a_history_occupancy_exact` | occupancy differing from `min(frames_done, depth)` on any cycle. Fails if the frame barrier ever published a frame an antenna had not finished, or if a saturation was written `>=` where it should be `>` |
+| `a_history_readable_exact` | the readable bound differing from `min(frames_done, depth − 2)` |
+| `a_history_readable_leaves_two_slots` | a readable set that does not leave two slots — one for the frame being written, one to absorb a frame of publication lag. A `depth − 1` bound is a real defect and one the collision counter *cannot see*, which is exactly why it is asserted rather than tested |
+| `a_history_depth_in_range` | an active depth of zero |
+| `a_history_apply_at_boundary` | SPEC §14's "bank changes outside safe boundaries": a depth change landing while any antenna is mid-frame. The change remaps every slot, so it may only happen between frames |
+| `a_history_no_write_across_apply` | a write landing in the cycle after a depth change, i.e. a beat addressed by the old mapping arriving under the new one |
+| `a_history_frames_done_step` | the frame counter jumping by more than one, or moving backwards other than on a depth change |
+| `a_history_no_safe_collision` | SPEC §14's "illegal simultaneous read/write states": an in-range request addressing the slot being written, outside fault injection. **This is the assertion that licenses `no_rw_check` on every M20K in the subsystem** — without it the design would be relying on a read-during-write behaviour the memory does not define |
+| `a_history_lane_onehot0` | more than one lane's banks read-enabled at once. The read half of SPEC §7.3's ban on a globally broadcast enable network: impossible to satisfy if one enable drives every lane |
+| `a_history_lane_en_tracks_pipe` | a read enable without a request in flight, or a request in flight with no enable |
+| `a_history_all_antennas_answer` | SPEC §14's "memory response without a request", in the form a corner turn needs it: a response formed while fewer than all `N_ANT` banks answered. A vector missing one antenna is exactly the failure SPEC §7.4 exists to prevent, and it is invisible in the output values |
+| `a_history_out_never_blocked` | SPEC §14's "FIFO overflow": the output FIFO refusing a push, i.e. the credit reservation of `history_core` §8 being over-committed |
+| `a_history_publication_fresh` | the published frame pointer falling more than one frame behind the write domain — the margin the readable bound is *sized against*. A deliberate simulation-only cross-domain probe, and it is here rather than in the C++ test because a configuration that broke it would break it as unexplained corruption at maximum frame offset, which is the least diagnosable failure this block has |
+| `c_history_write_enables_differ` | (cover) a cycle in which some antennas are writing and others are not — impossible if one enable drives every bank. The write half of SPEC §7.3's ban on a broadcast enable network, checked as the consequence rather than as the net |
+| `c_history_request_in_range`, `c_history_request_out_of_range` | (cover) both branches of the range check, so the error counter is proved reachable rather than merely present |
+| `c_history_forced_collision` | (cover) a request that reaches the in-flight slot under `FORCE_UNSAFE`. The collision counter is unreachable by construction in correct operation, so this cover is the only evidence that it can fire at all |
 
 ## 6. Coverage strategy
 

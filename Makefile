@@ -187,6 +187,13 @@ CDC_INVENTORY_PFB_JSON ?= $(RESULTS_DIR)/cdc_inventory_pfb.json
 # wrappers rather than one.
 CDC_INVENTORY_BF_JSON ?= $(RESULTS_DIR)/cdc_inventory_beamformer.json
 
+# And the history build gets its own (issue #15). This is the first inventory
+# over a DESIGN block whose two domains are the block's own named clocks --
+# core_clk and history_clk -- rather than a configuration-to-core seam, so
+# running --strict over it is what proves the corner turn's crossings are
+# declared rather than merely present.
+CDC_INVENTORY_HISTORY_JSON ?= $(RESULTS_DIR)/cdc_inventory_history.json
+
 # --- register/control plane (issue #7, SPEC 9 / 13.1 / 14) -----------------
 # A fourth self-contained build, for the reason the others have one: a failure
 # in it is unambiguously a control-plane failure. control_top holds the whole of
@@ -417,6 +424,33 @@ CFAR_FILES    := sim/verilator/files_cfar.f
 CFAR_TEST     := test_cfar
 CFAR_BIN       = sim/verilator/build/fast_tiny_$(CFAR_TOP)/V$(CFAR_TOP)_$(CFAR_TEST)
 
+# --- banked history / corner turn (issue #15, SPEC 7.3 / 8 / 13.1 / 14) -----
+# A tenth self-contained build, for the reason the others have one: a failure in
+# it is unambiguously a failure of the history store or of its corner turn.
+# history_top holds three elaborations of rtl/memory/history_core.sv with their
+# two clock domains real -- the write side in core_clk, the read side in
+# history_clk -- so the corner turn is exercised as an actual crossing rather
+# than as a single-clock model of one. It is the first DESIGN block here whose
+# two domains are named clocks of the block itself rather than a configuration
+# seam, which is why it gets an inventory of its own below.
+#
+#   test_history  nine passes: the geometry echo, the quiesced exact pass that
+#                 reads every bin at every readable offset bit-for-bit against
+#                 model/cpp/history/history_model.hpp (values, flags, metadata
+#                 and all six counters), that pass again across five core:history
+#                 clock ratios including 9:8 and 8:9, overwrite and occupancy
+#                 through several full rotations of a shallow ring, a depth
+#                 change requested mid-frame that must wait for the boundary and
+#                 bump the epoch, random in-range and out-of-range requests,
+#                 fault injection that proves the collision counter reachable,
+#                 concurrent full-rate writes with reads in flight checked by
+#                 SPEC 12.5 transaction identity, and four backpressure profiles
+#                 required to produce a byte-identical response sequence.
+HISTORY_TOP   := history_top
+HISTORY_FILES := sim/verilator/files_history.f
+HISTORY_TEST  := test_history
+HISTORY_BIN    = sim/verilator/build/fast_tiny_$(HISTORY_TOP)/V$(HISTORY_TOP)_$(HISTORY_TEST)
+
 ifeq ($(HOST_KIND),windows)
   QUARTUS_SH ?= C:/altera_pro/26.1/quartus/bin64/quartus_sh.exe
 else
@@ -465,44 +499,47 @@ define LINT_RECIPE
 	    '$(CONFIG)' 'sim/verilator/lint_waivers.vlt'
 	$(REGMAP_CHECK_RECIPE)
 	$(FFT_TWIDDLE_CHECK_RECIPE)
-	@printf '[lint] 1/13 %s\n' 'benchmark_sim_top'
+	@printf '[lint] 1/14 %s\n' 'benchmark_sim_top'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) --test $(TEST)
-	@printf '[lint] 2/13 %s\n' '$(STREAM_TOP)'
+	@printf '[lint] 2/14 %s\n' '$(STREAM_TOP)'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
 	    --top $(STREAM_TOP) --files $(STREAM_FILES) --test $(STREAM_TEST)
-	@printf '[lint] 3/13 %s\n' '$(VIOL_TOP)'
+	@printf '[lint] 3/14 %s\n' '$(VIOL_TOP)'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
 	    --top $(VIOL_TOP) --files $(VIOL_FILES) --test $(VIOL_TEST)
-	@printf '[lint] 4/13 %s\n' '$(CONTROL_TOP)'
+	@printf '[lint] 4/14 %s\n' '$(CONTROL_TOP)'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
 	    --top $(CONTROL_TOP) --files $(CONTROL_FILES) --test $(CONTROL_TEST)
-	@printf '[lint] 5/13 %s\n' '$(CDC_TOP)'
+	@printf '[lint] 5/14 %s\n' '$(CDC_TOP)'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
 	    --top $(CDC_TOP) --files $(CDC_FILES) --test $(firstword $(CDC_TESTS))
-	@printf '[lint] 6/13 %s\n' '$(CDCV_TOP)'
+	@printf '[lint] 6/14 %s\n' '$(CDCV_TOP)'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
 	    --top $(CDCV_TOP) --files $(CDCV_FILES) --test $(CDCV_TEST)
-	@printf '[lint] 7/13 %s\n' '$(TELEM_TOP)'
+	@printf '[lint] 7/14 %s\n' '$(TELEM_TOP)'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
 	    --top $(TELEM_TOP) --files $(TELEM_FILES) --test $(firstword $(TELEM_TESTS))
-	@printf '[lint] 8/13 %s\n' '$(CMULT_TOP)'
+	@printf '[lint] 8/14 %s\n' '$(CMULT_TOP)'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
 	    --top $(CMULT_TOP) --files $(CMULT_FILES) --test $(CMULT_TEST)
-	@printf '[lint] 9/13 %s\n' '$(PFB_TOP)'
+	@printf '[lint] 9/14 %s\n' '$(PFB_TOP)'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
 	    --top $(PFB_TOP) --files $(PFB_FILES) --test $(PFB_TEST)
-	@printf '[lint] 10/13 %s\n' '$(FFT_TOP)'
+	@printf '[lint] 10/14 %s\n' '$(FFT_TOP)'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
 	    --top $(FFT_TOP) --files $(FFT_FILES) --test $(FFT_TEST)
-	@printf '[lint] 11/13 %s\n' '$(COVAR_TOP)'
+	@printf '[lint] 11/14 %s\n' '$(COVAR_TOP)'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
 	    --top $(COVAR_TOP) --files $(COVAR_FILES) --test $(COVAR_TEST)
-	@printf '[lint] 12/13 %s\n' '$(BF_TOP)'
+	@printf '[lint] 12/14 %s\n' '$(BF_TOP)'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
 	    --top $(BF_TOP) --files $(BF_FILES) --test $(BF_TEST)
-	@printf '[lint] 13/13 %s\n' '$(CFAR_TOP)'
+	@printf '[lint] 13/14 %s\n' '$(CFAR_TOP)'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
 	    --top $(CFAR_TOP) --files $(CFAR_FILES) --test $(CFAR_TEST)
+	@printf '[lint] 14/14 %s\n' '$(HISTORY_TOP)'
+	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
+	    --top $(HISTORY_TOP) --files $(HISTORY_FILES) --test $(HISTORY_TEST)
 endef
 
 # `sim-tiny`: SPEC 12.1 fast build of every simulation top, then every test
@@ -571,6 +608,17 @@ endef
 #                            identical event sequences, and the fault paths.
 #                            Every detection event is compared field for field
 #                            against model/cpp/cfar/.
+#   test_history             history_top — the SPEC 7.3 banked history and corner
+#                            turn. Three elaborations in one build, each with a
+#                            real core_clk/history_clk pair, driven through the
+#                            quiesced exact pass at five clock ratios, ring
+#                            overwrite, a mid-frame depth change, random in- and
+#                            out-of-range requests, collision fault injection,
+#                            concurrent writes and reads checked by SPEC 12.5
+#                            transaction identity, and four backpressure
+#                            profiles required to produce a byte-identical
+#                            response sequence. Compared against
+#                            model/cpp/history/.
 define SIM_TINY_RECIPE
 	$(REGMAP_CHECK_RECIPE)
 	$(BUILD_VERILATOR) --mode fast --config tiny --jobs $(JOBS) --test $(TEST)
@@ -602,11 +650,13 @@ define SIM_TINY_RECIPE
 	    --top $(BF_TOP) --files $(BF_FILES) --test $(BF_TEST)
 	$(BUILD_VERILATOR) --mode fast --config tiny --jobs $(JOBS) \
 	    --top $(CFAR_TOP) --files $(CFAR_FILES) --test $(CFAR_TEST)
+	$(BUILD_VERILATOR) --mode fast --config tiny --jobs $(JOBS) \
+	    --top $(HISTORY_TOP) --files $(HISTORY_FILES) --test $(HISTORY_TEST)
 	@printf '[sim-tiny] seeds: %s\n' '$(SEEDS)'
-	@printf '[sim-tiny] tests: %s %s %s %s %s %s %s %s %s %s %s %s %s\n' '$(TEST)' '$(STREAM_TEST)' \
+	@printf '[sim-tiny] tests: %s %s %s %s %s %s %s %s %s %s %s %s %s %s\n' '$(TEST)' '$(STREAM_TEST)' \
 	    '$(VIOL_TEST)' '$(CONTROL_TEST)' '$(CDC_TESTS)' '$(CDCV_TEST)' \
 	    '$(TELEM_TESTS)' '$(CMULT_TEST)' '$(PFB_TEST)' '$(FFT_TEST)' '$(COVAR_TEST)' \
-	    '$(BF_TEST)' '$(CFAR_TEST)'
+	    '$(BF_TEST)' '$(CFAR_TEST)' '$(HISTORY_TEST)'
 	@rc=0; for s in $(SEEDS); do \
 	    printf '\n[sim-tiny] ===== seed %s : %s =====\n' "$$s" '$(TEST)'; \
 	    ./$(SIM_TINY_BIN) +seed=$$s +results=$(RESULTS_DIR) || rc=1; \
@@ -640,6 +690,8 @@ define SIM_TINY_RECIPE
 	    ./$(BF_BIN) +seed=$$s +results=$(RESULTS_DIR) || rc=1; \
 	    printf '\n[sim-tiny] ===== seed %s : %s =====\n' "$$s" '$(CFAR_TEST)'; \
 	    ./$(CFAR_BIN) +seed=$$s +results=$(RESULTS_DIR) || rc=1; \
+	    printf '\n[sim-tiny] ===== seed %s : %s =====\n' "$$s" '$(HISTORY_TEST)'; \
+	    ./$(HISTORY_BIN) +seed=$$s +results=$(RESULTS_DIR) || rc=1; \
 	  done; \
 	  if [ $$rc -ne 0 ]; then \
 	    printf '\n[sim-tiny] FAILED (seeds: %s)\n' '$(SEEDS)' 1>&2; exit 1; \
@@ -762,6 +814,19 @@ endef
 # module with two or more clock ports that carries no (* cdc_primitive *)
 # attribute — fails the target. That is what keeps the inventory complete as the
 # design grows, rather than complete on the day it was written.
+#
+# The fourth stanza (issue #15) is the first inventory over a DESIGN block whose
+# two domains are the block's own clocks — core_clk and history_clk — rather
+# than a configuration-to-core seam. It reports three crossings: a cdc_handshake
+# publishing the frame pointer core -> history, a cdc_pulse carrying the counter
+# clear core -> history, and a cdc_handshake returning the read-side counters
+# history -> core. The dual-clock memory banks appear alongside them, tagged
+# `history_bank_sdp` with cdc_stages = "0", because the bank contains no
+# synchroniser at all: the safety comes from the tagged pointer crossing, which
+# is what makes a word readable only after the frame containing it is complete.
+# The zero is the honest value and declaring it is the point — an untagged
+# dual-clock memory would fail --strict, and a fictitious stage count would
+# claim protection the RTL does not have.
 define CDC_INVENTORY_RECIPE
 	@printf '[cdc-inventory] SPEC 8 crossing report for top=%s -> %s\n' \
 	    '$(CDC_TOP)' '$(CDC_INVENTORY_JSON)'
@@ -782,6 +847,12 @@ define CDC_INVENTORY_RECIPE
 	    --top $(BF_TOP) --files $(BF_FILES) --test $(BF_TEST) --quiet
 	$(PYTHON) scripts/cdc_inventory.py --top $(BF_TOP) --files $(BF_FILES) \
 	    --out $(CDC_INVENTORY_BF_JSON) --print --strict
+	@printf '[cdc-inventory] SPEC 8 crossing report for top=%s -> %s\n' \
+	    '$(HISTORY_TOP)' '$(CDC_INVENTORY_HISTORY_JSON)'
+	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
+	    --top $(HISTORY_TOP) --files $(HISTORY_FILES) --test $(HISTORY_TEST) --quiet
+	$(PYTHON) scripts/cdc_inventory.py --top $(HISTORY_TOP) --files $(HISTORY_FILES) \
+	    --out $(CDC_INVENTORY_HISTORY_JSON) --print --strict
 endef
 
 # Remaining simulation entry points. The Verilator flow itself exists as of
@@ -910,6 +981,7 @@ help:
 	@printf '%-18s %-9s %s\n' 'calibrate-pfb8'   'windows' 'SPEC 18 eight-lane polyphase-bank sweep'
 	@printf '%-18s %-9s %s\n' 'calibrate-fft'    'windows' 'SPEC 18 FFT stage + full-FFT sweep (~1 h of Fitter)'
 	@printf '%-18s %-9s %s\n' 'calibrate-beamformer' 'windows' 'SPEC 18 beamforming dot-product + matrix-slice sweep'
+	@printf '%-18s %-9s %s\n' 'calibrate-history' 'windows' 'SPEC 18 M20K history-bank + corner-turn sweep'
 	@printf '%-18s %-9s %s\n' 'calibrate-summary' 'local'  'rebuild the calibration JSON/table from evidence on disk (KERNEL=<name>)'
 	@printf '\n'
 	@printf '%-18s %-9s %s\n' 'seed-sweep'       'windows' 'TODO(issue #23) ten-seed robustness sweep'
@@ -1186,6 +1258,39 @@ calibrate-beamformer:
 	$(RUN_CALIBRATION) --kernel bf_matrix --seed $(SEED) --jobs $(CALIB_JOBS) \
 	    --quartus-bin '$(QUARTUS_BIN)' $(CALIB_ARGS)
 
+# `calibrate-history` (issue #15): SPEC 18 item 8 — "one M20K history bank".
+# Two projects rather than one, for the reason calibrate-fft and
+# calibrate-beamformer give: history_bank_wrap prices the STORAGE ATOM (one
+# simple dual-port bank, so the M20K count, the aspect ratio Quartus actually
+# infers and the read latency it needs to hit the probe constraint are measured
+# rather than assumed), and history_core_wrap prices the BLOCK (the full bank
+# array with its write plane, its corner-turn read path and the core_clk/
+# history_clk crossing), so the difference between them is the corner turn's
+# fixed cost measured rather than argued.
+#
+# This is THE memory-geometry experiment of the project. SPEC 7.3's history
+# depth is the parameter with the largest M20K consequence in the design, and
+# the number history_bank_wrap reports times the bank count is what issue #20's
+# parameter freeze has to be planned around — the memory counterpart of what
+# calibrate-beamformer is for DSPs.
+#
+# Windows side only, and deliberately not a prerequisite of any simulation
+# target, for the reasons calibrate-cmult gives. The same CALIB_JOBS warning
+# applies and is worth repeating: one Fitter run of these projects peaks near
+# 20 GB of virtual memory on this host, so CALIB_JOBS=1 is the default and
+# raising it on a 32 GB machine will thrash.
+calibrate-history:
+	$(QUARTUS_CHECK)
+	$(PYTHON_CHECK)
+	@printf '[calibrate] SPEC 18 sweep: kernel=history_bank seed=%s jobs=%s\n' \
+	    '$(SEED)' '$(CALIB_JOBS)'
+	$(RUN_CALIBRATION) --kernel history_bank --seed $(SEED) --jobs $(CALIB_JOBS) \
+	    --quartus-bin '$(QUARTUS_BIN)' $(CALIB_ARGS)
+	@printf '[calibrate] SPEC 18 sweep: kernel=history_core seed=%s jobs=%s\n' \
+	    '$(SEED)' '$(CALIB_JOBS)'
+	$(RUN_CALIBRATION) --kernel history_core --seed $(SEED) --jobs $(CALIB_JOBS) \
+	    --quartus-bin '$(QUARTUS_BIN)' $(CALIB_ARGS)
+
 # KERNEL selects which sweep to rebuild; default cmult, e.g. KERNEL=fft_core.
 CALIB_KERNEL ?= cmult
 
@@ -1210,6 +1315,7 @@ reproduce-final:
         lint numerics-check regmap-check fft-check cdc-inventory \
         sim-tiny sim-medium sim-random sim-stress sim-coverage sim-full-smoke \
         coeff-check calibrate-fir calibrate-pfb8 calibrate-beamformer \
+        calibrate-history \
         quartus-map quartus-fit quartus-sta quartus-report quartus-compile \
         calibrate-cmult calibrate-fft calibrate-summary \
         seed-sweep compare-baseline reproduce-final
