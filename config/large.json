@@ -16,7 +16,9 @@
     "N_BEAMS",
     "HISTORY_FRAMES",
     "PACKET_W",
-    "N_COVAR_PAIRS"
+    "N_COVAR_PAIRS",
+    "CFAR_MAX_GUARD",
+    "CFAR_MAX_REF"
   ],
   "invariant_params": [
     "SAMPLE_W",
@@ -36,6 +38,8 @@
     "SAMPLE_W": 16,
     "COEFF_W": 16,
     "POWER_W": 40,
-    "N_VIRTUAL_CHANS": 4
+    "N_VIRTUAL_CHANS": 4,
+    "CFAR_MAX_GUARD": 3,
+    "CFAR_MAX_REF": 16
   }
 }

@@ -25,11 +25,11 @@ inline constexpr unsigned kStrobeWidth = 4;
 inline constexpr std::uint32_t kWindowBytes = 0x1000u;
 inline constexpr std::uint32_t kAddrMask = 0xFFFFu;
 inline constexpr unsigned kBlockCount = 10;
-inline constexpr unsigned kBlockCountImplemented = 8;
-inline constexpr unsigned kRegisterCount = 66;
-inline constexpr std::uint32_t kBlockMask = 0x000002BFu;
+inline constexpr unsigned kBlockCountImplemented = 9;
+inline constexpr unsigned kRegisterCount = 75;
+inline constexpr std::uint32_t kBlockMask = 0x000002FFu;
 inline constexpr unsigned kVersionMajor = 1;
-inline constexpr unsigned kVersionMinor = 4;
+inline constexpr unsigned kVersionMinor = 5;
 inline constexpr unsigned kVersionPatch = 0;
 
 // Per-bit access classification, matching rtl/control/reg_csr_block.sv.
@@ -78,7 +78,7 @@ inline constexpr unsigned ID_MAGIC_MAGIC_LSB = 0;
 inline constexpr unsigned ID_MAGIC_MAGIC_WIDTH = 32;
 inline constexpr std::uint32_t ID_MAGIC_MAGIC_MASK = 0xFFFFFFFFu;
 inline constexpr std::uint32_t ID_VERSION_ADDR = 0x0004u;
-inline constexpr std::uint32_t ID_VERSION_RESET = 0x01040001u;
+inline constexpr std::uint32_t ID_VERSION_RESET = 0x01050001u;
 inline constexpr unsigned ID_VERSION_MAJOR_LSB = 24;
 inline constexpr unsigned ID_VERSION_MAJOR_WIDTH = 8;
 inline constexpr std::uint32_t ID_VERSION_MAJOR_MASK = 0xFF000000u;
@@ -92,7 +92,7 @@ inline constexpr unsigned ID_VERSION_SCHEMA_LSB = 0;
 inline constexpr unsigned ID_VERSION_SCHEMA_WIDTH = 8;
 inline constexpr std::uint32_t ID_VERSION_SCHEMA_MASK = 0x000000FFu;
 inline constexpr std::uint32_t ID_GEOMETRY_ADDR = 0x0008u;
-inline constexpr std::uint32_t ID_GEOMETRY_RESET = 0x1020420Au;
+inline constexpr std::uint32_t ID_GEOMETRY_RESET = 0x10204B0Au;
 inline constexpr unsigned ID_GEOMETRY_N_BLOCKS_LSB = 0;
 inline constexpr unsigned ID_GEOMETRY_N_BLOCKS_WIDTH = 8;
 inline constexpr std::uint32_t ID_GEOMETRY_N_BLOCKS_MASK = 0x000000FFu;
@@ -106,7 +106,7 @@ inline constexpr unsigned ID_GEOMETRY_ADDR_W_LSB = 24;
 inline constexpr unsigned ID_GEOMETRY_ADDR_W_WIDTH = 8;
 inline constexpr std::uint32_t ID_GEOMETRY_ADDR_W_MASK = 0xFF000000u;
 inline constexpr std::uint32_t ID_CAPABILITY_ADDR = 0x000Cu;
-inline constexpr std::uint32_t ID_CAPABILITY_RESET = 0x000002BFu;
+inline constexpr std::uint32_t ID_CAPABILITY_RESET = 0x000002FFu;
 inline constexpr unsigned ID_CAPABILITY_BLOCK_MASK_LSB = 0;
 inline constexpr unsigned ID_CAPABILITY_BLOCK_MASK_WIDTH = 32;
 inline constexpr std::uint32_t ID_CAPABILITY_BLOCK_MASK_MASK = 0xFFFFFFFFu;
@@ -467,6 +467,105 @@ inline constexpr unsigned COEFF_WEIGHT_THROUGHPUT_BEAM_BINS_PER_CYCLE_LSB = 8;
 inline constexpr unsigned COEFF_WEIGHT_THROUGHPUT_BEAM_BINS_PER_CYCLE_WIDTH = 16;
 inline constexpr std::uint32_t COEFF_WEIGHT_THROUGHPUT_BEAM_BINS_PER_CYCLE_MASK = 0x00FFFF00u;
 
+// cfar: Settings for the SPEC 7.
+inline constexpr std::uint32_t CFAR_BASE = 0x6000u;
+inline constexpr std::uint32_t CFAR_CFAR_CTRL_ADDR = 0x6000u;
+inline constexpr std::uint32_t CFAR_CFAR_CTRL_RESET = 0x00000000u;
+inline constexpr unsigned CFAR_CFAR_CTRL_ENABLE_LSB = 0;
+inline constexpr unsigned CFAR_CFAR_CTRL_ENABLE_WIDTH = 1;
+inline constexpr std::uint32_t CFAR_CFAR_CTRL_ENABLE_MASK = 0x00000001u;
+inline constexpr unsigned CFAR_CFAR_CTRL_MODE_LSB = 4;
+inline constexpr unsigned CFAR_CFAR_CTRL_MODE_WIDTH = 2;
+inline constexpr std::uint32_t CFAR_CFAR_CTRL_MODE_MASK = 0x00000030u;
+inline constexpr unsigned CFAR_CFAR_CTRL_OUT_MODE_LSB = 8;
+inline constexpr unsigned CFAR_CFAR_CTRL_OUT_MODE_WIDTH = 1;
+inline constexpr std::uint32_t CFAR_CFAR_CTRL_OUT_MODE_MASK = 0x00000100u;
+inline constexpr unsigned CFAR_CFAR_CTRL_STATUS_CLEAR_LSB = 16;
+inline constexpr unsigned CFAR_CFAR_CTRL_STATUS_CLEAR_WIDTH = 1;
+inline constexpr std::uint32_t CFAR_CFAR_CTRL_STATUS_CLEAR_MASK = 0x00010000u;
+inline constexpr std::uint32_t CFAR_CFAR_WINDOW_ADDR = 0x6004u;
+inline constexpr std::uint32_t CFAR_CFAR_WINDOW_RESET = 0x08080202u;
+inline constexpr unsigned CFAR_CFAR_WINDOW_GUARD_LEAD_LSB = 0;
+inline constexpr unsigned CFAR_CFAR_WINDOW_GUARD_LEAD_WIDTH = 5;
+inline constexpr std::uint32_t CFAR_CFAR_WINDOW_GUARD_LEAD_MASK = 0x0000001Fu;
+inline constexpr unsigned CFAR_CFAR_WINDOW_GUARD_LAG_LSB = 8;
+inline constexpr unsigned CFAR_CFAR_WINDOW_GUARD_LAG_WIDTH = 5;
+inline constexpr std::uint32_t CFAR_CFAR_WINDOW_GUARD_LAG_MASK = 0x00001F00u;
+inline constexpr unsigned CFAR_CFAR_WINDOW_REF_LEAD_LSB = 16;
+inline constexpr unsigned CFAR_CFAR_WINDOW_REF_LEAD_WIDTH = 6;
+inline constexpr std::uint32_t CFAR_CFAR_WINDOW_REF_LEAD_MASK = 0x003F0000u;
+inline constexpr unsigned CFAR_CFAR_WINDOW_REF_LAG_LSB = 24;
+inline constexpr unsigned CFAR_CFAR_WINDOW_REF_LAG_WIDTH = 6;
+inline constexpr std::uint32_t CFAR_CFAR_WINDOW_REF_LAG_MASK = 0x3F000000u;
+inline constexpr std::uint32_t CFAR_CFAR_THRESHOLD_ADDR = 0x6008u;
+inline constexpr std::uint32_t CFAR_CFAR_THRESHOLD_RESET = 0x00001400u;
+inline constexpr unsigned CFAR_CFAR_THRESHOLD_ALPHA_LSB = 0;
+inline constexpr unsigned CFAR_CFAR_THRESHOLD_ALPHA_WIDTH = 16;
+inline constexpr std::uint32_t CFAR_CFAR_THRESHOLD_ALPHA_MASK = 0x0000FFFFu;
+inline constexpr std::uint32_t CFAR_CFAR_STATUS_ADDR = 0x600Cu;
+inline constexpr std::uint32_t CFAR_CFAR_STATUS_RESET = 0x00000000u;
+inline constexpr unsigned CFAR_CFAR_STATUS_MAX_GUARD_LSB = 0;
+inline constexpr unsigned CFAR_CFAR_STATUS_MAX_GUARD_WIDTH = 8;
+inline constexpr std::uint32_t CFAR_CFAR_STATUS_MAX_GUARD_MASK = 0x000000FFu;
+inline constexpr unsigned CFAR_CFAR_STATUS_MAX_REF_LSB = 8;
+inline constexpr unsigned CFAR_CFAR_STATUS_MAX_REF_WIDTH = 8;
+inline constexpr std::uint32_t CFAR_CFAR_STATUS_MAX_REF_MASK = 0x0000FF00u;
+inline constexpr unsigned CFAR_CFAR_STATUS_ALPHA_FRAC_W_LSB = 16;
+inline constexpr unsigned CFAR_CFAR_STATUS_ALPHA_FRAC_W_WIDTH = 8;
+inline constexpr std::uint32_t CFAR_CFAR_STATUS_ALPHA_FRAC_W_MASK = 0x00FF0000u;
+inline constexpr unsigned CFAR_CFAR_STATUS_CFG_PENDING_LSB = 24;
+inline constexpr unsigned CFAR_CFAR_STATUS_CFG_PENDING_WIDTH = 1;
+inline constexpr std::uint32_t CFAR_CFAR_STATUS_CFG_PENDING_MASK = 0x01000000u;
+inline constexpr unsigned CFAR_CFAR_STATUS_FRAME_OPEN_LSB = 25;
+inline constexpr unsigned CFAR_CFAR_STATUS_FRAME_OPEN_WIDTH = 1;
+inline constexpr std::uint32_t CFAR_CFAR_STATUS_FRAME_OPEN_MASK = 0x02000000u;
+inline constexpr std::uint32_t CFAR_CFAR_GEOMETRY_ADDR = 0x6010u;
+inline constexpr std::uint32_t CFAR_CFAR_GEOMETRY_RESET = 0x00000000u;
+inline constexpr unsigned CFAR_CFAR_GEOMETRY_EVENT_W_LSB = 0;
+inline constexpr unsigned CFAR_CFAR_GEOMETRY_EVENT_W_WIDTH = 16;
+inline constexpr std::uint32_t CFAR_CFAR_GEOMETRY_EVENT_W_MASK = 0x0000FFFFu;
+inline constexpr unsigned CFAR_CFAR_GEOMETRY_POWER_W_LSB = 16;
+inline constexpr unsigned CFAR_CFAR_GEOMETRY_POWER_W_WIDTH = 8;
+inline constexpr std::uint32_t CFAR_CFAR_GEOMETRY_POWER_W_MASK = 0x00FF0000u;
+inline constexpr unsigned CFAR_CFAR_GEOMETRY_SUM_W_LSB = 24;
+inline constexpr unsigned CFAR_CFAR_GEOMETRY_SUM_W_WIDTH = 8;
+inline constexpr std::uint32_t CFAR_CFAR_GEOMETRY_SUM_W_MASK = 0xFF000000u;
+inline constexpr std::uint32_t CFAR_CFAR_DET_COUNT_ADDR = 0x6014u;
+inline constexpr std::uint32_t CFAR_CFAR_DET_COUNT_RESET = 0x00000000u;
+inline constexpr unsigned CFAR_CFAR_DET_COUNT_VALUE_LSB = 0;
+inline constexpr unsigned CFAR_CFAR_DET_COUNT_VALUE_WIDTH = 32;
+inline constexpr std::uint32_t CFAR_CFAR_DET_COUNT_VALUE_MASK = 0xFFFFFFFFu;
+inline constexpr std::uint32_t CFAR_CFAR_SUP_COUNT_ADDR = 0x6018u;
+inline constexpr std::uint32_t CFAR_CFAR_SUP_COUNT_RESET = 0x00000000u;
+inline constexpr unsigned CFAR_CFAR_SUP_COUNT_VALUE_LSB = 0;
+inline constexpr unsigned CFAR_CFAR_SUP_COUNT_VALUE_WIDTH = 32;
+inline constexpr std::uint32_t CFAR_CFAR_SUP_COUNT_VALUE_MASK = 0xFFFFFFFFu;
+inline constexpr std::uint32_t CFAR_CFAR_FAULT_ADDR = 0x601Cu;
+inline constexpr std::uint32_t CFAR_CFAR_FAULT_RESET = 0x00000000u;
+inline constexpr unsigned CFAR_CFAR_FAULT_CFG_CLAMPED_LSB = 0;
+inline constexpr unsigned CFAR_CFAR_FAULT_CFG_CLAMPED_WIDTH = 1;
+inline constexpr std::uint32_t CFAR_CFAR_FAULT_CFG_CLAMPED_MASK = 0x00000001u;
+inline constexpr unsigned CFAR_CFAR_FAULT_NEG_INPUT_LSB = 1;
+inline constexpr unsigned CFAR_CFAR_FAULT_NEG_INPUT_WIDTH = 1;
+inline constexpr std::uint32_t CFAR_CFAR_FAULT_NEG_INPUT_MASK = 0x00000002u;
+inline constexpr unsigned CFAR_CFAR_FAULT_ORPHAN_BEAT_LSB = 2;
+inline constexpr unsigned CFAR_CFAR_FAULT_ORPHAN_BEAT_WIDTH = 1;
+inline constexpr std::uint32_t CFAR_CFAR_FAULT_ORPHAN_BEAT_MASK = 0x00000004u;
+inline constexpr unsigned CFAR_CFAR_FAULT_SOF_IN_FRAME_LSB = 3;
+inline constexpr unsigned CFAR_CFAR_FAULT_SOF_IN_FRAME_WIDTH = 1;
+inline constexpr std::uint32_t CFAR_CFAR_FAULT_SOF_IN_FRAME_MASK = 0x00000008u;
+inline constexpr unsigned CFAR_CFAR_FAULT_NO_REF_LSB = 4;
+inline constexpr unsigned CFAR_CFAR_FAULT_NO_REF_WIDTH = 1;
+inline constexpr std::uint32_t CFAR_CFAR_FAULT_NO_REF_MASK = 0x00000010u;
+inline constexpr unsigned CFAR_CFAR_FAULT_BIN_OVERFLOW_LSB = 5;
+inline constexpr unsigned CFAR_CFAR_FAULT_BIN_OVERFLOW_WIDTH = 1;
+inline constexpr std::uint32_t CFAR_CFAR_FAULT_BIN_OVERFLOW_MASK = 0x00000020u;
+inline constexpr std::uint32_t CFAR_CFAR_FRAME_COUNT_ADDR = 0x6020u;
+inline constexpr std::uint32_t CFAR_CFAR_FRAME_COUNT_RESET = 0x00000000u;
+inline constexpr unsigned CFAR_CFAR_FRAME_COUNT_VALUE_LSB = 0;
+inline constexpr unsigned CFAR_CFAR_FRAME_COUNT_VALUE_WIDTH = 32;
+inline constexpr std::uint32_t CFAR_CFAR_FRAME_COUNT_VALUE_MASK = 0xFFFFFFFFu;
+
 // counters: Performance and health telemetry for one observed interface (rtl/common/telemetry_block.
 inline constexpr std::uint32_t COUNTERS_BASE = 0x7000u;
 inline constexpr std::uint32_t COUNTERS_TELEM_CTRL_ADDR = 0x7000u;
@@ -719,8 +818,6 @@ inline constexpr unsigned COVAR_COVAR_SAT_COUNT_VALUE_WIDTH = 32;
 inline constexpr std::uint32_t COVAR_COVAR_SAT_COUNT_VALUE_MASK = 0xFFFFFFFFu;
 
 // ---- planned windows (declared, not implemented in this build) ----------
-// cfar 0x6000: planned by #14, #16. Accesses return error=1.
-inline constexpr std::uint32_t CFAR_BASE = 0x6000u;
 // debug 0x8000: planned by #19. Accesses return error=1.
 inline constexpr std::uint32_t DEBUG_BASE = 0x8000u;
 
@@ -732,17 +829,17 @@ inline constexpr BlockInfo kBlocks[10] = {
     {"fault", 0x3000u, 0x1000u, true, 4},
     {"scratch", 0x4000u, 0x1000u, true, 4},
     {"coeff", 0x5000u, 0x1000u, true, 10},
-    {"cfar", 0x6000u, 0x1000u, false, 0},
+    {"cfar", 0x6000u, 0x1000u, true, 9},
     {"counters", 0x7000u, 0x1000u, true, 21},
     {"debug", 0x8000u, 0x1000u, false, 0},
     {"covar", 0x9000u, 0x1000u, true, 7},
 };
 
-inline constexpr RegInfo kRegisters[66] = {
+inline constexpr RegInfo kRegisters[75] = {
     {"id", "MAGIC", 0x0000u, 0, 0, Access::kRo, 0x52414441u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u},
-    {"id", "VERSION", 0x0004u, 0, 1, Access::kRo, 0x01040001u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u},
-    {"id", "GEOMETRY", 0x0008u, 0, 2, Access::kRo, 0x1020420Au, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u},
-    {"id", "CAPABILITY", 0x000Cu, 0, 3, Access::kRo, 0x000002BFu, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u},
+    {"id", "VERSION", 0x0004u, 0, 1, Access::kRo, 0x01050001u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u},
+    {"id", "GEOMETRY", 0x0008u, 0, 2, Access::kRo, 0x10204B0Au, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u},
+    {"id", "CAPABILITY", 0x000Cu, 0, 3, Access::kRo, 0x000002FFu, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u},
     {"build_params", "N_ANTENNAS", 0x1000u, 1, 0, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
     {"build_params", "SAMPLES_PER_CYCLE", 0x1004u, 1, 1, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
     {"build_params", "FFT_SIZE", 0x1008u, 1, 2, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
@@ -777,47 +874,56 @@ inline constexpr RegInfo kRegisters[66] = {
     {"coeff", "WEIGHT_STATUS", 0x501Cu, 5, 7, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFF030Fu, 0x00000000u},
     {"coeff", "WEIGHT_PARALLELISM", 0x5020u, 5, 8, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
     {"coeff", "WEIGHT_THROUGHPUT", 0x5024u, 5, 9, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00FFFFFFu, 0x00000000u},
-    {"counters", "TELEM_CTRL", 0x7000u, 6, 0, Access::kMixed, 0x00000003u, 0x00000007u, 0x00000000u, 0x00000700u, 0x00000000u, 0x00000707u},
-    {"counters", "TELEM_STATUS", 0x7004u, 6, 1, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x0FFFFFFFu, 0x00000000u},
-    {"counters", "SNAPSHOT_ID", 0x7008u, 6, 2, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
-    {"counters", "BEAT_COUNT_LO", 0x700Cu, 6, 3, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
-    {"counters", "BEAT_COUNT_HI", 0x7010u, 6, 4, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
-    {"counters", "STALL_COUNT_LO", 0x7014u, 6, 5, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
-    {"counters", "STALL_COUNT_HI", 0x7018u, 6, 6, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
-    {"counters", "IDLE_COUNT", 0x701Cu, 6, 7, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
-    {"counters", "FRAME_COUNT", 0x7020u, 6, 8, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
-    {"counters", "FRAME_START_COUNT", 0x7024u, 6, 9, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
-    {"counters", "FIFO_HIGH_WATER", 0x7028u, 6, 10, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
-    {"counters", "OVERFLOW_COUNT", 0x702Cu, 6, 11, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
-    {"counters", "SATURATE_COUNT", 0x7030u, 6, 12, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
-    {"counters", "CDC_ERROR_COUNT", 0x7034u, 6, 13, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
-    {"counters", "SEQ_GAP_COUNT", 0x7038u, 6, 14, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
-    {"counters", "SEQ_DUP_COUNT", 0x703Cu, 6, 15, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
-    {"counters", "SEQ_REORDER_COUNT", 0x7040u, 6, 16, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
-    {"counters", "SEQ_LOST_BEATS", 0x7044u, 6, 17, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
-    {"counters", "SEQ_UNTRACKED_COUNT", 0x7048u, 6, 18, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
-    {"counters", "SEQ_STATUS", 0x704Cu, 6, 19, Access::kMixed, 0x00000000u, 0x00000000u, 0x0000000Fu, 0x00000000u, 0x00000F00u, 0x0000000Fu},
-    {"counters", "WRAP_STATUS", 0x7050u, 6, 20, Access::kW1c, 0x00000000u, 0x00000000u, 0x000001FFu, 0x00000000u, 0x00000000u, 0x000001FFu},
-    {"covar", "COVAR_CTRL", 0x9000u, 7, 0, Access::kMixed, 0x00000031u, 0x000000F3u, 0x00000000u, 0x00000300u, 0x00000000u, 0x000003F3u},
-    {"covar", "COVAR_WINDOW", 0x9004u, 7, 1, Access::kRw, 0x00000010u, 0x0000FFFFu, 0x00000000u, 0x00000000u, 0x00000000u, 0x0000FFFFu},
-    {"covar", "COVAR_PAIR_ENABLE", 0x9008u, 7, 2, Access::kRw, 0x00000001u, 0xFFFFFFFFu, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu},
-    {"covar", "COVAR_PAIR_TABLE", 0x900Cu, 7, 3, Access::kMixed, 0x00000000u, 0x00FFFFFFu, 0x00000000u, 0x01000000u, 0x00000000u, 0x01FFFFFFu},
-    {"covar", "COVAR_STATUS", 0x9010u, 7, 4, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
-    {"covar", "COVAR_SAT_STATUS", 0x9014u, 7, 5, Access::kW1c, 0x00000000u, 0x00000000u, 0x00000007u, 0x00000000u, 0x00000000u, 0x00000007u},
-    {"covar", "COVAR_SAT_COUNT", 0x9018u, 7, 6, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"cfar", "CFAR_CTRL", 0x6000u, 6, 0, Access::kMixed, 0x00000000u, 0x00000131u, 0x00000000u, 0x00010000u, 0x00000000u, 0x00010131u},
+    {"cfar", "CFAR_WINDOW", 0x6004u, 6, 1, Access::kRw, 0x08080202u, 0x3F3F1F1Fu, 0x00000000u, 0x00000000u, 0x00000000u, 0x3F3F1F1Fu},
+    {"cfar", "CFAR_THRESHOLD", 0x6008u, 6, 2, Access::kRw, 0x00001400u, 0x0000FFFFu, 0x00000000u, 0x00000000u, 0x00000000u, 0x0000FFFFu},
+    {"cfar", "CFAR_STATUS", 0x600Cu, 6, 3, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x03FFFFFFu, 0x00000000u},
+    {"cfar", "CFAR_GEOMETRY", 0x6010u, 6, 4, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"cfar", "CFAR_DET_COUNT", 0x6014u, 6, 5, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"cfar", "CFAR_SUP_COUNT", 0x6018u, 6, 6, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"cfar", "CFAR_FAULT", 0x601Cu, 6, 7, Access::kW1c, 0x00000000u, 0x00000000u, 0x0000003Fu, 0x00000000u, 0x00000000u, 0x0000003Fu},
+    {"cfar", "CFAR_FRAME_COUNT", 0x6020u, 6, 8, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"counters", "TELEM_CTRL", 0x7000u, 7, 0, Access::kMixed, 0x00000003u, 0x00000007u, 0x00000000u, 0x00000700u, 0x00000000u, 0x00000707u},
+    {"counters", "TELEM_STATUS", 0x7004u, 7, 1, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x0FFFFFFFu, 0x00000000u},
+    {"counters", "SNAPSHOT_ID", 0x7008u, 7, 2, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"counters", "BEAT_COUNT_LO", 0x700Cu, 7, 3, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"counters", "BEAT_COUNT_HI", 0x7010u, 7, 4, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"counters", "STALL_COUNT_LO", 0x7014u, 7, 5, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"counters", "STALL_COUNT_HI", 0x7018u, 7, 6, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"counters", "IDLE_COUNT", 0x701Cu, 7, 7, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"counters", "FRAME_COUNT", 0x7020u, 7, 8, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"counters", "FRAME_START_COUNT", 0x7024u, 7, 9, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"counters", "FIFO_HIGH_WATER", 0x7028u, 7, 10, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"counters", "OVERFLOW_COUNT", 0x702Cu, 7, 11, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"counters", "SATURATE_COUNT", 0x7030u, 7, 12, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"counters", "CDC_ERROR_COUNT", 0x7034u, 7, 13, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"counters", "SEQ_GAP_COUNT", 0x7038u, 7, 14, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"counters", "SEQ_DUP_COUNT", 0x703Cu, 7, 15, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"counters", "SEQ_REORDER_COUNT", 0x7040u, 7, 16, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"counters", "SEQ_LOST_BEATS", 0x7044u, 7, 17, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"counters", "SEQ_UNTRACKED_COUNT", 0x7048u, 7, 18, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"counters", "SEQ_STATUS", 0x704Cu, 7, 19, Access::kMixed, 0x00000000u, 0x00000000u, 0x0000000Fu, 0x00000000u, 0x00000F00u, 0x0000000Fu},
+    {"counters", "WRAP_STATUS", 0x7050u, 7, 20, Access::kW1c, 0x00000000u, 0x00000000u, 0x000001FFu, 0x00000000u, 0x00000000u, 0x000001FFu},
+    {"covar", "COVAR_CTRL", 0x9000u, 8, 0, Access::kMixed, 0x00000031u, 0x000000F3u, 0x00000000u, 0x00000300u, 0x00000000u, 0x000003F3u},
+    {"covar", "COVAR_WINDOW", 0x9004u, 8, 1, Access::kRw, 0x00000010u, 0x0000FFFFu, 0x00000000u, 0x00000000u, 0x00000000u, 0x0000FFFFu},
+    {"covar", "COVAR_PAIR_ENABLE", 0x9008u, 8, 2, Access::kRw, 0x00000001u, 0xFFFFFFFFu, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu},
+    {"covar", "COVAR_PAIR_TABLE", 0x900Cu, 8, 3, Access::kMixed, 0x00000000u, 0x00FFFFFFu, 0x00000000u, 0x01000000u, 0x00000000u, 0x01FFFFFFu},
+    {"covar", "COVAR_STATUS", 0x9010u, 8, 4, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"covar", "COVAR_SAT_STATUS", 0x9014u, 8, 5, Access::kW1c, 0x00000000u, 0x00000000u, 0x00000007u, 0x00000000u, 0x00000000u, 0x00000007u},
+    {"covar", "COVAR_SAT_COUNT", 0x9018u, 8, 6, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
 };
 
-inline constexpr FieldInfo kFields[164] = {
+inline constexpr FieldInfo kFields[190] = {
     {"id", "MAGIC", "MAGIC", 0, 32, 0xFFFFFFFFu, Access::kRo, 0x52414441u},
     {"id", "VERSION", "MAJOR", 24, 8, 0xFF000000u, Access::kRo, 0x00000001u},
-    {"id", "VERSION", "MINOR", 16, 8, 0x00FF0000u, Access::kRo, 0x00000004u},
+    {"id", "VERSION", "MINOR", 16, 8, 0x00FF0000u, Access::kRo, 0x00000005u},
     {"id", "VERSION", "PATCH", 8, 8, 0x0000FF00u, Access::kRo, 0x00000000u},
     {"id", "VERSION", "SCHEMA", 0, 8, 0x000000FFu, Access::kRo, 0x00000001u},
     {"id", "GEOMETRY", "N_BLOCKS", 0, 8, 0x000000FFu, Access::kRo, 0x0000000Au},
-    {"id", "GEOMETRY", "N_REGS", 8, 8, 0x0000FF00u, Access::kRo, 0x00000042u},
+    {"id", "GEOMETRY", "N_REGS", 8, 8, 0x0000FF00u, Access::kRo, 0x0000004Bu},
     {"id", "GEOMETRY", "DATA_W", 16, 8, 0x00FF0000u, Access::kRo, 0x00000020u},
     {"id", "GEOMETRY", "ADDR_W", 24, 8, 0xFF000000u, Access::kRo, 0x00000010u},
-    {"id", "CAPABILITY", "BLOCK_MASK", 0, 32, 0xFFFFFFFFu, Access::kRo, 0x000002BFu},
+    {"id", "CAPABILITY", "BLOCK_MASK", 0, 32, 0xFFFFFFFFu, Access::kRo, 0x000002FFu},
     {"build_params", "N_ANTENNAS", "VALUE", 0, 32, 0xFFFFFFFFu, Access::kRoHw, 0x00000000u},
     {"build_params", "SAMPLES_PER_CYCLE", "VALUE", 0, 32, 0xFFFFFFFFu, Access::kRoHw, 0x00000000u},
     {"build_params", "FFT_SIZE", "VALUE", 0, 32, 0xFFFFFFFFu, Access::kRoHw, 0x00000000u},
@@ -909,6 +1015,32 @@ inline constexpr FieldInfo kFields[164] = {
     {"coeff", "WEIGHT_PARALLELISM", "BEAM_PAR", 24, 8, 0xFF000000u, Access::kRoHw, 0x00000000u},
     {"coeff", "WEIGHT_THROUGHPUT", "BEAM_MUX", 0, 8, 0x000000FFu, Access::kRoHw, 0x00000000u},
     {"coeff", "WEIGHT_THROUGHPUT", "BEAM_BINS_PER_CYCLE", 8, 16, 0x00FFFF00u, Access::kRoHw, 0x00000000u},
+    {"cfar", "CFAR_CTRL", "ENABLE", 0, 1, 0x00000001u, Access::kRw, 0x00000000u},
+    {"cfar", "CFAR_CTRL", "MODE", 4, 2, 0x00000030u, Access::kRw, 0x00000000u},
+    {"cfar", "CFAR_CTRL", "OUT_MODE", 8, 1, 0x00000100u, Access::kRw, 0x00000000u},
+    {"cfar", "CFAR_CTRL", "STATUS_CLEAR", 16, 1, 0x00010000u, Access::kRwp, 0x00000000u},
+    {"cfar", "CFAR_WINDOW", "GUARD_LEAD", 0, 5, 0x0000001Fu, Access::kRw, 0x00000002u},
+    {"cfar", "CFAR_WINDOW", "GUARD_LAG", 8, 5, 0x00001F00u, Access::kRw, 0x00000002u},
+    {"cfar", "CFAR_WINDOW", "REF_LEAD", 16, 6, 0x003F0000u, Access::kRw, 0x00000008u},
+    {"cfar", "CFAR_WINDOW", "REF_LAG", 24, 6, 0x3F000000u, Access::kRw, 0x00000008u},
+    {"cfar", "CFAR_THRESHOLD", "ALPHA", 0, 16, 0x0000FFFFu, Access::kRw, 0x00001400u},
+    {"cfar", "CFAR_STATUS", "MAX_GUARD", 0, 8, 0x000000FFu, Access::kRoHw, 0x00000000u},
+    {"cfar", "CFAR_STATUS", "MAX_REF", 8, 8, 0x0000FF00u, Access::kRoHw, 0x00000000u},
+    {"cfar", "CFAR_STATUS", "ALPHA_FRAC_W", 16, 8, 0x00FF0000u, Access::kRoHw, 0x00000000u},
+    {"cfar", "CFAR_STATUS", "CFG_PENDING", 24, 1, 0x01000000u, Access::kRoHw, 0x00000000u},
+    {"cfar", "CFAR_STATUS", "FRAME_OPEN", 25, 1, 0x02000000u, Access::kRoHw, 0x00000000u},
+    {"cfar", "CFAR_GEOMETRY", "EVENT_W", 0, 16, 0x0000FFFFu, Access::kRoHw, 0x00000000u},
+    {"cfar", "CFAR_GEOMETRY", "POWER_W", 16, 8, 0x00FF0000u, Access::kRoHw, 0x00000000u},
+    {"cfar", "CFAR_GEOMETRY", "SUM_W", 24, 8, 0xFF000000u, Access::kRoHw, 0x00000000u},
+    {"cfar", "CFAR_DET_COUNT", "VALUE", 0, 32, 0xFFFFFFFFu, Access::kRoHw, 0x00000000u},
+    {"cfar", "CFAR_SUP_COUNT", "VALUE", 0, 32, 0xFFFFFFFFu, Access::kRoHw, 0x00000000u},
+    {"cfar", "CFAR_FAULT", "CFG_CLAMPED", 0, 1, 0x00000001u, Access::kW1c, 0x00000000u},
+    {"cfar", "CFAR_FAULT", "NEG_INPUT", 1, 1, 0x00000002u, Access::kW1c, 0x00000000u},
+    {"cfar", "CFAR_FAULT", "ORPHAN_BEAT", 2, 1, 0x00000004u, Access::kW1c, 0x00000000u},
+    {"cfar", "CFAR_FAULT", "SOF_IN_FRAME", 3, 1, 0x00000008u, Access::kW1c, 0x00000000u},
+    {"cfar", "CFAR_FAULT", "NO_REF", 4, 1, 0x00000010u, Access::kW1c, 0x00000000u},
+    {"cfar", "CFAR_FAULT", "BIN_OVERFLOW", 5, 1, 0x00000020u, Access::kW1c, 0x00000000u},
+    {"cfar", "CFAR_FRAME_COUNT", "VALUE", 0, 32, 0xFFFFFFFFu, Access::kRoHw, 0x00000000u},
     {"counters", "TELEM_CTRL", "ENABLE", 0, 1, 0x00000001u, Access::kRw, 0x00000001u},
     {"counters", "TELEM_CTRL", "SEQ_ENABLE", 1, 1, 0x00000002u, Access::kRw, 0x00000001u},
     {"counters", "TELEM_CTRL", "SEQ_SOF_RESYNC", 2, 1, 0x00000004u, Access::kRw, 0x00000000u},

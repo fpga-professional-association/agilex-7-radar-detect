@@ -469,9 +469,98 @@ same beats in the same order give byte-identical results dense or sparse — and
 rate never exceeds the input rate, so nothing needs to back-pressure. Elasticity, when a
 consumer needs it, is a `rtl/stream/` primitive placed after the block.
 
+#### CFAR detector (`rtl/cfar/`, issue #14)
+
+SPEC §7.7: a configurable one-dimensional CFAR detector over frequency bins with, at
+minimum, cell averaging, a programmable guard-cell count, a programmable reference-cell
+count, a programmable threshold multiplier, edge handling, detection metadata, and
+detection suppression under invalid or incomplete windows.
+
+```text
+                      cfg: enable, mode, out_mode, guard_lead/lag,
+                           ref_lead/lag, alpha        (latched at start-of-frame)
+                                        |
+  power stream ──> cfar_window ──> (S_lead, S_lag, N, cell, valid) ──> compare ──> event
+  (1 bin/beat,     2D+1 slots,          |                              C·N·2^F     stream
+   POWER_W,        masked sums          |                              > A·S       (sparse
+   framed)         + validity           └── greatest-of side select                 or dense)
+                                                                          |
+                                                          elastic buffer ─┘
+```
+
+| Path | Parameters | Issue | Function |
+|---|---|---|---|
+| `rtl/packages/cfar_pkg.sv` | none (functions + widths) | #14 | The block's widths, the threshold multiplier's fixed-point format (unsigned Q8.8), the normative detection-event bit layout with its pack/unpack pair, and `cfar_over_threshold()` — the division-free comparison itself. Takes `CFAR_POWER_W` from `covar_pkg` *by reference*, so a change to SPEC §3's `POWER_W` moves the detector with it. Names its integer type `cfar_uint_t`, per DECISIONS.md (issue #10, decision 9). |
+| `rtl/cfar/cfar_window.sv` | `POWER_W`, `MAX_GUARD`, `MAX_REF`, `BIN_W`, `SUM_W` | #14 | The sliding window: a `2D+1`-slot shift register (`D = MAX_GUARD + MAX_REF`) with a per-slot validity bit, two runtime-masked reference sums, and the completeness test. Owns the window GEOMETRY and nothing else — no threshold, no framing, no stream. |
+| `rtl/cfar/cfar_core.sv` | `MAX_GUARD`, `MAX_REF`, `OUT_DEPTH`, stream geometry | #14 | The detector: SPEC §5 stream in and out, the frame state machine with its end-of-frame flush, the frame-boundary configuration latch and clamp, the four-stage arithmetic pipeline, the per-frame and cumulative counters, and the sticky fault bits. |
+| `rtl/control/reg_block_cfar.sv` | `IDX_W` | #14 | The software half: the 0x6000 CFAR-settings window and the `STATUS_CLEAR` strobe. Checks its generated reset values and field widths against `cfar_pkg` at elaboration. |
+
+Simulation-only companions:
+
+| Path | Parameters | Issue | Function |
+|---|---|---|---|
+| `sim/verilator/tops/cfar_top.sv` | `MAX_GUARD_A/B`, `MAX_REF_A/B` | #14 | Verification top: the configured geometry plus a second elaboration at `MAX_GUARD = 0`, `MAX_REF = 3`, sharing one stimulus port with an observation mux. Exports the event both unpacked (field ports) and packed (three 64-bit words) so the test can unpack it independently. |
+| `sim/assertions/cfar_assertions.sv` | `POWER_W`, `SUM_W`, `CMP_W`, `NTOT_W`, `ACT_W` | #14 | The SPEC §14 property set, instantiated inside `cfar_core`; see VERIFICATION_PLAN.md §5.13. |
+
+**The comparison is division-free and exact.** The noise mean is never computed. Writing
+`S` for the reference sum, `N` for the reference-cell count, `C` for the cell under test and
+`A` for the integer in the alpha register (`A = alpha · 2^F`, `F = 8`):
+
+```text
+C > alpha·S/N   <=>   C·N·2^F  >  A·S
+```
+
+Both sides are exact integer products of quantities the datapath already holds, so the
+decision is a total order on integers and the RTL and the C++ model agree bit for bit by
+construction rather than by comparison. Two closed forms fall out and are directed tests: an
+identically-zero spectrum detects nothing at any alpha, and a perfectly flat spectrum
+detects nothing at alpha = 1.0 exactly (the comparison is strict).
+
+**alpha is unsigned Q8.8, not Q1.15.** SPEC §6 fixes Q1.15 for samples and coefficients, and
+alpha is neither: Q1.15 covers only `[−1, 1)` and a CFAR multiplier is essentially always
+greater than one — the textbook design point `alpha = N(Pfa^(−1/N) − 1)` is ≈ 21.9 for 16
+reference cells at `Pfa = 1e−6`. Q8.8 covers `[0, 255.996]` in steps of 1/256, keeps the
+16-bit width the rest of the numeric plane uses, and quantises the threshold three orders of
+magnitude finer than the statistical spread of the integrated powers being thresholded.
+
+**Edge policy: suppress.** A bin whose complete programmed window does not lie inside the
+frame raises no detection and is counted as suppressed — not evaluated against a shortened
+window, not against mirrored data. Shrinking gives the edge bins a different reference count
+and therefore a different false-alarm rate, which is precisely what a *constant*-false-alarm
+detector must not have; mirroring lets a target near bin 0 raise its own threshold and
+correlates the reference cells. The cost is stated rather than hidden: the first and last
+`guard + reference` bins of every frame yield no detections, and the count is reported per
+frame in the summary event and cumulatively in `CFAR_SUP_COUNT`.
+
+**Cell averaging and greatest-of share one comparator.** Greatest-of is
+`C > alpha·max(S_lead/N_lead, S_lag/N_lag)`, which is a *single* threshold test once the
+larger mean is identified — and identifying it is one cross-multiply of a sum by a 6-bit
+count. Selecting the side first also makes the emitted event self-consistent: the
+`noise_sum` and `ref_count` it carries are the ones the decision actually used, so a
+consumer that re-runs the comparison on the event's own fields reproduces the detector's
+answer exactly.
+
+**Configuration takes effect at a frame boundary, and only there.** The whole window is
+latched into an active copy at the admitted start-of-frame beat. This is deliberately
+stricter than the covariance engine's window-boundary rule (issue #13, decision 6): the
+reference window spans `2D+1` bins, so a mid-frame change would be evaluated against cells
+admitted under the old geometry for the following `D` bins, and a frame boundary is the only
+instant at which the window is empty. A count above the elaborated maximum is clamped and
+flagged rather than wrapped.
+
+**Framing costs `D` cycles per frame.** A bin becomes the cell under test `D` advances after
+it is admitted, so every frame ends with `D` phantom advances that push the tail through,
+then a pipeline drain, then exactly one summary event carrying `end_of_frame`. `s_ready` is
+driven from the *next* state, so no beat is accepted between `end_of_frame` and the summary
+— which makes "a start-of-frame beat cannot arrive while a frame is open" structural rather
+than an error case. Overlapping the flush with the next frame's input needs a second window
+bank and a per-slot frame tag; it is a real optimisation and it is a SPEC §18 measurement
+away, not an assumption.
+
 ### 3.6 Packet fabric (`rtl/packet/`)
 
-TODO — populated by issue #18.
+TODO — populated by issue #18. The detection-event payload it will carry is normative as of
+issue #14 and is specified in §6.4 below.
 
 ### 3.7 Control plane (`rtl/control/`)
 
@@ -648,7 +737,75 @@ TODO — populated by issue #19; HBM2e binding by issue #24.
 
 ### 6.4 Event packet format and virtual channels
 
-TODO — populated by issue #18.
+The virtual-channel arrangement, the arbitration and the 512-bit packet framing are
+populated by issue #18. What is **normative as of issue #14** is the DETECTION EVENT the
+CFAR detector emits and the aggregator carries — `rtl/packages/cfar_pkg.sv` is the
+definition, and this section is its prose.
+
+#### The detection-event contract
+
+A detection event is a **176-bit payload on a SPEC §5 stream**, plus the bundle's own
+metadata. The payload width is CONFIGURATION-INDEPENDENT by construction: every field width
+below is a constant of `cfar_pkg`, none is an elaboration parameter, because a packet format
+that changed with the FFT size would have to be renegotiated at every SPEC §11 size.
+
+```text
+MSB                                                                          LSB
++-----------+-----------+-------+-------+-------+---------+----------+-----+------+
+| noise_sum | cut_power |  sup  |  det  | alpha | ref_cnt | frame_id | bin | kind |
++-----------+-----------+-------+-------+-------+---------+----------+-----+------+
+     47          40         16      16      16        7        16      16     2
+```
+
+| Field | Bits | Meaning |
+|---|---|---|
+| `kind` | 2 | `0` DETECT, `1` BIN, `2` SUPPRESSED, `3` SUMMARY |
+| `bin` | 16 | frequency-bin index within the frame; on a SUMMARY, the frame LENGTH in bins |
+| `frame_id` | 16 | the input stream's `seq` at the frame's start-of-frame beat |
+| `ref_cnt` | 7 | number of reference cells the decision used (0 on SUPPRESSED and SUMMARY) |
+| `alpha` | 16 | the threshold multiplier in force, unsigned Q8.8 |
+| `det` | 16 | SUMMARY only: detections in this frame |
+| `sup` | 16 | SUMMARY only: bins suppressed in this frame |
+| `cut_power` | 40 | the cell under test's power, SPEC §3 `POWER_W` |
+| `noise_sum` | 47 | the reference SUM the decision used (0 on SUPPRESSED and SUMMARY) |
+
+**Stream metadata.** `stream_id` carries the BEAM identity (SPEC §5: `stream_id` is the
+stream's identity, and a beam is what a CFAR instance is bound to). `seq` is the detector's
+own per-beat counter, maintained **per beam** so that
+`sim/assertions/stream_protocol_checker.sv`'s per-`stream_id` continuity property holds and
+a consumer can detect real loss; a single global counter would report a false discontinuity
+at every frame boundary once two beams interleave. `sof` marks the first emitted beat of a
+frame and `eof` marks the SUMMARY.
+
+**Framing rule.** Exactly one SUMMARY event is emitted per input frame, and it is the beat
+carrying `end_of_frame`. A frame with no detections is therefore a well-formed one-beat
+output frame with both `sof` and `eof` set — so the aggregator never has to distinguish
+"no detections" from "frame lost", and `CFAR_FRAME_COUNT` and the number of `eof` beats are
+the same number.
+
+**Two output modes.** In EVENTS mode only DETECT events are emitted, plus the SUMMARY: the
+operational mode, whose output rate is the detection rate rather than the bin rate. In DENSE
+mode every bin is emitted as DETECT, BIN or SUPPRESSED, plus the same SUMMARY: the debug and
+snapshot mode (issue #19), which makes the whole per-bin decision observable without a second
+data path.
+
+**Self-verifying by construction.** `(cut_power, noise_sum, ref_cnt, alpha)` are exactly the
+four operands of the detector's comparison, so a consumer — the aggregator, a packet decoder,
+or a host — can re-run `cut_power · ref_cnt · 2^8 > alpha · noise_sum` on the event's own
+fields and reproduce the detector's answer bit for bit, with no division and no floating
+point. That is why `alpha` rides in the event rather than being read from the register plane:
+an event stays verifiable after the register changes.
+
+**The noise estimate is a sum and a count, not a quotient.** The detector never divides
+(§3.5), and adding a divider purely to fill in a metadata field would put the only inexact
+operation in the block on the reporting path. A consumer that wants the mean computes
+`noise_sum / ref_cnt` at whatever precision it needs; a consumer that wants to CHECK the
+detection does not need the mean at all.
+
+**What issue #18 must supply.** A packet header carrying at least the beam (`stream_id`) and
+a source-block identifier, since the same virtual channel will carry power, covariance and
+error records; a 512-bit packet holds two 176-bit events plus a header with room to spare,
+and the fixed payload width means the packing is a constant rather than a negotiation.
 
 ## 7. Parameterization and elaboration
 
@@ -676,6 +833,20 @@ TODO — populated by issue #2 (config plumbing into the build) and issue #20.
 | `streaming_fft` | `fft_pkg::fft_total_latency()` beats — **88** at 64 points / 2 SPC with `REORDER = 1`, **55** without | 1 beat/cycle while credits allow | #11 |
 | `bf_dot` | `MULT_PIPE + ceil(clog2(N_ANT) / ADD_REG_EVERY) + 1` cycles, 0 beats — **9** at 16 antennas with a register per tree level, **7** with one per two levels | 1 operand set/cycle, no backpressure | #12 |
 | `beamformer` | the dot product's, plus 1 cycle for the input hold register, plus 1 for the output elastic buffer | **`BIN_PAR / BEAM_MUX` bins per cycle**; one input beat accepted every `BEAM_MUX = N_BEAMS/BEAM_PAR` cycles and one output beat produced per cycle. Arithmetic throughput is `BIN_PAR * BEAM_PAR` beam-bins/cycle and is invariant under the multiplex. Reported on the `tput_*` ports and readable through `WEIGHT_THROUGHPUT`. | #12 |
+| `power_calc` | `PIPE_STAGES` (1–3), default 2 | 1 sample/cycle, no backpressure | #13 |
+| `integrator` | 1 (the result registers on the closing edge) | 1 sample/cycle, no backpressure | #13 |
+| `cfar_window` | 1 register + `D` **advances** (`D = MAX_GUARD + MAX_REF`) | 1 bin/advance | #14 |
+| `cfar_core` | `D` advances + 4 pipeline registers + the output elastic buffer | 1 bin/cycle within a frame; `D + 5` dead cycles per frame boundary | #14 |
+
+The CFAR detector's latency is counted the way the FFT's is — partly in **advances** and
+partly in cycles — for the same reason and with the same consequence. A bin cannot be
+evaluated until its leading reference cells have arrived, which is `D` advances after it is
+admitted, and advances happen only on an admitted beat or on a flush step. The per-frame
+overhead is therefore `D` phantom advances plus the pipeline drain plus the summary beat,
+which at the SPEC §11 tiny geometry (64 bins, `D = 10`) is about a quarter of the frame
+period. That is the block's largest throughput claim and it is a measured consequence of the
+window depth rather than of the implementation; the optimisation that removes it is a second
+window bank, and taking it is a SPEC §18 decision.
 
 The FFT's latency is counted in **beats**, not cycles, and the distinction is load-bearing:
 its delay feedbacks advance on beats while its multipliers free-run, so a gap on the input

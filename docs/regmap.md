@@ -7,10 +7,10 @@ for the register and control plane ([SPEC.md](../SPEC.md) §9, issue #7). Edit t
 and re-run the generator; `make regmap-check` fails the build on any hand edit here or
 on a source change that was never regenerated.
 
-- Register-map version: **1.4.0** (schema 1)
+- Register-map version: **1.5.0** (schema 1)
 - Interface: 32-bit data, 16-bit byte address, 4 byte enables
 - Window per block: `0x1000` bytes
-- Blocks declared: 10 (8 implemented), registers implemented: 66
+- Blocks declared: 10 (9 implemented), registers implemented: 75
 
 ## Access types
 
@@ -35,7 +35,7 @@ the non-writable bits (`error=0`).
 | `fault` | `0x3000`–`0x3FFF` | 4 | implemented | Fault injection |
 | `scratch` | `0x4000`–`0x4FFF` | 4 | implemented | Snapshot and debug control |
 | `coeff` | `0x5000`–`0x5FFF` | 10 | implemented | Coefficient and weight programming; Active bank selection |
-| `cfar` | `0x6000`–`0x6FFF` | 0 | planned (#14, #16) | CFAR settings; Integration settings |
+| `cfar` | `0x6000`–`0x6FFF` | 9 | implemented | CFAR settings |
 | `counters` | `0x7000`–`0x7FFF` | 21 | implemented | Stream counters; Stall counters; FIFO high-water marks; Overflow and saturation counts; Frame counts; Sequence errors; CDC errors; Snapshot and debug control |
 | `debug` | `0x8000`–`0x8FFF` | 0 | planned (#19) | Snapshot and debug control |
 | `covar` | `0x9000`–`0x9FFF` | 7 | implemented | Integration settings |
@@ -53,9 +53,9 @@ Fixed identification of the control plane itself. Every field is a constant fold
 | Offset | Address | Register | Access | Reset | Description |
 |---|---|---|---|---|---|
 | `0x000` | `0x0000` | `MAGIC` | RO | `0x52414441` | Constant marker. Reading 0x52414441 ('RADA') at block base proves a control plane is present and the address decode is alive. |
-| `0x004` | `0x0004` | `VERSION` | RO | `0x01040001` | Register-map version, from regmap_version in the source of truth. Static build data, deliberately not a git describe: the same source tree must produce the same register contents on any machine, and a VCS-derived value would make the generated artefacts depend on checkout state. |
-| `0x008` | `0x0008` | `GEOMETRY` | RO | `0x1020420A` | Shape of the register plane, so a discovery walk needs no compiled-in constants. |
-| `0x00C` | `0x000C` | `CAPABILITY` | RO | `0x000002BF` | One bit per declared block, set when that block is implemented in this build. Bit i is block i in declaration order; a planned block reads 0 and its window returns error. |
+| `0x004` | `0x0004` | `VERSION` | RO | `0x01050001` | Register-map version, from regmap_version in the source of truth. Static build data, deliberately not a git describe: the same source tree must produce the same register contents on any machine, and a VCS-derived value would make the generated artefacts depend on checkout state. |
+| `0x008` | `0x0008` | `GEOMETRY` | RO | `0x10204B0A` | Shape of the register plane, so a discovery walk needs no compiled-in constants. |
+| `0x00C` | `0x000C` | `CAPABILITY` | RO | `0x000002FF` | One bit per declared block, set when that block is implemented in this build. Bit i is block i in declaration order; a planned block reads 0 and its window returns error. |
 
 ### `ID.MAGIC` — `0x0000`
 
@@ -68,7 +68,7 @@ Fixed identification of the control plane itself. Every field is a constant fold
 | Bits | Field | Access | Reset | Source | Description |
 |---|---|---|---|---|---|
 | `31:24` | `MAJOR` | RO | `0x1` | — | Incompatible layout change. |
-| `23:16` | `MINOR` | RO | `0x4` | — | Registers or fields added. |
+| `23:16` | `MINOR` | RO | `0x5` | — | Registers or fields added. |
 | `15:8` | `PATCH` | RO | `0x0` | — | Documentation-only change. |
 | `7:0` | `SCHEMA` | RO | `0x1` | — | Source-of-truth schema version. |
 
@@ -77,7 +77,7 @@ Fixed identification of the control plane itself. Every field is a constant fold
 | Bits | Field | Access | Reset | Source | Description |
 |---|---|---|---|---|---|
 | `7:0` | `N_BLOCKS` | RO | `0xA` | — | Declared blocks, implemented and planned. |
-| `15:8` | `N_REGS` | RO | `0x42` | — | Implemented registers across all blocks. |
+| `15:8` | `N_REGS` | RO | `0x4B` | — | Implemented registers across all blocks. |
 | `23:16` | `DATA_W` | RO | `0x20` | — | Register data width in bits. |
 | `31:24` | `ADDR_W` | RO | `0x10` | — | Register address width in bits. |
 
@@ -85,7 +85,7 @@ Fixed identification of the control plane itself. Every field is a constant fold
 
 | Bits | Field | Access | Reset | Source | Description |
 |---|---|---|---|---|---|
-| `31:0` | `BLOCK_MASK` | RO | `0x2BF` | — | Implemented-block bitmap. |
+| `31:0` | `BLOCK_MASK` | RO | `0x2FF` | — | Implemented-block bitmap. |
 
 ## `build_params` — `0x1000`
 
@@ -419,10 +419,90 @@ Coefficient and weight programming with double buffering and an active-bank sele
 
 ## `cfar` — `0x6000`
 
-PLANNED. CFAR guard/training geometry and threshold scaling, plus coherent and non-coherent integration settings.
+Settings for the SPEC 7.7 one-dimensional CFAR detector over frequency bins (rtl/cfar/, issue #14): the detection mode, the guard and reference cell counts on each side independently, the threshold multiplier, the output mode, and the detection/suppression accounting coming back the other way. EVERYTHING WRITABLE HERE TAKES EFFECT AT A FRAME BOUNDARY AND ONLY THERE. rtl/cfar/cfar_core.sv latches the whole window into an active copy at the admitted start-of-frame beat, so a frame is always processed under exactly one geometry - which is the only way its suppression count, its detection count and the alpha carried in its events mean anything. CFAR_STATUS.CFG_PENDING reports that a write has not been taken yet, so software watches the change retire rather than inferring it. A guard or reference count above the elaborated maximum is CLAMPED to that maximum and raises CFAR_FAULT.CFG_CLAMPED; out of range is defined rather than undefined, because a register plane can be programmed with anything. The elaborated maxima themselves are reported in CFAR_STATUS so software sizes its programming without a compiled-in constant. Note that issue #16 was expected to add coherent and non-coherent integration settings to this window; the SPEC 9 group 'Integration settings' is implemented by the covariance window at 0x9000 (issue #13), so this window claims only 'CFAR settings'.
 
-**Planned, not implemented in this build** (owning issues: #14, #16).
-The window is reserved and every access to it returns `error=1`.
+| Offset | Address | Register | Access | Reset | Description |
+|---|---|---|---|---|---|
+| `0x000` | `0x6000` | `CFAR_CTRL` | MIXED | `0x00000000` | Master controls. STATUS_CLEAR is write-1-pulse and reads back zero, because it is an event rather than a mode. |
+| `0x004` | `0x6004` | `CFAR_WINDOW` | RW | `0x08080202` | Guard and reference cell counts, LEADING (higher frequency) and LAGGING (lower frequency) sides independently. The reference cells of a side start immediately beyond that side's guard cells. The first and last (guard + reference) bins of every frame have an incomplete window and are suppressed, which at a 64-bin frame with 2 guard and 8 reference cells is 20 of 64 bins - the reason these are runtime registers rather than compile-time constants. |
+| `0x008` | `0x6008` | `CFAR_THRESHOLD` | RW | `0x00001400` | The programmable threshold multiplier (SPEC 7.7). A bin detects when its power strictly exceeds ALPHA times the mean of its reference cells; the detector never divides, comparing cell*N*2^F against ALPHA*sum instead, so the decision is an exact integer inequality with no rounding and no tolerance. |
+| `0x00C` | `0x600C` | `CFAR_STATUS` | ROHW | `0x00000000` | Hardware-driven status. The geometry fields let software size its programming without compiled-in constants, exactly as the build-parameter block does for the rest of the design. |
+| `0x010` | `0x6010` | `CFAR_GEOMETRY` | ROHW | `0x00000000` | Widths of the detection-event format, reported by hardware so a consumer of the SPEC 7.8 packet network can parse events without a build-time header. |
+| `0x014` | `0x6014` | `CFAR_DET_COUNT` | ROHW | `0x00000000` | Detections raised since the last CFAR_CTRL.STATUS_CLEAR. Saturates at all-ones rather than wrapping: a wrapped counter can read zero on a detector that is firing continuously, which is the one reading that must never be produced. |
+| `0x018` | `0x6018` | `CFAR_SUP_COUNT` | ROHW | `0x00000000` | Bins suppressed since the last CFAR_CTRL.STATUS_CLEAR: incomplete window at a frame edge, block disabled, or an unusable reference geometry. SPEC 7.7 requires suppression under invalid or incomplete windows; this is the number that makes it visible rather than silent. Saturating, for the reason CFAR_DET_COUNT is. |
+| `0x01C` | `0x601C` | `CFAR_FAULT` | W1C | `0x00000000` | Sticky fault bits, write 1 to clear; also cleared by CFAR_CTRL.STATUS_CLEAR. Every one of these is a condition the detector handles deterministically rather than a condition it fails on - the bit exists so that the handling is visible instead of plausible. |
+| `0x020` | `0x6020` | `CFAR_FRAME_COUNT` | ROHW | `0x00000000` | Frames summarised since the last CFAR_CTRL.STATUS_CLEAR. Exactly one summary event is emitted per input frame, so this counter and the number of end_of_frame beats on the detection stream are the same number - which is what lets a consumer detect a lost output frame. |
+
+### `CFAR.CFAR_CTRL` — `0x6000`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `0` | `ENABLE` | RW | `0x0` | — | Detection enable. Cleared, every bin is reported SUPPRESSED and no detection is raised - the same path an incomplete window takes, so there is one suppression rule and one counter rather than two. Resets to 0: a detector that powers up detecting would flood the packet network before software had configured a threshold. |
+| `5:4` | `MODE` | RW | `0x0` | — | 0: cell averaging, the noise estimate is the mean of ALL reference cells. 1: greatest-of, the noise estimate is the larger of the two one-sided means. 2 and 3 are reserved; ordered-statistics CFAR needs a rank-order network rather than a sum and is not implemented (SPEC 7.7 lists it as optional). Greatest-of requires a non-zero reference count on BOTH sides; cell averaging requires only that their sum be non-zero. A mode whose reference geometry is unusable suppresses every bin and raises CFAR_FAULT.NO_REF. |
+| `8` | `OUT_MODE` | RW | `0x0` | — | 0: EVENTS - the output stream carries only the bins that detected, plus one end-of-frame summary per input frame. 1: DENSE - every bin is reported (detected, evaluated-and-not-detected, or suppressed) plus the same summary. DENSE is the debug and snapshot mode: it makes the whole per-bin decision observable without a second data path, at the cost of one output beat per bin. |
+| `16` | `STATUS_CLEAR` | RWP | `0x0` | — | Writing 1 clears the sticky CFAR_FAULT bits and zeroes CFAR_DET_COUNT, CFAR_SUP_COUNT and CFAR_FRAME_COUNT. A fault raised in the same cycle as the clear survives it, which is what stops a read-then-clear from losing an event. |
+
+### `CFAR.CFAR_WINDOW` — `0x6004`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `4:0` | `GUARD_LEAD` | RW | `0x2` | — | Guard cells between the cell under test and the leading reference band. Zero is legal and means the reference cells start in the adjacent bin. |
+| `12:8` | `GUARD_LAG` | RW | `0x2` | — | Guard cells on the lagging side. |
+| `21:16` | `REF_LEAD` | RW | `0x8` | — | Leading reference cells. Zero is legal in cell-averaging mode (a one-sided estimator) and is not in greatest-of mode. |
+| `29:24` | `REF_LAG` | RW | `0x8` | — | Lagging reference cells. |
+
+### `CFAR.CFAR_THRESHOLD` — `0x6008`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `15:0` | `ALPHA` | RW | `0x1400` | — | Threshold multiplier in UNSIGNED Q8.8: 8 integer bits and 8 fractional bits, covering [0, 255.996] in steps of 1/256. NOT Q1.15 - the SPEC 6 sample format cannot represent a value above 1, and the textbook cell-averaging design point alpha = N*(Pfa^(-1/N) - 1) is about 21.9 for 16 reference cells at Pfa = 1e-6. The reset value 0x1400 is exactly 20.0, close to that design point. 0x0100 is exactly 1.0, at which a perfectly flat spectrum detects nothing because the comparison is strict; alpha below 1.0 is legal and is the cheapest way for a test to force detections everywhere. |
+
+### `CFAR.CFAR_STATUS` — `0x600C`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `7:0` | `MAX_GUARD` | ROHW | `0x0` | — | Elaborated maximum guard-cell count per side. A larger value written to CFAR_WINDOW is clamped to this. |
+| `15:8` | `MAX_REF` | ROHW | `0x0` | — | Elaborated maximum reference-cell count per side. |
+| `23:16` | `ALPHA_FRAC_W` | ROHW | `0x0` | — | Fractional bits in CFAR_THRESHOLD.ALPHA, so software converts a real-valued multiplier without a compiled-in scale factor. |
+| `24` | `CFG_PENDING` | ROHW | `0x0` | — | The register values differ from the active copy: a write is waiting for the next frame boundary. Clears when the frame that takes it starts. |
+| `25` | `FRAME_OPEN` | ROHW | `0x0` | — | A frame is in flight (being consumed, flushed, or summarised). A write issued while this is clear takes effect on the next frame with no wait. |
+
+### `CFAR.CFAR_GEOMETRY` — `0x6010`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `15:0` | `EVENT_W` | ROHW | `0x0` | — | Total width of a packed detection event in bits. Configuration-independent by construction: every field of the event format is a constant of rtl/packages/cfar_pkg.sv, none is an elaboration parameter, because a packet format that changed with the FFT size would have to be renegotiated at every SPEC 11 size. |
+| `23:16` | `POWER_W` | ROHW | `0x0` | — | Width of the cell-power field, which is SPEC 3 POWER_W. |
+| `31:24` | `SUM_W` | ROHW | `0x0` | — | Width of the reference-sum field. The noise estimate is reported as the SUM and the COUNT rather than as their quotient, because the detector never divides and adding a divider to fill in a metadata field would put the only inexact operation in the block on the reporting path. |
+
+### `CFAR.CFAR_DET_COUNT` — `0x6014`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `31:0` | `VALUE` | ROHW | `0x0` | — | Detection count. |
+
+### `CFAR.CFAR_SUP_COUNT` — `0x6018`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `31:0` | `VALUE` | ROHW | `0x0` | — | Suppressed-bin count. |
+
+### `CFAR.CFAR_FAULT` — `0x601C`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `0` | `CFG_CLAMPED` | W1C | `0x0` | — | A guard or reference count written above the elaborated maximum was clamped to it when the frame latched. |
+| `1` | `NEG_INPUT` | W1C | `0x0` | — | An input cell arrived with its sign bit set. A negative integrated power is not physical; it is clamped to zero so that every width downstream is an honest magnitude, and flagged here because it can only be an upstream defect or a cross-power stream wired to the detector by mistake. |
+| `2` | `ORPHAN_BEAT` | W1C | `0x0` | — | A beat arrived between frames without start_of_frame. It has no defined bin index, so it is consumed and discarded rather than stalled: a stalled detector backs pressure into the FFT. |
+| `3` | `SOF_IN_FRAME` | W1C | `0x0` | — | start_of_frame was asserted on a beat that is not a frame's first. The bit is IGNORED and the beat is treated as an ordinary bin; the source is violating SPEC 5. |
+| `4` | `NO_REF` | W1C | `0x0` | — | A frame ran with a reference geometry the selected mode cannot use - zero reference cells in cell-averaging mode, or a zero count on either side in greatest-of mode. Every bin of that frame is suppressed. |
+| `5` | `BIN_OVERFLOW` | W1C | `0x0` | — | A frame ran past 65535 bins, so the bin index saturated rather than wrapping. A wrapped index would put two different frequencies in one detection event. |
+
+### `CFAR.CFAR_FRAME_COUNT` — `0x6020`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `31:0` | `VALUE` | ROHW | `0x0` | — | Summarised-frame count. |
 
 ## `counters` — `0x7000`
 

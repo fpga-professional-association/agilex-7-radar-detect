@@ -807,7 +807,10 @@ int harness::sim_test_main(const SimArgs& args) {
         // The coefficient window became implemented with issue #10, so what is
         // illegal there is now an address past its last register.
         {regmap::COEFF_BASE + 0x100u, false, true, 0xF, "coeff window, no register"},
-        {regmap::CFAR_BASE, true, false, 0xF, "planned cfar window"},
+        // The CFAR window became implemented with issue #14, so what is illegal
+        // there is now an address past its last register rather than the window
+        // itself. The debug window is the last one still planned.
+        {regmap::CFAR_BASE + 0x100u, true, false, 0xF, "cfar window, no register"},
         {regmap::DEBUG_BASE, false, true, 0xF, "planned debug window"},
         // The counters window is implemented as of issue #8, so what is illegal
         // there is an address past its last register, not the window itself.

@@ -88,6 +88,8 @@ module control_top
     output wire [REGMAP_COUNTERS_N_REGS*32-1:0] obs_counters_pulse,
     output wire [REGMAP_COVAR_N_REGS*32-1:0]    obs_covar_csr,
     output wire [REGMAP_COVAR_N_REGS*32-1:0]    obs_covar_pulse,
+    output wire [REGMAP_CFAR_N_REGS*32-1:0]     obs_cfar_csr,
+    output wire [REGMAP_CFAR_N_REGS*32-1:0]     obs_cfar_pulse,
 
     // ---- control outputs the blocks drive ----
     output wire [31:0]                          obs_block_enable,
@@ -103,6 +105,12 @@ module control_top
     output wire [31:0]                          obs_covar_pair_enable,
     output wire                                 obs_covar_flush_pulse,
     output wire [23:0]                          obs_covar_pair_write,
+
+    // ---- the CFAR window's configuration outputs (issue #14) ----
+    output wire [4:0]                           obs_cfar_guard_lead,
+    output wire [5:0]                           obs_cfar_ref_lead,
+    output wire [15:0]                          obs_cfar_alpha,
+    output wire                                 obs_cfar_status_clear,
 
     // Invariants of the blocks that have no writable or pulse bits. Both must
     // hold in every cycle of every test.
@@ -434,6 +442,59 @@ module control_top
   assign obs_covar_pair_write = covar_pt_wr_valid
                                   ? {covar_pt_wr_y, covar_pt_wr_x, covar_pt_wr_index}
                                   : 24'd0;
+
+  // ---------------------------------------------------------------------------
+  // The CFAR settings window (issue #14). Its hardware status inputs are tied
+  // off here for the same reason the coefficient and covariance windows' are:
+  // control_top is the register plane's own test bench, and wiring a live
+  // rtl/cfar/cfar_core.sv into it would make a register-plane failure and a CFAR
+  // failure indistinguishable. sim/verilator/tops/cfar_top.sv drives the
+  // detector's configuration ports directly in the meantime, and the live
+  // wiring arrives with the medium integration (issue #17).
+  // ---------------------------------------------------------------------------
+  wire       cfar_cfg_enable_unused, cfar_cfg_out_mode_unused;
+  wire [1:0] cfar_cfg_mode_unused;
+  wire [4:0] cfar_cfg_guard_lag_unused;
+  wire [5:0] cfar_cfg_ref_lag_unused;
+
+  reg_block_cfar #(
+      .IDX_W (IDX_W)
+  ) u_cfar (
+      .clk              (clk),
+      .rst_n            (rst_n),
+      .sel              (blk_sel[REGMAP_CFAR_INDEX]),
+      .write_enable     (blk_write_enable),
+      .read_enable      (blk_read_enable),
+      .index            (blk_index),
+      .write_data       (blk_write_data),
+      .byte_enable      (blk_byte_enable),
+      .read_data        (blk_read_data[REGMAP_CFAR_INDEX*REG_DATA_W +: REG_DATA_W]),
+      .ready            (blk_ready[REGMAP_CFAR_INDEX]),
+      .error            (blk_error[REGMAP_CFAR_INDEX]),
+      .cfg_enable       (cfar_cfg_enable_unused),
+      .cfg_mode         (cfar_cfg_mode_unused),
+      .cfg_out_mode     (cfar_cfg_out_mode_unused),
+      .cfg_guard_lead   (obs_cfar_guard_lead),
+      .cfg_guard_lag    (cfar_cfg_guard_lag_unused),
+      .cfg_ref_lead     (obs_cfar_ref_lead),
+      .cfg_ref_lag      (cfar_cfg_ref_lag_unused),
+      .cfg_alpha        (obs_cfar_alpha),
+      .cfg_status_clear (obs_cfar_status_clear),
+      .hw_max_guard     (8'd0),
+      .hw_max_ref       (8'd0),
+      .hw_cfg_pending   (1'b0),
+      .hw_frame_open    (1'b0),
+      .hw_alpha_frac_w  (8'd0),
+      .hw_event_w       (16'd0),
+      .hw_power_w       (8'd0),
+      .hw_sum_w         (8'd0),
+      .hw_det_count     (32'd0),
+      .hw_sup_count     (32'd0),
+      .hw_frame_count   (32'd0),
+      .hw_fault         (6'd0),
+      .csr              (obs_cfar_csr),
+      .pulse            (obs_cfar_pulse)
+  );
 
   // Invariants of the blocks with no writable and no pulse bits.
   assign obs_build_storage_zero = ~(|build_csr);

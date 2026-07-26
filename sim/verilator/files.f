@@ -43,6 +43,13 @@ rtl/packages/cdc_pkg.sv
 rtl/packages/pfb_pkg.sv
 rtl/packages/covar_pkg.sv
 
+// SPEC 7.7: the CFAR package (issue #14). Widths, the threshold multiplier's
+// fixed-point format, the detection-event bit layout and the normative
+// comparison, in one place so the detector, the register block, the packet
+// network and the C++ model cannot disagree. It takes its input width from
+// covar_pkg above by reference, so it must follow it.
+rtl/packages/cfar_pkg.sv
+
 // ---- protocol assertions (SPEC 14) -------------------------------------
 // Simulation-only. Instantiated inside every stream primitive under
 // `ifndef SYNTHESIS`, so the protocol is checked everywhere the primitives are
@@ -65,6 +72,13 @@ sim/assertions/seq_checker_assertions.sv
 sim/assertions/pfb_assertions.sv
 sim/assertions/coeff_bank_checker.sv
 sim/assertions/covar_assertions.sv
+
+// And again for the CFAR detector (issue #14): rtl/cfar/cfar_core.sv
+// instantiates its checker under `ifndef SYNTHESIS`, so the SPEC 7.7 suppression
+// rule, the frame-boundary configuration rule and the agreement between the
+// sized datapath and cfar_pkg's own comparison are checked wherever the detector
+// is used.
+sim/assertions/cfar_assertions.sv
 
 // And again for the beamforming matrix (issue #12): rtl/beamformer/beamformer.sv
 // instantiates its checker under `ifndef SYNTHESIS`, so the SPEC 7.5
@@ -185,6 +199,17 @@ rtl/beamformer/beamformer.sv
 rtl/covariance/power_calc.sv
 rtl/covariance/integrator.sv
 rtl/covariance/covar_engine.sv
+
+// ---- the CFAR detector (SPEC 7.7, issue #14) ---------------------------
+// Design RTL, listed here for the reason complex_multiplier is: this list is the
+// single definition of what "the design" is. cfar_window first; cfar_core is
+// built out of it, out of rtl/stream/stream_elastic_buffer.sv and out of
+// rtl/common/perf_counter.sv, all already listed above. Not yet instantiated by
+// benchmark_sim_top — the pipeline that consumes it arrives with issues #17/#18
+// — so until then `make lint` covers it here and sim/verilator/tops/cfar_top.sv
+// verifies it.
+rtl/cfar/cfar_window.sv
+rtl/cfar/cfar_core.sv
 
 // ---- simulation top (SPEC 4.1) -----------------------------------------
 sim/verilator/tops/benchmark_sim_top.sv

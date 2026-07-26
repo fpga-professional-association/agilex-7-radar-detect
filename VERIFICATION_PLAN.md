@@ -386,6 +386,86 @@ matrix cannot detect a transpose**, and a transpose is the most likely defect in
 kernel. The permutation relation below is the check that does not depend on getting that
 right.
 
+#### `test_cfar` — CFAR detector (SPEC §7.7, issue #14)
+
+`cfar_top` holds TWO elaborations of `rtl/cfar/cfar_core.sv` in one build — the configured
+geometry from `config/<name>.json` and a second at `MAX_GUARD = 0`, `MAX_REF = 3` — and
+`sim/tests/test_cfar.cpp` compares **every emitted event field for field against
+`model/cpp/cfar/cfar_model.hpp`, in order**: the kind, the bin index, the frame id, the
+reference sum, the reference count, the threshold multiplier, the cell power, the per-frame
+counts and the SPEC §5 framing bits of every beat.
+
+**The model is FUNCTIONAL, not cycle-accurate, and that is deliberate.** The covariance
+model is stepped once per clock edge because its subject is window *timing*. The CFAR
+detector's subject is the detection *arithmetic* and the event *sequence*; its pipeline depth
+is an implementation choice SPEC §23 explicitly invites changing for timing closure, so a
+cycle-accurate model would have to be edited every time a register is added — and each such
+edit is an opportunity to make the model agree with a bug. Modelling the
+frame → event-sequence function instead makes the oracle invariant to pipeline depth, to
+backpressure and to the phantom-flush mechanism while staying exact on every value and every
+ordering. What the model deliberately does not predict — which *cycle* an event appears on —
+is checked structurally instead, by pass 9.
+
+| Pass | What it drives | What would have to be wrong for it to pass anyway |
+|---|---|---|
+| 1 geometry | the RTL's `cfg_*` echo against the C++ mirror: every width, both elaborations' maxima, the event width, and `sum_w` / `cmp_w` / `half_window` / `window_slots` | nothing — the run stops here if they disagree, so no later comparison can be silently wrong |
+| 2 injected targets | one target in flat noise (exactly one detection, at the right bin); a pair separated by exactly `guard+1`, so each sits in the OTHER's first reference cell; the same pair one bin closer, inside the guard band | the guard band's *inner* edge. An off-by-one there puts a target inside its own reference window, where it raises its own threshold |
+| 3 edges | an enormous target at bins 0, 1, last−1 and last, in DENSE mode; then a frame SHORTER than the window | each target bin must be reported `SUPPRESSED` with a zero reference window, and the frame's suppression count must be exactly `2·(guard+ref)` — an absence would pass a weaker test, a number does not |
+| 4 threshold sweep | alpha at the flip integer ±2, computed in closed form from `C·2^F/noise`; then the zero-spectrum and alpha = 1.0 corners, and one LSB below 1.0 | the flip must happen at EXACTLY the integer, in both directions. One LSB below 1.0 every evaluable bin must detect, which is what proves the 1.0 case was a boundary and not a floor |
+| 5 masking | a weak target alone (must detect); a strong target inside its leading reference band (must hide it); the same strong target one bin past the band (must not) | all three together pin the reference band's *outer* edge — the third case fails if the band reaches further than the geometry says |
+| 6 modes | a worked clutter edge: guard 2, reference 4, alpha 3.0, references 1000 on one side and 20000 on the other, target 40000 — cell averaging detects (`C > 31500`), greatest-of does not (`C > 60000`) | the arithmetic is worked out in the test rather than hoped for, so a GO path that quietly ran cell averaging fails. Plus random clutter frames in both modes |
+| 7 random | 12 frames of random power, random geometry and random alpha, in both modes and both output modes, with every third frame near the top of the 40-bit range | the wide end of the comparison — `alpha·sum` reaches `2^59` there — is exercised rather than only the comfortable end |
+| 8 dense mode | every bin reported exactly once, with kinds consistent with the sparse run's detection set over the same frame | a dense run that dropped or duplicated a bin |
+| 9 invariance | the same four frames dense, then again under bursty input gaps and heavy output stalls, required to produce a BYTE-IDENTICAL event sequence | any free-running counter anywhere in the block, and any dependence of a decision on when its operands happened to arrive |
+| 10 reconfiguration | a configuration written half way through a frame: that frame must match the model computed with the OLD configuration, `obs_cfg_pending` must be set, and the NEXT frame must take the new one with no further write | a mid-frame change would corrupt `D` bins after the write and no earlier ones, which a whole-frame comparison catches and a spot check would not |
+| 11 faults | the orphan beat, the negative-power clamp (with the frame still matching the model on the clamped values), the out-of-range geometry clamp, the unusable reference geometry, and a stray mid-frame `start_of_frame` | each must land in the right sticky bit AND behave as documented; a fault bit that fires without the behaviour fails the same pass |
+| 12 counters | `CFAR_DET_COUNT`, `CFAR_SUP_COUNT` and `CFAR_FRAME_COUNT` against a tally accumulated independently from the summary events | a counter compared against zero — the pass fails if the run observed no detections or no suppressions |
+
+Every event is additionally unpacked a second time, in the test, from the raw packed payload
+the top exports as three 64-bit words, and compared against the RTL's own unpacked field
+ports. A pack/unpack pair only ever used against itself proves nothing.
+
+**Fault injection.** The oracle was proved to bite twice, with two different off-by-ones in
+the same expression, because they fail *different* oracles.
+
+*Variant A — the guard band's inner bound* (`off > g_lead` → `off >= g_lead`), which pulls
+one guard cell into the reference sum. Caught by the RTL's own assertion on the first frame,
+before any comparison ran:
+
+```text
+[0] %Error: cfar_window.sv:367: Assertion failed in
+    TOP.cfar_top.u_cfar_a.u_window.a_cfar_mask_count:
+    cfar_window: masks selected 5/4 cells but the geometry asks for 4/4
+```
+
+*Variant B — the whole band shifted one cell further out* (`off > g_lead + 1` and
+`off <= g_lead + 1 + r_lead`), which keeps the cell COUNT right and is therefore invisible to
+that assertion. Caught by the C++ model, on the first frame, with the wrong sum named:
+
+```text
+ERROR [event] @0 ps: close pair: event 0: RTL   DETECT bin=30 ... sum=8000  n=8
+                                    vs model DETECT bin=30 ... sum=47000 n=8
+ERROR [edge]  @0 ps: frame suppression count is 13, expected 12
+```
+
+The two oracles are complementary by construction — one checks the window's *shape* against
+the configuration, the other checks the window's *contents* against an independent
+implementation — and it takes both to make an off-by-one in this expression un-missable. Both
+injections were reverted and the suite re-run green; the transcripts are in the issue #14
+pull request.
+
+**A defect this suite found in its own RTL.** The first flow-control scheme reserved one
+output slot per admitted beat, and it deadlocked on the very first frame: a beat's decision
+does not retire until `D` advances later, so outstanding reservations grew to `D + pipeline`
+before any came back, and with an eight-deep buffer and `D = 10` the block stopped accepting
+after six bins and never produced the end-of-frame summary that would have released them. The
+arithmetic was correct *in total* — every reservation was eventually returned — and what it
+got wrong was the LATENCY between taking one and returning it. The fix sizes the credit bound
+against the PIPELINE rather than the window and makes the end-of-frame flush stallable, which
+also makes the buffer depth independent of the window geometry; at the SPEC §11 full-scale
+size `D` is 36, and a buffer sized to cover it would have been an M20K's worth of storage
+bought to solve an accounting problem.
+
 ### 4.2 Metamorphic tests (SPEC §13.2)
 
 Populated progressively by issues #10–#14; #10 and #12 have landed.
@@ -870,6 +950,28 @@ outside the datapath, and `test_beamformer` runs it as its **final** mode with
                      TOP.beamformer_top.u_unsafe.u_store.u_chk.a_coeff_swap_at_sof:
                      coeff_bank: active bank changed outside a start-of-frame beat
 ```
+
+### 5.14 CFAR assertion set (SPEC §14, issue #14)
+
+`sim/assertions/cfar_assertions.sv` is instantiated by `rtl/cfar/cfar_core.sv` under
+`` `ifndef SYNTHESIS`` — not bound from a test — so the detector's contract holds wherever it
+is used: the unit-test top, a future pipeline integration, and any Quartus calibration
+wrapper that no testbench ever drives. `cfar_window` carries three more inline, and
+`stream_elastic_buffer`'s SPEC §5 protocol checker watches the detector's output stream,
+which is what makes the per-beam sequence continuity of §6.4 a checked property rather than
+a design intent.
+
+| Assertion | Fires on |
+|---|---|
+| `a_cfar_threshold_matches_pkg` | the sized `CMP_W` datapath disagreeing with `cfar_pkg::cfar_over_threshold()` on the same operands. This is what makes "the RTL implements the comparison" a checked fact: a width one bit too narrow, a shift in the wrong direction, or the two sides' operands swapped all fail here immediately |
+| `a_cfar_decision_exclusive` | a bin reported both detected and suppressed. The three outputs are computed from overlapping terms, so "they cannot both be true" is exactly the kind of claim that survives a refactor by luck |
+| `a_cfar_supp_no_detect` | SPEC §7.7's requirement in its smallest form: a detection raised on a suppressed bin. Kept separate from exclusivity so a failure names the SPEC clause it broke |
+| `a_cfar_detect_implies_evaluable` | a detection on a bin the block never evaluated — the disabled, incomplete-window and unusable-geometry paths, in one property |
+| `a_cfar_out_never_blocked` | the output elastic buffer refusing a push, i.e. the credit bound of `cfar_core` §4 being over-committed. Without it a lost event surfaces thousands of cycles later as a missing beat; with it, at the cycle the bound broke |
+| `a_cfar_cfg_frame_boundary` | the active configuration changing on any cycle other than the one after an admitted start-of-frame beat. This is the assertion that enforces "runtime parameter changes take effect at a frame boundary only" — the property a per-frame suppression count depends on for its meaning |
+| `a_cfar_mask_count` | `cfar_window` (inline) — the reference masks selecting a different number of cells from the one the register plane asked for. Fires on EVERY cycle a guard-index off-by-one is present, not only on the cycles where the wrong cell happened to matter (§4.1, variant A) |
+| `a_cfar_bands_disjoint` | `cfar_window` (inline) — the two reference bands overlapping each other, or either of them containing the cell under test. A guard count of zero must still keep the cell out of its own reference window |
+| `a_cfar_guards_valid` | `cfar_window` (inline) — the claim that lets the guard cells go unchecked: whenever both reference bands are complete, every slot between the outermost reference cells is valid too |
 
 ## 6. Coverage strategy
 

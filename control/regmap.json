@@ -45,7 +45,7 @@
   ],
   "regmap_version": {
     "major": 1,
-    "minor": 4,
+    "minor": 5,
     "patch": 0,
     "description": "Bump on any change to this file. major: incompatible layout change; minor: registers or fields added; patch: documentation only."
   },
@@ -385,11 +385,101 @@
       "name": "cfar",
       "base": "0x6000",
       "size": "0x1000",
-      "implemented": false,
+      "implemented": true,
       "planned_by": "#14, #16",
-      "spec_groups": ["CFAR settings", "Integration settings"],
-      "description": "PLANNED. CFAR guard/training geometry and threshold scaling, plus coherent and non-coherent integration settings.",
-      "registers": []
+      "spec_groups": ["CFAR settings"],
+      "description": "Settings for the SPEC 7.7 one-dimensional CFAR detector over frequency bins (rtl/cfar/, issue #14): the detection mode, the guard and reference cell counts on each side independently, the threshold multiplier, the output mode, and the detection/suppression accounting coming back the other way. EVERYTHING WRITABLE HERE TAKES EFFECT AT A FRAME BOUNDARY AND ONLY THERE. rtl/cfar/cfar_core.sv latches the whole window into an active copy at the admitted start-of-frame beat, so a frame is always processed under exactly one geometry - which is the only way its suppression count, its detection count and the alpha carried in its events mean anything. CFAR_STATUS.CFG_PENDING reports that a write has not been taken yet, so software watches the change retire rather than inferring it. A guard or reference count above the elaborated maximum is CLAMPED to that maximum and raises CFAR_FAULT.CFG_CLAMPED; out of range is defined rather than undefined, because a register plane can be programmed with anything. The elaborated maxima themselves are reported in CFAR_STATUS so software sizes its programming without a compiled-in constant. Note that issue #16 was expected to add coherent and non-coherent integration settings to this window; the SPEC 9 group 'Integration settings' is implemented by the covariance window at 0x9000 (issue #13), so this window claims only 'CFAR settings'.",
+      "registers": [
+        {
+          "name": "CFAR_CTRL",
+          "offset": "0x000",
+          "description": "Master controls. STATUS_CLEAR is write-1-pulse and reads back zero, because it is an event rather than a mode.",
+          "fields": [
+            {"name": "ENABLE", "lsb": 0, "width": 1, "access": "RW", "reset": "0x0", "description": "Detection enable. Cleared, every bin is reported SUPPRESSED and no detection is raised - the same path an incomplete window takes, so there is one suppression rule and one counter rather than two. Resets to 0: a detector that powers up detecting would flood the packet network before software had configured a threshold."},
+            {"name": "MODE", "lsb": 4, "width": 2, "access": "RW", "reset": "0x0", "description": "0: cell averaging, the noise estimate is the mean of ALL reference cells. 1: greatest-of, the noise estimate is the larger of the two one-sided means. 2 and 3 are reserved; ordered-statistics CFAR needs a rank-order network rather than a sum and is not implemented (SPEC 7.7 lists it as optional). Greatest-of requires a non-zero reference count on BOTH sides; cell averaging requires only that their sum be non-zero. A mode whose reference geometry is unusable suppresses every bin and raises CFAR_FAULT.NO_REF."},
+            {"name": "OUT_MODE", "lsb": 8, "width": 1, "access": "RW", "reset": "0x0", "description": "0: EVENTS - the output stream carries only the bins that detected, plus one end-of-frame summary per input frame. 1: DENSE - every bin is reported (detected, evaluated-and-not-detected, or suppressed) plus the same summary. DENSE is the debug and snapshot mode: it makes the whole per-bin decision observable without a second data path, at the cost of one output beat per bin."},
+            {"name": "STATUS_CLEAR", "lsb": 16, "width": 1, "access": "RWP", "description": "Writing 1 clears the sticky CFAR_FAULT bits and zeroes CFAR_DET_COUNT, CFAR_SUP_COUNT and CFAR_FRAME_COUNT. A fault raised in the same cycle as the clear survives it, which is what stops a read-then-clear from losing an event."}
+          ]
+        },
+        {
+          "name": "CFAR_WINDOW",
+          "offset": "0x004",
+          "description": "Guard and reference cell counts, LEADING (higher frequency) and LAGGING (lower frequency) sides independently. The reference cells of a side start immediately beyond that side's guard cells. The first and last (guard + reference) bins of every frame have an incomplete window and are suppressed, which at a 64-bin frame with 2 guard and 8 reference cells is 20 of 64 bins - the reason these are runtime registers rather than compile-time constants.",
+          "fields": [
+            {"name": "GUARD_LEAD", "lsb": 0, "width": 5, "access": "RW", "reset": "0x02", "description": "Guard cells between the cell under test and the leading reference band. Zero is legal and means the reference cells start in the adjacent bin."},
+            {"name": "GUARD_LAG", "lsb": 8, "width": 5, "access": "RW", "reset": "0x02", "description": "Guard cells on the lagging side."},
+            {"name": "REF_LEAD", "lsb": 16, "width": 6, "access": "RW", "reset": "0x08", "description": "Leading reference cells. Zero is legal in cell-averaging mode (a one-sided estimator) and is not in greatest-of mode."},
+            {"name": "REF_LAG", "lsb": 24, "width": 6, "access": "RW", "reset": "0x08", "description": "Lagging reference cells."}
+          ]
+        },
+        {
+          "name": "CFAR_THRESHOLD",
+          "offset": "0x008",
+          "description": "The programmable threshold multiplier (SPEC 7.7). A bin detects when its power strictly exceeds ALPHA times the mean of its reference cells; the detector never divides, comparing cell*N*2^F against ALPHA*sum instead, so the decision is an exact integer inequality with no rounding and no tolerance.",
+          "fields": [
+            {"name": "ALPHA", "lsb": 0, "width": 16, "access": "RW", "reset": "0x1400", "description": "Threshold multiplier in UNSIGNED Q8.8: 8 integer bits and 8 fractional bits, covering [0, 255.996] in steps of 1/256. NOT Q1.15 - the SPEC 6 sample format cannot represent a value above 1, and the textbook cell-averaging design point alpha = N*(Pfa^(-1/N) - 1) is about 21.9 for 16 reference cells at Pfa = 1e-6. The reset value 0x1400 is exactly 20.0, close to that design point. 0x0100 is exactly 1.0, at which a perfectly flat spectrum detects nothing because the comparison is strict; alpha below 1.0 is legal and is the cheapest way for a test to force detections everywhere."}
+          ]
+        },
+        {
+          "name": "CFAR_STATUS",
+          "offset": "0x00C",
+          "description": "Hardware-driven status. The geometry fields let software size its programming without compiled-in constants, exactly as the build-parameter block does for the rest of the design.",
+          "fields": [
+            {"name": "MAX_GUARD", "lsb": 0, "width": 8, "access": "ROHW", "description": "Elaborated maximum guard-cell count per side. A larger value written to CFAR_WINDOW is clamped to this."},
+            {"name": "MAX_REF", "lsb": 8, "width": 8, "access": "ROHW", "description": "Elaborated maximum reference-cell count per side."},
+            {"name": "ALPHA_FRAC_W", "lsb": 16, "width": 8, "access": "ROHW", "description": "Fractional bits in CFAR_THRESHOLD.ALPHA, so software converts a real-valued multiplier without a compiled-in scale factor."},
+            {"name": "CFG_PENDING", "lsb": 24, "width": 1, "access": "ROHW", "description": "The register values differ from the active copy: a write is waiting for the next frame boundary. Clears when the frame that takes it starts."},
+            {"name": "FRAME_OPEN", "lsb": 25, "width": 1, "access": "ROHW", "description": "A frame is in flight (being consumed, flushed, or summarised). A write issued while this is clear takes effect on the next frame with no wait."}
+          ]
+        },
+        {
+          "name": "CFAR_GEOMETRY",
+          "offset": "0x010",
+          "description": "Widths of the detection-event format, reported by hardware so a consumer of the SPEC 7.8 packet network can parse events without a build-time header.",
+          "fields": [
+            {"name": "EVENT_W", "lsb": 0, "width": 16, "access": "ROHW", "description": "Total width of a packed detection event in bits. Configuration-independent by construction: every field of the event format is a constant of rtl/packages/cfar_pkg.sv, none is an elaboration parameter, because a packet format that changed with the FFT size would have to be renegotiated at every SPEC 11 size."},
+            {"name": "POWER_W", "lsb": 16, "width": 8, "access": "ROHW", "description": "Width of the cell-power field, which is SPEC 3 POWER_W."},
+            {"name": "SUM_W", "lsb": 24, "width": 8, "access": "ROHW", "description": "Width of the reference-sum field. The noise estimate is reported as the SUM and the COUNT rather than as their quotient, because the detector never divides and adding a divider to fill in a metadata field would put the only inexact operation in the block on the reporting path."}
+          ]
+        },
+        {
+          "name": "CFAR_DET_COUNT",
+          "offset": "0x014",
+          "description": "Detections raised since the last CFAR_CTRL.STATUS_CLEAR. Saturates at all-ones rather than wrapping: a wrapped counter can read zero on a detector that is firing continuously, which is the one reading that must never be produced.",
+          "fields": [
+            {"name": "VALUE", "lsb": 0, "width": 32, "access": "ROHW", "description": "Detection count."}
+          ]
+        },
+        {
+          "name": "CFAR_SUP_COUNT",
+          "offset": "0x018",
+          "description": "Bins suppressed since the last CFAR_CTRL.STATUS_CLEAR: incomplete window at a frame edge, block disabled, or an unusable reference geometry. SPEC 7.7 requires suppression under invalid or incomplete windows; this is the number that makes it visible rather than silent. Saturating, for the reason CFAR_DET_COUNT is.",
+          "fields": [
+            {"name": "VALUE", "lsb": 0, "width": 32, "access": "ROHW", "description": "Suppressed-bin count."}
+          ]
+        },
+        {
+          "name": "CFAR_FAULT",
+          "offset": "0x01C",
+          "description": "Sticky fault bits, write 1 to clear; also cleared by CFAR_CTRL.STATUS_CLEAR. Every one of these is a condition the detector handles deterministically rather than a condition it fails on - the bit exists so that the handling is visible instead of plausible.",
+          "fields": [
+            {"name": "CFG_CLAMPED", "lsb": 0, "width": 1, "access": "W1C", "description": "A guard or reference count written above the elaborated maximum was clamped to it when the frame latched."},
+            {"name": "NEG_INPUT", "lsb": 1, "width": 1, "access": "W1C", "description": "An input cell arrived with its sign bit set. A negative integrated power is not physical; it is clamped to zero so that every width downstream is an honest magnitude, and flagged here because it can only be an upstream defect or a cross-power stream wired to the detector by mistake."},
+            {"name": "ORPHAN_BEAT", "lsb": 2, "width": 1, "access": "W1C", "description": "A beat arrived between frames without start_of_frame. It has no defined bin index, so it is consumed and discarded rather than stalled: a stalled detector backs pressure into the FFT."},
+            {"name": "SOF_IN_FRAME", "lsb": 3, "width": 1, "access": "W1C", "description": "start_of_frame was asserted on a beat that is not a frame's first. The bit is IGNORED and the beat is treated as an ordinary bin; the source is violating SPEC 5."},
+            {"name": "NO_REF", "lsb": 4, "width": 1, "access": "W1C", "description": "A frame ran with a reference geometry the selected mode cannot use - zero reference cells in cell-averaging mode, or a zero count on either side in greatest-of mode. Every bin of that frame is suppressed."},
+            {"name": "BIN_OVERFLOW", "lsb": 5, "width": 1, "access": "W1C", "description": "A frame ran past 65535 bins, so the bin index saturated rather than wrapping. A wrapped index would put two different frequencies in one detection event."}
+          ]
+        },
+        {
+          "name": "CFAR_FRAME_COUNT",
+          "offset": "0x020",
+          "description": "Frames summarised since the last CFAR_CTRL.STATUS_CLEAR. Exactly one summary event is emitted per input frame, so this counter and the number of end_of_frame beats on the detection stream are the same number - which is what lets a consumer detect a lost output frame.",
+          "fields": [
+            {"name": "VALUE", "lsb": 0, "width": 32, "access": "ROHW", "description": "Summarised-frame count."}
+          ]
+        }
+      ]
     },
     {
       "name": "counters",

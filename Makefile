@@ -391,6 +391,32 @@ COVAR_FILES   := sim/verilator/files_covar.f
 COVAR_TEST    := test_covariance
 COVAR_BIN      = sim/verilator/build/fast_tiny_$(COVAR_TOP)/V$(COVAR_TOP)_$(COVAR_TEST)
 
+# --- CFAR detector (issue #14, SPEC 6 / 7.7 / 13.1 / 13.2 / 14) -------------
+# A ninth self-contained build, for the reason the others have one: a failure in
+# it is unambiguously a CFAR failure. cfar_top holds TWO elaborations of
+# rtl/cfar/cfar_core.sv in one build -- the configured geometry from
+# config/<name>.json (CFAR_MAX_GUARD, CFAR_MAX_REF), and a second at
+# MAX_GUARD = 0, MAX_REF = 3, so the guard-free corner (reference cells adjacent
+# to the cell under test) and a short structural half-window are exercised rather
+# than assumed.
+#
+#   test_cfar  twelve passes: the geometry echo, injected targets including the
+#              closely-spaced pair that straddles the guard spacing, edge
+#              suppression at bins 0/1/last-1/last and on a frame shorter than the
+#              window, a threshold sweep whose detection flips at exactly the
+#              integer the model says (plus the zero-spectrum and alpha = 1.0
+#              closed forms), masking by a strong target inside the reference band,
+#              cell averaging against greatest-of on a worked clutter edge, random
+#              power streams in both modes and both output modes, backpressure
+#              invariance, reconfiguration at a frame boundary, the fault paths,
+#              the SPEC 9 counters against an independent tally, and the second
+#              elaboration. Every event is compared FIELD FOR FIELD against
+#              model/cpp/cfar/cfar_model.hpp.
+CFAR_TOP      := cfar_top
+CFAR_FILES    := sim/verilator/files_cfar.f
+CFAR_TEST     := test_cfar
+CFAR_BIN       = sim/verilator/build/fast_tiny_$(CFAR_TOP)/V$(CFAR_TOP)_$(CFAR_TEST)
+
 ifeq ($(HOST_KIND),windows)
   QUARTUS_SH ?= C:/altera_pro/26.1/quartus/bin64/quartus_sh.exe
 else
@@ -439,41 +465,44 @@ define LINT_RECIPE
 	    '$(CONFIG)' 'sim/verilator/lint_waivers.vlt'
 	$(REGMAP_CHECK_RECIPE)
 	$(FFT_TWIDDLE_CHECK_RECIPE)
-	@printf '[lint] 1/12 %s\n' 'benchmark_sim_top'
+	@printf '[lint] 1/13 %s\n' 'benchmark_sim_top'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) --test $(TEST)
-	@printf '[lint] 2/12 %s\n' '$(STREAM_TOP)'
+	@printf '[lint] 2/13 %s\n' '$(STREAM_TOP)'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
 	    --top $(STREAM_TOP) --files $(STREAM_FILES) --test $(STREAM_TEST)
-	@printf '[lint] 3/12 %s\n' '$(VIOL_TOP)'
+	@printf '[lint] 3/13 %s\n' '$(VIOL_TOP)'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
 	    --top $(VIOL_TOP) --files $(VIOL_FILES) --test $(VIOL_TEST)
-	@printf '[lint] 4/12 %s\n' '$(CONTROL_TOP)'
+	@printf '[lint] 4/13 %s\n' '$(CONTROL_TOP)'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
 	    --top $(CONTROL_TOP) --files $(CONTROL_FILES) --test $(CONTROL_TEST)
-	@printf '[lint] 5/12 %s\n' '$(CDC_TOP)'
+	@printf '[lint] 5/13 %s\n' '$(CDC_TOP)'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
 	    --top $(CDC_TOP) --files $(CDC_FILES) --test $(firstword $(CDC_TESTS))
-	@printf '[lint] 6/12 %s\n' '$(CDCV_TOP)'
+	@printf '[lint] 6/13 %s\n' '$(CDCV_TOP)'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
 	    --top $(CDCV_TOP) --files $(CDCV_FILES) --test $(CDCV_TEST)
-	@printf '[lint] 7/12 %s\n' '$(TELEM_TOP)'
+	@printf '[lint] 7/13 %s\n' '$(TELEM_TOP)'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
 	    --top $(TELEM_TOP) --files $(TELEM_FILES) --test $(firstword $(TELEM_TESTS))
-	@printf '[lint] 8/12 %s\n' '$(CMULT_TOP)'
+	@printf '[lint] 8/13 %s\n' '$(CMULT_TOP)'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
 	    --top $(CMULT_TOP) --files $(CMULT_FILES) --test $(CMULT_TEST)
-	@printf '[lint] 9/12 %s\n' '$(PFB_TOP)'
+	@printf '[lint] 9/13 %s\n' '$(PFB_TOP)'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
 	    --top $(PFB_TOP) --files $(PFB_FILES) --test $(PFB_TEST)
-	@printf '[lint] 10/12 %s\n' '$(FFT_TOP)'
+	@printf '[lint] 10/13 %s\n' '$(FFT_TOP)'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
 	    --top $(FFT_TOP) --files $(FFT_FILES) --test $(FFT_TEST)
-	@printf '[lint] 11/12 %s\n' '$(COVAR_TOP)'
+	@printf '[lint] 11/13 %s\n' '$(COVAR_TOP)'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
 	    --top $(COVAR_TOP) --files $(COVAR_FILES) --test $(COVAR_TEST)
-	@printf '[lint] 12/12 %s\n' '$(BF_TOP)'
+	@printf '[lint] 12/13 %s\n' '$(BF_TOP)'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
 	    --top $(BF_TOP) --files $(BF_FILES) --test $(BF_TEST)
+	@printf '[lint] 13/13 %s\n' '$(CFAR_TOP)'
+	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
+	    --top $(CFAR_TOP) --files $(CFAR_FILES) --test $(CFAR_TEST)
 endef
 
 # `sim-tiny`: SPEC 12.1 fast build of every simulation top, then every test
@@ -530,6 +559,18 @@ endef
 #                            required to land in the right category with the
 #                            right count, cross-checked every cycle against the
 #                            C++ model in model/cpp/telemetry/.
+#   test_cfar                cfar_top — the SPEC 7.7 CFAR detector. Two
+#                            elaborations in one build (the configured geometry
+#                            and a guard-free MAX_GUARD = 0 shape), driven with
+#                            injected targets, edge suppression cases, a
+#                            threshold sweep that must flip at exactly the
+#                            integer the model says, a masking experiment, a
+#                            worked cell-averaging against greatest-of clutter
+#                            edge, random frames dense and again under bursty
+#                            stalls with the two runs required to produce
+#                            identical event sequences, and the fault paths.
+#                            Every detection event is compared field for field
+#                            against model/cpp/cfar/.
 define SIM_TINY_RECIPE
 	$(REGMAP_CHECK_RECIPE)
 	$(BUILD_VERILATOR) --mode fast --config tiny --jobs $(JOBS) --test $(TEST)
@@ -559,11 +600,13 @@ define SIM_TINY_RECIPE
 	    --top $(COVAR_TOP) --files $(COVAR_FILES) --test $(COVAR_TEST)
 	$(BUILD_VERILATOR) --mode fast --config tiny --jobs $(JOBS) \
 	    --top $(BF_TOP) --files $(BF_FILES) --test $(BF_TEST)
+	$(BUILD_VERILATOR) --mode fast --config tiny --jobs $(JOBS) \
+	    --top $(CFAR_TOP) --files $(CFAR_FILES) --test $(CFAR_TEST)
 	@printf '[sim-tiny] seeds: %s\n' '$(SEEDS)'
-	@printf '[sim-tiny] tests: %s %s %s %s %s %s %s %s %s %s %s %s\n' '$(TEST)' '$(STREAM_TEST)' \
+	@printf '[sim-tiny] tests: %s %s %s %s %s %s %s %s %s %s %s %s %s\n' '$(TEST)' '$(STREAM_TEST)' \
 	    '$(VIOL_TEST)' '$(CONTROL_TEST)' '$(CDC_TESTS)' '$(CDCV_TEST)' \
 	    '$(TELEM_TESTS)' '$(CMULT_TEST)' '$(PFB_TEST)' '$(FFT_TEST)' '$(COVAR_TEST)' \
-	    '$(BF_TEST)'
+	    '$(BF_TEST)' '$(CFAR_TEST)'
 	@rc=0; for s in $(SEEDS); do \
 	    printf '\n[sim-tiny] ===== seed %s : %s =====\n' "$$s" '$(TEST)'; \
 	    ./$(SIM_TINY_BIN) +seed=$$s +results=$(RESULTS_DIR) || rc=1; \
@@ -595,6 +638,8 @@ define SIM_TINY_RECIPE
 	    ./$(COVAR_BIN) +seed=$$s +results=$(RESULTS_DIR) || rc=1; \
 	    printf '\n[sim-tiny] ===== seed %s : %s =====\n' "$$s" '$(BF_TEST)'; \
 	    ./$(BF_BIN) +seed=$$s +results=$(RESULTS_DIR) || rc=1; \
+	    printf '\n[sim-tiny] ===== seed %s : %s =====\n' "$$s" '$(CFAR_TEST)'; \
+	    ./$(CFAR_BIN) +seed=$$s +results=$(RESULTS_DIR) || rc=1; \
 	  done; \
 	  if [ $$rc -ne 0 ]; then \
 	    printf '\n[sim-tiny] FAILED (seeds: %s)\n' '$(SEEDS)' 1>&2; exit 1; \
