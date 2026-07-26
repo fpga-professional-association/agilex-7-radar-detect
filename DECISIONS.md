@@ -3588,3 +3588,235 @@ properties of how an elastic, independently-stalled interface is observed:
 The general lesson, and it applies to every block after this one: **a transaction-level model of
 an elastic block is synchronised by the events the test caused, not by the events it observes**,
 and the two differ by the depth of every buffer between them.
+
+### Measured calibration data (SPEC §7.4 and SPEC §18, seed 1)
+
+Quartus Prime Pro 26.1, `AGMF039R47B1E1VC`, `quartus/calibration/align_sw_calib.*`, probe
+constraint 600.24 MHz (see the SDC header for why the probe is above the SPEC §2 target).
+Regenerate with `make calibrate-align`; the JSON records are
+`results/synthesis/calibration_align_sw.json` and `..._align_net.json`, both generated and
+neither committed (PLAN.md standing rule 3).
+
+**The critical path is inside `u_kernel` at all four points**, so every number below is a
+measurement of a topology and not of the wrapper's boundary.
+
+#### The SPEC §7.4 comparison — routing fabric, narrow point
+
+4 lanes × 4 antennas, 182-bit routed word. Both architectures at **latency 2**
+(`MUX_STAGES = 1` against `log2(4)`).
+
+| | direct crossbar | multistage omega | omega vs crossbar |
+|---|---|---|---|
+| ALMs | 2 126 (0.163%) | 1 881 (0.144%) | **−11.5%** |
+| ALM registers | 3 036 | 2 984 | −1.7% |
+| Combinational ALUTs | 854 | 1 512 | +77.0% |
+| Hyper-registers | 742 | 740 | −0.3% |
+| M20K / MLAB / DSP | 0 / 0 / 0 | 0 / 0 / 0 | — |
+| **Fmax** | **457.5 MHz** | **≥ 643.9 MHz** | ≥ +40.8% |
+| reg→reg logic depth | 5 | 1 | |
+| cell delay / routing delay | 0.666 / 1.166 ns | 0.312 / 0.971 ns | |
+| **peak long-haul interconnect demand** | **92%** | **25%** | |
+| peak short interconnect demand | 26% | 0% | |
+| Fitter time | 517 s | 459 s | |
+
+#### The SPEC §7.4 comparison — routing fabric, full-scale-representative point
+
+8 lanes × 16 antennas, 566-bit routed word (a 512-bit antenna vector plus its 54-bit
+identity — the SPEC §7.5 maximum antenna count). Both architectures at **latency 3**
+(`MUX_STAGES = 2` against `log2(8)`).
+
+| | direct crossbar | multistage omega | omega vs crossbar |
+|---|---|---|---|
+| ALMs | 18 492 (1.416%) | 13 946 (1.068%) | **−24.6%** |
+| ALM registers | 33 502 | 22 976 | **−31.4%** |
+| Combinational ALUTs | 18 862 | 13 786 | **−26.9%** |
+| Hyper-registers | 4 437 | 4 555 | +2.7% |
+| M20K / MLAB / DSP | 0 / 0 / 0 | 0 / 0 / 0 | — |
+| **Fmax** | **296.5 MHz** | **≥ 624.6 MHz** | **≥ +110.7%** |
+| reg→reg logic depth | 7 | 4 | |
+| cell delay / routing delay | 0.834 / **2.128** ns | 0.387 / **1.009** ns | routing 2.1× |
+| **peak long-haul interconnect demand** | **109%** | **76%** | |
+| **peak short interconnect demand** | **103%** | **0%** | |
+| Fitter time | 673 s | 544 s | |
+
+Retiming reports `Path Limit` at every point — "retiming has used all available register
+locations in the critical chain path" — so neither architecture's Fmax is a
+register-placement artefact that Fast Forward could move.
+
+#### The whole block, one point per architecture
+
+8 bins × 4 antennas, `GROUPS = 8` — the widest beamformer beat
+`stream_pkg::STREAM_MAX_DATA_W` allows (exactly 1024 bits). These points price the parts
+that are **identical in both builds**: the reassembly buffer, the detector, the scheduler,
+the counters and the output elastic buffer.
+
+| | crossbar build | omega build |
+|---|---|---|
+| ALMs | 14 043 (1.076%) | 12 017 (0.920%) |
+| ALM registers | 20 930 | 17 747 |
+| Combinational ALUTs | 14 323 | 12 214 |
+| M20K (bits) | 27 (4 184) | 27 (4 184) |
+| Fmax | 241.2 MHz | 161.7 MHz |
+| reg→reg logic depth | 11 | 9 |
+| cell delay / routing delay | 1.659 / 2.263 ns | 0.581 / **5.469** ns |
+| peak long-haul interconnect demand | 125% | 137% |
+| peak short interconnect demand | 85% | 33% |
+| worst path | fabric output → **duplicate counter** | **`cfg_enable`** → stage-2 switch register |
+
+The ALM difference tracks the fabric difference, as it should. **The Fmax numbers do not,
+and reading them as a topology result would be wrong** — see findings 6 and 7.
+
+Quartus packed part of the reassembly buffer into 27 M20Ks in both builds, which answers
+the question the `align_net` matrix was built to ask: the buffer does not have to be ALM
+registers, so `GROUPS` can grow without a linear ALM cost.
+
+#### Latency and throughput (measured in simulation, not synthesis)
+
+| | crossbar | omega |
+|---|---|---|
+| network latency, `BIN_PAR = 4` / `8` | 2 / 3 cycles | 2 / 3 cycles |
+| block latency, `BIN_PAR = 4` / `8` | 5 / 6 cycles | 5 / 6 cycles |
+| sustained throughput, `BIN_PAR = 4` | 0.945 beats/cycle | 0.945 beats/cycle |
+| sustained throughput, `BIN_PAR = 8` | 0.875 beats/cycle | 0.875 beats/cycle |
+| routing conflicts, stress pass, `BIN_PAR = 4` | 30 | 51 |
+| routing conflicts, stress pass, `BIN_PAR = 8` | 26 | 43 |
+
+The throughput figures are the whole block's, at `GROUPS = 8`, and are set by the
+request/response round trip rather than by the fabric — which is why they are identical.
+The shortfall from 1.000 is the reassembly buffer being one entry short of covering the
+round trip, not the network.
+
+#### Finding 1 — the multistage network wins on every recorded axis at width, and the mechanism is visible
+
+SPEC §7.4 asks for area, congestion, latency and Fmax. At the full-scale routing width the
+omega network is **24.6% smaller in ALMs, 31.4% smaller in registers, 26.9% smaller in
+ALUTs, at identical latency, and more than twice as fast** — and the congestion column says
+why. The crossbar's estimated peak interconnect demand is **109% of long-haul and 103% of
+short-haul wire in its worst region**: the router is oversubscribed and has to detour, which
+shows up directly as 2.128 ns of routing delay on a critical path whose cell delay is only
+0.834 ns. The omega network, whose every connection is between adjacent switch positions of
+consecutive stages, sits at 76% and 0% and pays 1.009 ns.
+
+This is exactly the property `align_clos`'s header claims and is the reason SPEC §7.4 asks
+for congestion rather than only for area: at the narrow point the ALM difference is 11.5%
+and could be argued either way; the congestion figure (92% against 25%) already predicts the
+wide point's collapse, one compile earlier.
+
+#### Finding 2 — the crossbar misses the SPEC §2 target at width, and the omega clears it by 39%
+
+296.5 MHz against a 450 MHz design target. That is not a margin question, it is a
+disqualification: the alignment network runs in `history_clk`, which SPEC §8 puts at 400 MHz,
+and the crossbar does not reach that either. The omega network's ≥624.6 MHz clears both.
+
+#### Finding 3 — the crossbar's ALUT advantage is real, and it is a narrow-N effect that reverses
+
+At 4 lanes the crossbar uses 854 combinational ALUTs against the omega's 1 512 — the
+per-switch arbitration is more logic per routed bit when there are only four lanes to
+arbitrate between. It is the one axis on which the crossbar wins anywhere, and it is worth
+recording rather than omitting. It reverses completely by 8 lanes (18 862 against 13 786),
+which is what `N²` against `N log N` predicts and what makes the narrow point a poor guide
+to the full-scale answer on its own.
+
+#### Finding 4 — the omega's blocking costs nothing measurable, which is decision 7 confirmed
+
+The omega network blocks roughly **1.7× as often** as the crossbar under the reorder-stress
+pass (51 against 30 conflicts at `BIN_PAR = 4`, 43 against 26 at 8), because a multistage
+network is blocking by construction and a crossbar is not. It sustains **exactly the same
+throughput** anyway. That is the measurement behind decision 7's argument: what blocking
+costs here is one cycle of delay for one word, and the reassembly buffer — which has to
+absorb far larger skew between independent history instances regardless — absorbs it.
+
+Paying `2n−1` middle stages for a strictly non-blocking Clos would have bought a property
+worth zero beats per cycle at a cost the wide point suggests would be roughly doubled area.
+
+#### Finding 5 — the omega's combinational ready chain did not become the limiter
+
+Decision 10 records that `align_clos`'s `in_ready` is a combinational function of
+`out_ready` through `log2(N)` stages, and that fixing it would double the network's storage.
+The measurement settles it: at both widths the omega's worst register-to-register path is
+inside the switch **datapath** (`g_stage[1].g_switch[3].s1_q` at the wide point), not on the
+ready chain, and its logic depth is 4 against the crossbar's 7. The two-deep-link variant is
+not built, and this is the evidence for not building it.
+
+#### Finding 6 — the block-level Fmax is limited by the DETECTOR, not by either fabric, and the crossbar build's number is the honest one
+
+The crossbar build's worst path runs from the fabric's output register
+(`u_switch|g_xbar.u_net|g_out[0].d_last[131]`) **into the duplicate counter**
+(`u_collect|u_cnt_dup|count_q[28]`) — eleven levels of logic covering the identity
+comparison, the duplicate decision, the population count across lanes and the saturating
+counter's adder, in one combinational cone. 241 MHz.
+
+That path is in `align_collect`, which is common to both architectures, and it is a real
+defect this issue is recording rather than fixing: **the detector's verdict and its counter
+increment belong in different cycles.** The fix is one register stage between
+`l_dup`/`l_orphan` and the `perf_counter` inputs — the counters are telemetry, so a
+one-cycle-late count is indistinguishable from an on-time one to every consumer, and the
+entry-write path (which must stay same-cycle) is not on this path.
+
+It is not made here for the reason issue #15 gave for the equivalent deferral: it changes a
+verified block after its gate has run, for a resource reason, and the pipeline boundaries
+around this block are issue #17's to place. The measurement and the exact one-line change
+are recorded so #17 makes it with the number in hand.
+
+#### Finding 7 — the omega build's 161 MHz is a `cfg_enable` FANOUT, and it is a SPEC §23 violation this block owns
+
+The omega build's worst path is `en_q` → a stage-2 switch register, with **0.581 ns of cell
+delay and 5.469 ns of routing**. A 9:1 routing-to-logic ratio is not a logic path at all: it
+is one register driving most of the block. `cfg_enable` gates `lane_ready` on every lane,
+`alloc_ready`, `issue` and `rsp_ready` on every port — a chip-wide control net, which is
+precisely what SPEC §23 warns against and what issue #15 built `hist_addr_pipe` to avoid on
+its own read path.
+
+The crossbar build does not show it only because its detector path (finding 6) is worse
+still; the same net is there in both, and the omega build's peak long-haul interconnect
+demand of 137% is the same fact from the router's side.
+
+The fix is the one #15 already demonstrated: a **registered fanout** of `cfg_enable`, one
+local copy per lane and per request port, rather than one register driving all of them.
+`cfg_enable` is quasi-static, so a one-cycle-delayed local copy is semantically identical.
+Deferred to #17 for the same reason as finding 6, and named here with its measurement.
+
+**What findings 6 and 7 together mean for the recommendation: nothing.** Neither is a
+property of a topology. Both are in logic that is byte-for-byte identical in the two builds,
+which is exactly why the SPEC §7.4 comparison was run on the fabric alone (decision 14) —
+had it been run on the block, these two paths would have masked the topology result
+completely, and the answer would have come out "241 against 162, choose the crossbar",
+which the fabric points show is backwards.
+
+#### Caveat, stated because it bounds the claim
+
+**Both omega points MET the 600.24 MHz probe** (slack +0.113 ns and +0.065 ns), so
+`≥ 643.9` and `≥ 624.6` are lower bounds, not measured limits — `run_calibration.py` flags
+this itself in the record's `notes`. The direction of the comparison is unaffected (a lower
+bound of 624.6 beats a measured 296.5), but the omega network's true ceiling is unknown from
+these runs. Raising the probe for those two points is a one-line change to
+`align_sw_calib.sdc`; it is left to issue #20, which constrains at the real target and needs
+the margin rather than the ceiling.
+
+#### Recommendation
+
+**`ALGN_NET_CLOS` — the multistage omega network — is the architecture that goes to issue
+#17 and issue #20.** `align_net`'s `NET_SEL` default should be changed to 1 by #17 when it
+instantiates the block in the pipeline; it is left at 0 here so that this pull request's
+default is the SPEC §7.4 *reference* architecture and the recommendation is a conclusion
+rather than a fait accompli.
+
+Smaller, faster, identically low-latency, dramatically less congested, and no worse on
+throughput. The crossbar stays in the tree, fully verified and swept by the same suite,
+because SPEC §7.4 requires the comparison to be reproducible and because a second
+architecture behind one interface is what makes a later change cheap — but nothing should
+instantiate it.
+
+**What issue #20 inherits from this, as arithmetic rather than another compile.** The
+full-scale alignment network is one full-scale ROUTING FABRIC — **13 946 ALMs, 22 976
+registers**, measured at 16 antennas × 8 lanes — plus the block-level fixed cost around it,
+which the two `align_net` points measure at 8 bins × 4 antennas as roughly **12 017 − 4 700
+≈ 7 300 ALMs** of scheduler, detector, counters and buffer once the narrow fabric inside
+them is subtracted. The reassembly buffer scales as `GROUPS × BIN_PAR × VEC_W` and is 32 768
+bits at `GROUPS = 8`, `BIN_PAR = 8`, 16 antennas — four times the 8 192 bits measured, and
+Quartus has already shown it will take M20Ks for it rather than ALM registers, so that
+growth is not linear in ALMs.
+
+**What issue #17 inherits: two named, measured, one-line fixes** (findings 6 and 7), neither
+of which changes this recommendation, and both of which have to land before the block meets
+the SPEC §8 400 MHz `history_clk` in either form.

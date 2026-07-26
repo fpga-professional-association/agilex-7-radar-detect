@@ -1021,6 +1021,7 @@ help:
 	@printf '%-18s %-9s %s\n' 'calibrate-fft'    'windows' 'SPEC 18 FFT stage + full-FFT sweep (~1 h of Fitter)'
 	@printf '%-18s %-9s %s\n' 'calibrate-beamformer' 'windows' 'SPEC 18 beamforming dot-product + matrix-slice sweep'
 	@printf '%-18s %-9s %s\n' 'calibrate-history' 'windows' 'SPEC 18 M20K history-bank + corner-turn sweep'
+	@printf '%-18s %-9s %s\n' 'calibrate-align' 'windows' 'SPEC 7.4 crossbar vs Clos routing sweep + block cost'
 	@printf '%-18s %-9s %s\n' 'calibrate-summary' 'local'  'rebuild the calibration JSON/table from evidence on disk (KERNEL=<name>)'
 	@printf '\n'
 	@printf '%-18s %-9s %s\n' 'seed-sweep'       'windows' 'TODO(issue #23) ten-seed robustness sweep'

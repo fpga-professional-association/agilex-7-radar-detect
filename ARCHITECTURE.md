@@ -393,6 +393,41 @@ order.
 | `quartus/calibration/align_sw_wrap.sv` | the geometry plus `NET_SEL`, `MUX_STAGES` | #16 | SPEC §18 wrapper for the **routing fabric alone** — the thing the two architectures are. |
 | `quartus/calibration/align_net_wrap.sv` | as `align_net` | #16 | SPEC §18 wrapper for the **whole block**, which prices the part both builds share. |
 
+#### Which architecture the design uses (MEASURED — SPEC §7.4)
+
+**`ALGN_NET_CLOS`, the multistage omega network.** Both are built, both are verified by the
+same suite, and both were compiled at two widths on `AGMF039R47B1E1VC`; the full table and
+its caveats are in DECISIONS.md (issue #16). At the full-scale routing width — 8 lanes ×
+16 antennas, a 566-bit routed word, both architectures at latency 3:
+
+| | direct crossbar | multistage omega |
+|---|---|---|
+| ALMs | 18 492 | **13 946** (−24.6%) |
+| ALM registers | 33 502 | **22 976** (−31.4%) |
+| Fmax | 296.5 MHz | **≥ 624.6 MHz** |
+| peak long-haul / short interconnect demand | 109% / 103% | **76% / 0%** |
+| sustained throughput | 0.875 beats/cycle | 0.875 beats/cycle |
+
+The congestion column is the mechanism: the crossbar's estimated interconnect demand exceeds
+100% in its worst region, the router detours, and 2.128 ns of its critical path is wire
+against 0.834 ns of logic. At 296 MHz it misses both the SPEC §2 450 MHz target and the
+SPEC §8 400 MHz `history_clk`; the omega clears both. It blocks about 1.7× as often and
+sustains exactly the same throughput anyway, because the reassembly buffer absorbs it.
+
+`NET_SEL` is left at 0 — the SPEC §7.4 *reference* architecture — so that this issue's
+default is the thing being compared against rather than its own conclusion; issue #17 sets
+it to 1 when it instantiates the block in the pipeline. The crossbar stays in the tree
+because §7.4 requires the comparison to be reproducible, and because a second architecture
+behind one interface is what makes a later change cheap.
+
+**Two measured defects issue #17 must fix before either form meets 400 MHz**, neither a
+property of a topology and both in logic common to the two builds: the detector's verdict
+and its counter increment share a cycle (11 levels of logic from the fabric's output
+register into the duplicate counter), and `cfg_enable` is a single register driving most of
+the block — a SPEC §23 chip-wide control net, to be replaced by the registered fanout §3.4
+already demonstrates. DECISIONS.md findings 6 and 7 carry the numbers and the one-line
+changes.
+
 #### Flow control and the sustained rate
 
 The scheduler issues all `BIN_PAR` requests of a group in one cycle or none of them, when

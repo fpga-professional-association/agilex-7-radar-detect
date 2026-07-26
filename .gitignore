@@ -39,6 +39,12 @@ model/cpp/build/
 # Note: pattern must not exclude the subdirectories themselves, or git cannot
 # re-include the .gitkeep files beneath them.
 results/*/*
+# ... and loose files directly in results/, which `results/*/*` does not match.
+# A calibration runner's own log lands there (issue #16), and PLAN.md standing
+# rule 3 applies to it exactly as it does to everything one level deeper.
+results/*.log
+results/*.json
+results/*.txt
 !results/**/.gitkeep
 
 # Python
