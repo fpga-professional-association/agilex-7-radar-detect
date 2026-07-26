@@ -30,6 +30,13 @@ sim/verilator/generated/config_pkg.sv
 rtl/control/reg_if_pkg.sv
 rtl/control/generated/regmap_pkg.sv
 
+// The covariance window's block checks its generated reset values against the
+// kernel's own package at elaboration (issue #13), so that package - and the
+// numerics package it is derived from - is part of this build even though no
+// covariance datapath is.
+rtl/packages/fxp_pkg.sv
+rtl/packages/covar_pkg.sv
+
 // ---- protocol assertions (SPEC 14) -------------------------------------
 // Instantiated inside reg_fabric under `ifndef SYNTHESIS`, so the protocol is
 // checked everywhere the fabric is used. Must precede the RTL that instantiates
@@ -44,6 +51,7 @@ rtl/control/reg_block_ctrl.sv
 rtl/control/reg_block_fault.sv
 rtl/control/reg_block_scratch.sv
 rtl/control/reg_block_coeff.sv
+rtl/control/reg_block_covar.sv
 rtl/control/reg_fabric.sv
 
 // ---- deliberately dead block (simulation only) -------------------------

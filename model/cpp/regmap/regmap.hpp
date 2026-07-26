@@ -24,12 +24,12 @@ inline constexpr unsigned kDataWidth = 32;
 inline constexpr unsigned kStrobeWidth = 4;
 inline constexpr std::uint32_t kWindowBytes = 0x1000u;
 inline constexpr std::uint32_t kAddrMask = 0xFFFFu;
-inline constexpr unsigned kBlockCount = 9;
-inline constexpr unsigned kBlockCountImplemented = 7;
-inline constexpr unsigned kRegisterCount = 59;
-inline constexpr std::uint32_t kBlockMask = 0x000000BFu;
+inline constexpr unsigned kBlockCount = 10;
+inline constexpr unsigned kBlockCountImplemented = 8;
+inline constexpr unsigned kRegisterCount = 66;
+inline constexpr std::uint32_t kBlockMask = 0x000002BFu;
 inline constexpr unsigned kVersionMajor = 1;
-inline constexpr unsigned kVersionMinor = 3;
+inline constexpr unsigned kVersionMinor = 4;
 inline constexpr unsigned kVersionPatch = 0;
 
 // Per-bit access classification, matching rtl/control/reg_csr_block.sv.
@@ -78,7 +78,7 @@ inline constexpr unsigned ID_MAGIC_MAGIC_LSB = 0;
 inline constexpr unsigned ID_MAGIC_MAGIC_WIDTH = 32;
 inline constexpr std::uint32_t ID_MAGIC_MAGIC_MASK = 0xFFFFFFFFu;
 inline constexpr std::uint32_t ID_VERSION_ADDR = 0x0004u;
-inline constexpr std::uint32_t ID_VERSION_RESET = 0x01030001u;
+inline constexpr std::uint32_t ID_VERSION_RESET = 0x01040001u;
 inline constexpr unsigned ID_VERSION_MAJOR_LSB = 24;
 inline constexpr unsigned ID_VERSION_MAJOR_WIDTH = 8;
 inline constexpr std::uint32_t ID_VERSION_MAJOR_MASK = 0xFF000000u;
@@ -92,7 +92,7 @@ inline constexpr unsigned ID_VERSION_SCHEMA_LSB = 0;
 inline constexpr unsigned ID_VERSION_SCHEMA_WIDTH = 8;
 inline constexpr std::uint32_t ID_VERSION_SCHEMA_MASK = 0x000000FFu;
 inline constexpr std::uint32_t ID_GEOMETRY_ADDR = 0x0008u;
-inline constexpr std::uint32_t ID_GEOMETRY_RESET = 0x10203B09u;
+inline constexpr std::uint32_t ID_GEOMETRY_RESET = 0x1020420Au;
 inline constexpr unsigned ID_GEOMETRY_N_BLOCKS_LSB = 0;
 inline constexpr unsigned ID_GEOMETRY_N_BLOCKS_WIDTH = 8;
 inline constexpr std::uint32_t ID_GEOMETRY_N_BLOCKS_MASK = 0x000000FFu;
@@ -106,7 +106,7 @@ inline constexpr unsigned ID_GEOMETRY_ADDR_W_LSB = 24;
 inline constexpr unsigned ID_GEOMETRY_ADDR_W_WIDTH = 8;
 inline constexpr std::uint32_t ID_GEOMETRY_ADDR_W_MASK = 0xFF000000u;
 inline constexpr std::uint32_t ID_CAPABILITY_ADDR = 0x000Cu;
-inline constexpr std::uint32_t ID_CAPABILITY_RESET = 0x000000BFu;
+inline constexpr std::uint32_t ID_CAPABILITY_RESET = 0x000002BFu;
 inline constexpr unsigned ID_CAPABILITY_BLOCK_MASK_LSB = 0;
 inline constexpr unsigned ID_CAPABILITY_BLOCK_MASK_WIDTH = 32;
 inline constexpr std::uint32_t ID_CAPABILITY_BLOCK_MASK_MASK = 0xFFFFFFFFu;
@@ -647,6 +647,77 @@ inline constexpr unsigned COUNTERS_WRAP_STATUS_SNAPSHOT_ID_LSB = 8;
 inline constexpr unsigned COUNTERS_WRAP_STATUS_SNAPSHOT_ID_WIDTH = 1;
 inline constexpr std::uint32_t COUNTERS_WRAP_STATUS_SNAPSHOT_ID_MASK = 0x00000100u;
 
+// covar: Integration settings for the SPEC 7.
+inline constexpr std::uint32_t COVAR_BASE = 0x9000u;
+inline constexpr std::uint32_t COVAR_COVAR_CTRL_ADDR = 0x9000u;
+inline constexpr std::uint32_t COVAR_COVAR_CTRL_RESET = 0x00000031u;
+inline constexpr unsigned COVAR_COVAR_CTRL_ENABLE_LSB = 0;
+inline constexpr unsigned COVAR_COVAR_CTRL_ENABLE_WIDTH = 1;
+inline constexpr std::uint32_t COVAR_COVAR_CTRL_ENABLE_MASK = 0x00000001u;
+inline constexpr unsigned COVAR_COVAR_CTRL_EXP_MODE_LSB = 1;
+inline constexpr unsigned COVAR_COVAR_CTRL_EXP_MODE_WIDTH = 1;
+inline constexpr std::uint32_t COVAR_COVAR_CTRL_EXP_MODE_MASK = 0x00000002u;
+inline constexpr unsigned COVAR_COVAR_CTRL_EXP_K_LSB = 4;
+inline constexpr unsigned COVAR_COVAR_CTRL_EXP_K_WIDTH = 4;
+inline constexpr std::uint32_t COVAR_COVAR_CTRL_EXP_K_MASK = 0x000000F0u;
+inline constexpr unsigned COVAR_COVAR_CTRL_FLUSH_LSB = 8;
+inline constexpr unsigned COVAR_COVAR_CTRL_FLUSH_WIDTH = 1;
+inline constexpr std::uint32_t COVAR_COVAR_CTRL_FLUSH_MASK = 0x00000100u;
+inline constexpr unsigned COVAR_COVAR_CTRL_SAT_CLEAR_LSB = 9;
+inline constexpr unsigned COVAR_COVAR_CTRL_SAT_CLEAR_WIDTH = 1;
+inline constexpr std::uint32_t COVAR_COVAR_CTRL_SAT_CLEAR_MASK = 0x00000200u;
+inline constexpr std::uint32_t COVAR_COVAR_WINDOW_ADDR = 0x9004u;
+inline constexpr std::uint32_t COVAR_COVAR_WINDOW_RESET = 0x00000010u;
+inline constexpr unsigned COVAR_COVAR_WINDOW_LENGTH_LSB = 0;
+inline constexpr unsigned COVAR_COVAR_WINDOW_LENGTH_WIDTH = 16;
+inline constexpr std::uint32_t COVAR_COVAR_WINDOW_LENGTH_MASK = 0x0000FFFFu;
+inline constexpr std::uint32_t COVAR_COVAR_PAIR_ENABLE_ADDR = 0x9008u;
+inline constexpr std::uint32_t COVAR_COVAR_PAIR_ENABLE_RESET = 0x00000001u;
+inline constexpr unsigned COVAR_COVAR_PAIR_ENABLE_MASK_LSB = 0;
+inline constexpr unsigned COVAR_COVAR_PAIR_ENABLE_MASK_WIDTH = 32;
+inline constexpr std::uint32_t COVAR_COVAR_PAIR_ENABLE_MASK_MASK = 0xFFFFFFFFu;
+inline constexpr std::uint32_t COVAR_COVAR_PAIR_TABLE_ADDR = 0x900Cu;
+inline constexpr std::uint32_t COVAR_COVAR_PAIR_TABLE_RESET = 0x00000000u;
+inline constexpr unsigned COVAR_COVAR_PAIR_TABLE_INDEX_LSB = 0;
+inline constexpr unsigned COVAR_COVAR_PAIR_TABLE_INDEX_WIDTH = 8;
+inline constexpr std::uint32_t COVAR_COVAR_PAIR_TABLE_INDEX_MASK = 0x000000FFu;
+inline constexpr unsigned COVAR_COVAR_PAIR_TABLE_X_SEL_LSB = 8;
+inline constexpr unsigned COVAR_COVAR_PAIR_TABLE_X_SEL_WIDTH = 8;
+inline constexpr std::uint32_t COVAR_COVAR_PAIR_TABLE_X_SEL_MASK = 0x0000FF00u;
+inline constexpr unsigned COVAR_COVAR_PAIR_TABLE_Y_SEL_LSB = 16;
+inline constexpr unsigned COVAR_COVAR_PAIR_TABLE_Y_SEL_WIDTH = 8;
+inline constexpr std::uint32_t COVAR_COVAR_PAIR_TABLE_Y_SEL_MASK = 0x00FF0000u;
+inline constexpr unsigned COVAR_COVAR_PAIR_TABLE_WRITE_LSB = 24;
+inline constexpr unsigned COVAR_COVAR_PAIR_TABLE_WRITE_WIDTH = 1;
+inline constexpr std::uint32_t COVAR_COVAR_PAIR_TABLE_WRITE_MASK = 0x01000000u;
+inline constexpr std::uint32_t COVAR_COVAR_STATUS_ADDR = 0x9010u;
+inline constexpr std::uint32_t COVAR_COVAR_STATUS_RESET = 0x00000000u;
+inline constexpr unsigned COVAR_COVAR_STATUS_WINDOW_ID_LSB = 0;
+inline constexpr unsigned COVAR_COVAR_STATUS_WINDOW_ID_WIDTH = 16;
+inline constexpr std::uint32_t COVAR_COVAR_STATUS_WINDOW_ID_MASK = 0x0000FFFFu;
+inline constexpr unsigned COVAR_COVAR_STATUS_N_PAIRS_LSB = 16;
+inline constexpr unsigned COVAR_COVAR_STATUS_N_PAIRS_WIDTH = 8;
+inline constexpr std::uint32_t COVAR_COVAR_STATUS_N_PAIRS_MASK = 0x00FF0000u;
+inline constexpr unsigned COVAR_COVAR_STATUS_ACC_W_LSB = 24;
+inline constexpr unsigned COVAR_COVAR_STATUS_ACC_W_WIDTH = 8;
+inline constexpr std::uint32_t COVAR_COVAR_STATUS_ACC_W_MASK = 0xFF000000u;
+inline constexpr std::uint32_t COVAR_COVAR_SAT_STATUS_ADDR = 0x9014u;
+inline constexpr std::uint32_t COVAR_COVAR_SAT_STATUS_RESET = 0x00000000u;
+inline constexpr unsigned COVAR_COVAR_SAT_STATUS_POWER_LSB = 0;
+inline constexpr unsigned COVAR_COVAR_SAT_STATUS_POWER_WIDTH = 1;
+inline constexpr std::uint32_t COVAR_COVAR_SAT_STATUS_POWER_MASK = 0x00000001u;
+inline constexpr unsigned COVAR_COVAR_SAT_STATUS_CROSS_LSB = 1;
+inline constexpr unsigned COVAR_COVAR_SAT_STATUS_CROSS_WIDTH = 1;
+inline constexpr std::uint32_t COVAR_COVAR_SAT_STATUS_CROSS_MASK = 0x00000002u;
+inline constexpr unsigned COVAR_COVAR_SAT_STATUS_TRUNCATED_LSB = 2;
+inline constexpr unsigned COVAR_COVAR_SAT_STATUS_TRUNCATED_WIDTH = 1;
+inline constexpr std::uint32_t COVAR_COVAR_SAT_STATUS_TRUNCATED_MASK = 0x00000004u;
+inline constexpr std::uint32_t COVAR_COVAR_SAT_COUNT_ADDR = 0x9018u;
+inline constexpr std::uint32_t COVAR_COVAR_SAT_COUNT_RESET = 0x00000000u;
+inline constexpr unsigned COVAR_COVAR_SAT_COUNT_VALUE_LSB = 0;
+inline constexpr unsigned COVAR_COVAR_SAT_COUNT_VALUE_WIDTH = 32;
+inline constexpr std::uint32_t COVAR_COVAR_SAT_COUNT_VALUE_MASK = 0xFFFFFFFFu;
+
 // ---- planned windows (declared, not implemented in this build) ----------
 // cfar 0x6000: planned by #14, #16. Accesses return error=1.
 inline constexpr std::uint32_t CFAR_BASE = 0x6000u;
@@ -654,7 +725,7 @@ inline constexpr std::uint32_t CFAR_BASE = 0x6000u;
 inline constexpr std::uint32_t DEBUG_BASE = 0x8000u;
 
 // ---- tables --------------------------------------------------------------
-inline constexpr BlockInfo kBlocks[9] = {
+inline constexpr BlockInfo kBlocks[10] = {
     {"id", 0x0000u, 0x1000u, true, 4},
     {"build_params", 0x1000u, 0x1000u, true, 12},
     {"ctrl", 0x2000u, 0x1000u, true, 4},
@@ -664,13 +735,14 @@ inline constexpr BlockInfo kBlocks[9] = {
     {"cfar", 0x6000u, 0x1000u, false, 0},
     {"counters", 0x7000u, 0x1000u, true, 21},
     {"debug", 0x8000u, 0x1000u, false, 0},
+    {"covar", 0x9000u, 0x1000u, true, 7},
 };
 
-inline constexpr RegInfo kRegisters[59] = {
+inline constexpr RegInfo kRegisters[66] = {
     {"id", "MAGIC", 0x0000u, 0, 0, Access::kRo, 0x52414441u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u},
-    {"id", "VERSION", 0x0004u, 0, 1, Access::kRo, 0x01030001u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u},
-    {"id", "GEOMETRY", 0x0008u, 0, 2, Access::kRo, 0x10203B09u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u},
-    {"id", "CAPABILITY", 0x000Cu, 0, 3, Access::kRo, 0x000000BFu, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u},
+    {"id", "VERSION", 0x0004u, 0, 1, Access::kRo, 0x01040001u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u},
+    {"id", "GEOMETRY", 0x0008u, 0, 2, Access::kRo, 0x1020420Au, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u},
+    {"id", "CAPABILITY", 0x000Cu, 0, 3, Access::kRo, 0x000002BFu, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u},
     {"build_params", "N_ANTENNAS", 0x1000u, 1, 0, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
     {"build_params", "SAMPLES_PER_CYCLE", 0x1004u, 1, 1, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
     {"build_params", "FFT_SIZE", 0x1008u, 1, 2, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
@@ -726,19 +798,26 @@ inline constexpr RegInfo kRegisters[59] = {
     {"counters", "SEQ_UNTRACKED_COUNT", 0x7048u, 6, 18, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
     {"counters", "SEQ_STATUS", 0x704Cu, 6, 19, Access::kMixed, 0x00000000u, 0x00000000u, 0x0000000Fu, 0x00000000u, 0x00000F00u, 0x0000000Fu},
     {"counters", "WRAP_STATUS", 0x7050u, 6, 20, Access::kW1c, 0x00000000u, 0x00000000u, 0x000001FFu, 0x00000000u, 0x00000000u, 0x000001FFu},
+    {"covar", "COVAR_CTRL", 0x9000u, 7, 0, Access::kMixed, 0x00000031u, 0x000000F3u, 0x00000000u, 0x00000300u, 0x00000000u, 0x000003F3u},
+    {"covar", "COVAR_WINDOW", 0x9004u, 7, 1, Access::kRw, 0x00000010u, 0x0000FFFFu, 0x00000000u, 0x00000000u, 0x00000000u, 0x0000FFFFu},
+    {"covar", "COVAR_PAIR_ENABLE", 0x9008u, 7, 2, Access::kRw, 0x00000001u, 0xFFFFFFFFu, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu},
+    {"covar", "COVAR_PAIR_TABLE", 0x900Cu, 7, 3, Access::kMixed, 0x00000000u, 0x00FFFFFFu, 0x00000000u, 0x01000000u, 0x00000000u, 0x01FFFFFFu},
+    {"covar", "COVAR_STATUS", 0x9010u, 7, 4, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"covar", "COVAR_SAT_STATUS", 0x9014u, 7, 5, Access::kW1c, 0x00000000u, 0x00000000u, 0x00000007u, 0x00000000u, 0x00000000u, 0x00000007u},
+    {"covar", "COVAR_SAT_COUNT", 0x9018u, 7, 6, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
 };
 
-inline constexpr FieldInfo kFields[146] = {
+inline constexpr FieldInfo kFields[164] = {
     {"id", "MAGIC", "MAGIC", 0, 32, 0xFFFFFFFFu, Access::kRo, 0x52414441u},
     {"id", "VERSION", "MAJOR", 24, 8, 0xFF000000u, Access::kRo, 0x00000001u},
-    {"id", "VERSION", "MINOR", 16, 8, 0x00FF0000u, Access::kRo, 0x00000003u},
+    {"id", "VERSION", "MINOR", 16, 8, 0x00FF0000u, Access::kRo, 0x00000004u},
     {"id", "VERSION", "PATCH", 8, 8, 0x0000FF00u, Access::kRo, 0x00000000u},
     {"id", "VERSION", "SCHEMA", 0, 8, 0x000000FFu, Access::kRo, 0x00000001u},
-    {"id", "GEOMETRY", "N_BLOCKS", 0, 8, 0x000000FFu, Access::kRo, 0x00000009u},
-    {"id", "GEOMETRY", "N_REGS", 8, 8, 0x0000FF00u, Access::kRo, 0x0000003Bu},
+    {"id", "GEOMETRY", "N_BLOCKS", 0, 8, 0x000000FFu, Access::kRo, 0x0000000Au},
+    {"id", "GEOMETRY", "N_REGS", 8, 8, 0x0000FF00u, Access::kRo, 0x00000042u},
     {"id", "GEOMETRY", "DATA_W", 16, 8, 0x00FF0000u, Access::kRo, 0x00000020u},
     {"id", "GEOMETRY", "ADDR_W", 24, 8, 0xFF000000u, Access::kRo, 0x00000010u},
-    {"id", "CAPABILITY", "BLOCK_MASK", 0, 32, 0xFFFFFFFFu, Access::kRo, 0x000000BFu},
+    {"id", "CAPABILITY", "BLOCK_MASK", 0, 32, 0xFFFFFFFFu, Access::kRo, 0x000002BFu},
     {"build_params", "N_ANTENNAS", "VALUE", 0, 32, 0xFFFFFFFFu, Access::kRoHw, 0x00000000u},
     {"build_params", "SAMPLES_PER_CYCLE", "VALUE", 0, 32, 0xFFFFFFFFu, Access::kRoHw, 0x00000000u},
     {"build_params", "FFT_SIZE", "VALUE", 0, 32, 0xFFFFFFFFu, Access::kRoHw, 0x00000000u},
@@ -875,6 +954,24 @@ inline constexpr FieldInfo kFields[146] = {
     {"counters", "WRAP_STATUS", "SATURATE", 6, 1, 0x00000040u, Access::kW1c, 0x00000000u},
     {"counters", "WRAP_STATUS", "CDC_ERROR", 7, 1, 0x00000080u, Access::kW1c, 0x00000000u},
     {"counters", "WRAP_STATUS", "SNAPSHOT_ID", 8, 1, 0x00000100u, Access::kW1c, 0x00000000u},
+    {"covar", "COVAR_CTRL", "ENABLE", 0, 1, 0x00000001u, Access::kRw, 0x00000001u},
+    {"covar", "COVAR_CTRL", "EXP_MODE", 1, 1, 0x00000002u, Access::kRw, 0x00000000u},
+    {"covar", "COVAR_CTRL", "EXP_K", 4, 4, 0x000000F0u, Access::kRw, 0x00000003u},
+    {"covar", "COVAR_CTRL", "FLUSH", 8, 1, 0x00000100u, Access::kRwp, 0x00000000u},
+    {"covar", "COVAR_CTRL", "SAT_CLEAR", 9, 1, 0x00000200u, Access::kRwp, 0x00000000u},
+    {"covar", "COVAR_WINDOW", "LENGTH", 0, 16, 0x0000FFFFu, Access::kRw, 0x00000010u},
+    {"covar", "COVAR_PAIR_ENABLE", "MASK", 0, 32, 0xFFFFFFFFu, Access::kRw, 0x00000001u},
+    {"covar", "COVAR_PAIR_TABLE", "INDEX", 0, 8, 0x000000FFu, Access::kRw, 0x00000000u},
+    {"covar", "COVAR_PAIR_TABLE", "X_SEL", 8, 8, 0x0000FF00u, Access::kRw, 0x00000000u},
+    {"covar", "COVAR_PAIR_TABLE", "Y_SEL", 16, 8, 0x00FF0000u, Access::kRw, 0x00000000u},
+    {"covar", "COVAR_PAIR_TABLE", "WRITE", 24, 1, 0x01000000u, Access::kRwp, 0x00000000u},
+    {"covar", "COVAR_STATUS", "WINDOW_ID", 0, 16, 0x0000FFFFu, Access::kRoHw, 0x00000000u},
+    {"covar", "COVAR_STATUS", "N_PAIRS", 16, 8, 0x00FF0000u, Access::kRoHw, 0x00000000u},
+    {"covar", "COVAR_STATUS", "ACC_W", 24, 8, 0xFF000000u, Access::kRoHw, 0x00000000u},
+    {"covar", "COVAR_SAT_STATUS", "POWER", 0, 1, 0x00000001u, Access::kW1c, 0x00000000u},
+    {"covar", "COVAR_SAT_STATUS", "CROSS", 1, 1, 0x00000002u, Access::kW1c, 0x00000000u},
+    {"covar", "COVAR_SAT_STATUS", "TRUNCATED", 2, 1, 0x00000004u, Access::kW1c, 0x00000000u},
+    {"covar", "COVAR_SAT_COUNT", "VALUE", 0, 32, 0xFFFFFFFFu, Access::kRoHw, 0x00000000u},
 };
 
 inline constexpr std::size_t kBlockTableSize = sizeof(kBlocks) / sizeof(kBlocks[0]);
