@@ -94,6 +94,16 @@ module control_top
     output wire [REGMAP_HISTORY_N_REGS*32-1:0]  obs_history_pulse,
     output wire [REGMAP_PACKET_N_REGS*32-1:0]   obs_packet_csr,
     output wire [REGMAP_PACKET_N_REGS*32-1:0]   obs_packet_pulse,
+    // The Phase-4 debug and telemetry windows (issue #19). control_top uses
+    // bare reg_csr_block instances for both, for the same reason it uses one
+    // for the counters window: this top exercises the PLANE, not the live
+    // block behaviour. The real blocks (rtl/control/fault_injection.sv,
+    // snapshot_debug.sv, telemetry_regs.sv) are wired live in
+    // rtl/top/benchmark_sim_top.sv and unit-tested through the phase-4 tests.
+    output wire [REGMAP_DEBUG_N_REGS*32-1:0]    obs_debug_csr,
+    output wire [REGMAP_DEBUG_N_REGS*32-1:0]    obs_debug_pulse,
+    output wire [REGMAP_TELEMETRY_N_REGS*32-1:0] obs_telemetry_csr,
+    output wire [REGMAP_TELEMETRY_N_REGS*32-1:0] obs_telemetry_pulse,
 
     // ---- control outputs the blocks drive ----
     output wire [31:0]                          obs_block_enable,
@@ -625,6 +635,71 @@ module control_top
       .hw_pkt_out        (32'd0),
       .csr               (obs_packet_csr),
       .pulse             (obs_packet_pulse)
+  );
+
+  // ---------------------------------------------------------------------------
+  // The Phase-4 debug window (issue #19) as a bare register file. Its hardware
+  // status inputs are tied off here for the same reason the counters window's
+  // are: control_top exercises the register PLANE, and wiring the live
+  // rtl/control/snapshot_debug.sv or rtl/memory/behavioral_mem_model.sv into
+  // it would make a plane failure and a phase-4 failure indistinguishable.
+  // The live wiring lives in rtl/top/benchmark_sim_top.sv and is exercised by
+  // sim/tests/test_snapshot_debug.cpp, test_fault_injection.cpp and
+  // test_dma_end_to_end.cpp.
+  // ---------------------------------------------------------------------------
+  reg_csr_block #(
+      .N_REGS     (REGMAP_DEBUG_N_REGS),
+      .IDX_W      (IDX_W),
+      .RESET_VAL  (REGMAP_DEBUG_RESET),
+      .WMASK      (REGMAP_DEBUG_WMASK),
+      .W1C_MASK   (REGMAP_DEBUG_W1CMASK),
+      .PULSE_MASK (REGMAP_DEBUG_PULSEMASK),
+      .HW_MASK    (REGMAP_DEBUG_HWMASK)
+  ) u_debug (
+      .clk          (clk),
+      .rst_n        (rst_n),
+      .sel          (blk_sel[REGMAP_DEBUG_INDEX]),
+      .write_enable (blk_write_enable),
+      .read_enable  (blk_read_enable),
+      .index        (blk_index),
+      .write_data   (blk_write_data),
+      .byte_enable  (blk_byte_enable),
+      .read_data    (blk_read_data[REGMAP_DEBUG_INDEX*REG_DATA_W +: REG_DATA_W]),
+      .ready        (blk_ready[REGMAP_DEBUG_INDEX]),
+      .error        (blk_error[REGMAP_DEBUG_INDEX]),
+      .hw_value     ('0),
+      .hw_set       ('0),
+      .csr          (obs_debug_csr),
+      .pulse        (obs_debug_pulse)
+  );
+
+  // ---------------------------------------------------------------------------
+  // The Phase-4 telemetry window (issue #19). Bare register file, same reason.
+  // ---------------------------------------------------------------------------
+  reg_csr_block #(
+      .N_REGS     (REGMAP_TELEMETRY_N_REGS),
+      .IDX_W      (IDX_W),
+      .RESET_VAL  (REGMAP_TELEMETRY_RESET),
+      .WMASK      (REGMAP_TELEMETRY_WMASK),
+      .W1C_MASK   (REGMAP_TELEMETRY_W1CMASK),
+      .PULSE_MASK (REGMAP_TELEMETRY_PULSEMASK),
+      .HW_MASK    (REGMAP_TELEMETRY_HWMASK)
+  ) u_telemetry (
+      .clk          (clk),
+      .rst_n        (rst_n),
+      .sel          (blk_sel[REGMAP_TELEMETRY_INDEX]),
+      .write_enable (blk_write_enable),
+      .read_enable  (blk_read_enable),
+      .index        (blk_index),
+      .write_data   (blk_write_data),
+      .byte_enable  (blk_byte_enable),
+      .read_data    (blk_read_data[REGMAP_TELEMETRY_INDEX*REG_DATA_W +: REG_DATA_W]),
+      .ready        (blk_ready[REGMAP_TELEMETRY_INDEX]),
+      .error        (blk_error[REGMAP_TELEMETRY_INDEX]),
+      .hw_value     ('0),
+      .hw_set       ('0),
+      .csr          (obs_telemetry_csr),
+      .pulse        (obs_telemetry_pulse)
   );
 
   // Invariants of the blocks with no writable and no pulse bits.

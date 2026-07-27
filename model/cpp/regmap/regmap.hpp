@@ -24,12 +24,12 @@ inline constexpr unsigned kDataWidth = 32;
 inline constexpr unsigned kStrobeWidth = 4;
 inline constexpr std::uint32_t kWindowBytes = 0x1000u;
 inline constexpr std::uint32_t kAddrMask = 0xFFFFu;
-inline constexpr unsigned kBlockCount = 12;
-inline constexpr unsigned kBlockCountImplemented = 11;
-inline constexpr unsigned kRegisterCount = 100;
-inline constexpr std::uint32_t kBlockMask = 0x00000EFFu;
+inline constexpr unsigned kBlockCount = 13;
+inline constexpr unsigned kBlockCountImplemented = 13;
+inline constexpr unsigned kRegisterCount = 125;
+inline constexpr std::uint32_t kBlockMask = 0x00001FFFu;
 inline constexpr unsigned kVersionMajor = 1;
-inline constexpr unsigned kVersionMinor = 7;
+inline constexpr unsigned kVersionMinor = 8;
 inline constexpr unsigned kVersionPatch = 0;
 
 // Per-bit access classification, matching rtl/control/reg_csr_block.sv.
@@ -78,7 +78,7 @@ inline constexpr unsigned ID_MAGIC_MAGIC_LSB = 0;
 inline constexpr unsigned ID_MAGIC_MAGIC_WIDTH = 32;
 inline constexpr std::uint32_t ID_MAGIC_MAGIC_MASK = 0xFFFFFFFFu;
 inline constexpr std::uint32_t ID_VERSION_ADDR = 0x0004u;
-inline constexpr std::uint32_t ID_VERSION_RESET = 0x01070001u;
+inline constexpr std::uint32_t ID_VERSION_RESET = 0x01080001u;
 inline constexpr unsigned ID_VERSION_MAJOR_LSB = 24;
 inline constexpr unsigned ID_VERSION_MAJOR_WIDTH = 8;
 inline constexpr std::uint32_t ID_VERSION_MAJOR_MASK = 0xFF000000u;
@@ -92,7 +92,7 @@ inline constexpr unsigned ID_VERSION_SCHEMA_LSB = 0;
 inline constexpr unsigned ID_VERSION_SCHEMA_WIDTH = 8;
 inline constexpr std::uint32_t ID_VERSION_SCHEMA_MASK = 0x000000FFu;
 inline constexpr std::uint32_t ID_GEOMETRY_ADDR = 0x0008u;
-inline constexpr std::uint32_t ID_GEOMETRY_RESET = 0x1020640Cu;
+inline constexpr std::uint32_t ID_GEOMETRY_RESET = 0x10207D0Du;
 inline constexpr unsigned ID_GEOMETRY_N_BLOCKS_LSB = 0;
 inline constexpr unsigned ID_GEOMETRY_N_BLOCKS_WIDTH = 8;
 inline constexpr std::uint32_t ID_GEOMETRY_N_BLOCKS_MASK = 0x000000FFu;
@@ -106,7 +106,7 @@ inline constexpr unsigned ID_GEOMETRY_ADDR_W_LSB = 24;
 inline constexpr unsigned ID_GEOMETRY_ADDR_W_WIDTH = 8;
 inline constexpr std::uint32_t ID_GEOMETRY_ADDR_W_MASK = 0xFF000000u;
 inline constexpr std::uint32_t ID_CAPABILITY_ADDR = 0x000Cu;
-inline constexpr std::uint32_t ID_CAPABILITY_RESET = 0x00000EFFu;
+inline constexpr std::uint32_t ID_CAPABILITY_RESET = 0x00001FFFu;
 inline constexpr unsigned ID_CAPABILITY_BLOCK_MASK_LSB = 0;
 inline constexpr unsigned ID_CAPABILITY_BLOCK_MASK_WIDTH = 32;
 inline constexpr std::uint32_t ID_CAPABILITY_BLOCK_MASK_MASK = 0xFFFFFFFFu;
@@ -746,6 +746,190 @@ inline constexpr unsigned COUNTERS_WRAP_STATUS_SNAPSHOT_ID_LSB = 8;
 inline constexpr unsigned COUNTERS_WRAP_STATUS_SNAPSHOT_ID_WIDTH = 1;
 inline constexpr std::uint32_t COUNTERS_WRAP_STATUS_SNAPSHOT_ID_MASK = 0x00000100u;
 
+// debug: The SPEC 9 'Snapshot and debug control' group (issue #19), plus a per-block extension of the fault-injection window at 0x3000.
+inline constexpr std::uint32_t DEBUG_BASE = 0x8000u;
+inline constexpr std::uint32_t DEBUG_DBG_SNAP_CTRL_ADDR = 0x8000u;
+inline constexpr std::uint32_t DEBUG_DBG_SNAP_CTRL_RESET = 0x00000008u;
+inline constexpr unsigned DEBUG_DBG_SNAP_CTRL_ARM_LSB = 0;
+inline constexpr unsigned DEBUG_DBG_SNAP_CTRL_ARM_WIDTH = 1;
+inline constexpr std::uint32_t DEBUG_DBG_SNAP_CTRL_ARM_MASK = 0x00000001u;
+inline constexpr unsigned DEBUG_DBG_SNAP_CTRL_TRIGGER_LSB = 1;
+inline constexpr unsigned DEBUG_DBG_SNAP_CTRL_TRIGGER_WIDTH = 1;
+inline constexpr std::uint32_t DEBUG_DBG_SNAP_CTRL_TRIGGER_MASK = 0x00000002u;
+inline constexpr unsigned DEBUG_DBG_SNAP_CTRL_STATUS_CLEAR_LSB = 2;
+inline constexpr unsigned DEBUG_DBG_SNAP_CTRL_STATUS_CLEAR_WIDTH = 1;
+inline constexpr std::uint32_t DEBUG_DBG_SNAP_CTRL_STATUS_CLEAR_MASK = 0x00000004u;
+inline constexpr unsigned DEBUG_DBG_SNAP_CTRL_ONE_SHOT_LSB = 3;
+inline constexpr unsigned DEBUG_DBG_SNAP_CTRL_ONE_SHOT_WIDTH = 1;
+inline constexpr std::uint32_t DEBUG_DBG_SNAP_CTRL_ONE_SHOT_MASK = 0x00000008u;
+inline constexpr std::uint32_t DEBUG_DBG_SNAP_SOURCE_ADDR = 0x8004u;
+inline constexpr std::uint32_t DEBUG_DBG_SNAP_SOURCE_RESET = 0x00000000u;
+inline constexpr unsigned DEBUG_DBG_SNAP_SOURCE_SOURCE_SEL_LSB = 0;
+inline constexpr unsigned DEBUG_DBG_SNAP_SOURCE_SOURCE_SEL_WIDTH = 4;
+inline constexpr std::uint32_t DEBUG_DBG_SNAP_SOURCE_SOURCE_SEL_MASK = 0x0000000Fu;
+inline constexpr unsigned DEBUG_DBG_SNAP_SOURCE_N_SOURCES_LSB = 16;
+inline constexpr unsigned DEBUG_DBG_SNAP_SOURCE_N_SOURCES_WIDTH = 8;
+inline constexpr std::uint32_t DEBUG_DBG_SNAP_SOURCE_N_SOURCES_MASK = 0x00FF0000u;
+inline constexpr std::uint32_t DEBUG_DBG_SNAP_DEPTH_ADDR = 0x8008u;
+inline constexpr std::uint32_t DEBUG_DBG_SNAP_DEPTH_RESET = 0x00000040u;
+inline constexpr unsigned DEBUG_DBG_SNAP_DEPTH_DEPTH_LSB = 0;
+inline constexpr unsigned DEBUG_DBG_SNAP_DEPTH_DEPTH_WIDTH = 12;
+inline constexpr std::uint32_t DEBUG_DBG_SNAP_DEPTH_DEPTH_MASK = 0x00000FFFu;
+inline constexpr unsigned DEBUG_DBG_SNAP_DEPTH_BUF_DEPTH_LSB = 16;
+inline constexpr unsigned DEBUG_DBG_SNAP_DEPTH_BUF_DEPTH_WIDTH = 12;
+inline constexpr std::uint32_t DEBUG_DBG_SNAP_DEPTH_BUF_DEPTH_MASK = 0x0FFF0000u;
+inline constexpr std::uint32_t DEBUG_DBG_SNAP_STATUS_ADDR = 0x800Cu;
+inline constexpr std::uint32_t DEBUG_DBG_SNAP_STATUS_RESET = 0x00000000u;
+inline constexpr unsigned DEBUG_DBG_SNAP_STATUS_CAPTURING_LSB = 0;
+inline constexpr unsigned DEBUG_DBG_SNAP_STATUS_CAPTURING_WIDTH = 1;
+inline constexpr std::uint32_t DEBUG_DBG_SNAP_STATUS_CAPTURING_MASK = 0x00000001u;
+inline constexpr unsigned DEBUG_DBG_SNAP_STATUS_CAPTURE_DONE_LSB = 1;
+inline constexpr unsigned DEBUG_DBG_SNAP_STATUS_CAPTURE_DONE_WIDTH = 1;
+inline constexpr std::uint32_t DEBUG_DBG_SNAP_STATUS_CAPTURE_DONE_MASK = 0x00000002u;
+inline constexpr unsigned DEBUG_DBG_SNAP_STATUS_OVERRUN_LSB = 2;
+inline constexpr unsigned DEBUG_DBG_SNAP_STATUS_OVERRUN_WIDTH = 1;
+inline constexpr std::uint32_t DEBUG_DBG_SNAP_STATUS_OVERRUN_MASK = 0x00000004u;
+inline constexpr unsigned DEBUG_DBG_SNAP_STATUS_SOURCE_INVALID_LSB = 3;
+inline constexpr unsigned DEBUG_DBG_SNAP_STATUS_SOURCE_INVALID_WIDTH = 1;
+inline constexpr std::uint32_t DEBUG_DBG_SNAP_STATUS_SOURCE_INVALID_MASK = 0x00000008u;
+inline constexpr unsigned DEBUG_DBG_SNAP_STATUS_WR_PTR_LSB = 16;
+inline constexpr unsigned DEBUG_DBG_SNAP_STATUS_WR_PTR_WIDTH = 12;
+inline constexpr std::uint32_t DEBUG_DBG_SNAP_STATUS_WR_PTR_MASK = 0x0FFF0000u;
+inline constexpr std::uint32_t DEBUG_DBG_SNAP_POINTER_ADDR = 0x8010u;
+inline constexpr std::uint32_t DEBUG_DBG_SNAP_POINTER_RESET = 0x80000000u;
+inline constexpr unsigned DEBUG_DBG_SNAP_POINTER_INDEX_LSB = 0;
+inline constexpr unsigned DEBUG_DBG_SNAP_POINTER_INDEX_WIDTH = 12;
+inline constexpr std::uint32_t DEBUG_DBG_SNAP_POINTER_INDEX_MASK = 0x00000FFFu;
+inline constexpr unsigned DEBUG_DBG_SNAP_POINTER_AUTO_INC_LSB = 31;
+inline constexpr unsigned DEBUG_DBG_SNAP_POINTER_AUTO_INC_WIDTH = 1;
+inline constexpr std::uint32_t DEBUG_DBG_SNAP_POINTER_AUTO_INC_MASK = 0x80000000u;
+inline constexpr std::uint32_t DEBUG_DBG_SNAP_DATA_ADDR = 0x8014u;
+inline constexpr std::uint32_t DEBUG_DBG_SNAP_DATA_RESET = 0x00000000u;
+inline constexpr unsigned DEBUG_DBG_SNAP_DATA_VALUE_LSB = 0;
+inline constexpr unsigned DEBUG_DBG_SNAP_DATA_VALUE_WIDTH = 32;
+inline constexpr std::uint32_t DEBUG_DBG_SNAP_DATA_VALUE_MASK = 0xFFFFFFFFu;
+inline constexpr std::uint32_t DEBUG_DBG_SNAP_DATA_HI_ADDR = 0x8018u;
+inline constexpr std::uint32_t DEBUG_DBG_SNAP_DATA_HI_RESET = 0x00000000u;
+inline constexpr unsigned DEBUG_DBG_SNAP_DATA_HI_VALUE_LSB = 0;
+inline constexpr unsigned DEBUG_DBG_SNAP_DATA_HI_VALUE_WIDTH = 32;
+inline constexpr std::uint32_t DEBUG_DBG_SNAP_DATA_HI_VALUE_MASK = 0xFFFFFFFFu;
+inline constexpr std::uint32_t DEBUG_DBG_SNAP_DATA_META_ADDR = 0x801Cu;
+inline constexpr std::uint32_t DEBUG_DBG_SNAP_DATA_META_RESET = 0x00000000u;
+inline constexpr unsigned DEBUG_DBG_SNAP_DATA_META_SEQ_LSB = 0;
+inline constexpr unsigned DEBUG_DBG_SNAP_DATA_META_SEQ_WIDTH = 16;
+inline constexpr std::uint32_t DEBUG_DBG_SNAP_DATA_META_SEQ_MASK = 0x0000FFFFu;
+inline constexpr unsigned DEBUG_DBG_SNAP_DATA_META_ID_LSB = 16;
+inline constexpr unsigned DEBUG_DBG_SNAP_DATA_META_ID_WIDTH = 4;
+inline constexpr std::uint32_t DEBUG_DBG_SNAP_DATA_META_ID_MASK = 0x000F0000u;
+inline constexpr unsigned DEBUG_DBG_SNAP_DATA_META_SOF_LSB = 24;
+inline constexpr unsigned DEBUG_DBG_SNAP_DATA_META_SOF_WIDTH = 1;
+inline constexpr std::uint32_t DEBUG_DBG_SNAP_DATA_META_SOF_MASK = 0x01000000u;
+inline constexpr unsigned DEBUG_DBG_SNAP_DATA_META_EOF_LSB = 25;
+inline constexpr unsigned DEBUG_DBG_SNAP_DATA_META_EOF_WIDTH = 1;
+inline constexpr std::uint32_t DEBUG_DBG_SNAP_DATA_META_EOF_MASK = 0x02000000u;
+inline constexpr unsigned DEBUG_DBG_SNAP_DATA_META_VALID_LSB = 26;
+inline constexpr unsigned DEBUG_DBG_SNAP_DATA_META_VALID_WIDTH = 1;
+inline constexpr std::uint32_t DEBUG_DBG_SNAP_DATA_META_VALID_MASK = 0x04000000u;
+inline constexpr unsigned DEBUG_DBG_SNAP_DATA_META_FAULT_LSB = 27;
+inline constexpr unsigned DEBUG_DBG_SNAP_DATA_META_FAULT_WIDTH = 1;
+inline constexpr std::uint32_t DEBUG_DBG_SNAP_DATA_META_FAULT_MASK = 0x08000000u;
+inline constexpr std::uint32_t DEBUG_DBG_FAULT_TARGET_ADDR = 0x8020u;
+inline constexpr std::uint32_t DEBUG_DBG_FAULT_TARGET_RESET = 0x00000000u;
+inline constexpr unsigned DEBUG_DBG_FAULT_TARGET_PFB_LSB = 0;
+inline constexpr unsigned DEBUG_DBG_FAULT_TARGET_PFB_WIDTH = 1;
+inline constexpr std::uint32_t DEBUG_DBG_FAULT_TARGET_PFB_MASK = 0x00000001u;
+inline constexpr unsigned DEBUG_DBG_FAULT_TARGET_FFT_LSB = 1;
+inline constexpr unsigned DEBUG_DBG_FAULT_TARGET_FFT_WIDTH = 1;
+inline constexpr std::uint32_t DEBUG_DBG_FAULT_TARGET_FFT_MASK = 0x00000002u;
+inline constexpr unsigned DEBUG_DBG_FAULT_TARGET_BEAMFORMER_LSB = 2;
+inline constexpr unsigned DEBUG_DBG_FAULT_TARGET_BEAMFORMER_WIDTH = 1;
+inline constexpr std::uint32_t DEBUG_DBG_FAULT_TARGET_BEAMFORMER_MASK = 0x00000004u;
+inline constexpr unsigned DEBUG_DBG_FAULT_TARGET_COVARIANCE_LSB = 3;
+inline constexpr unsigned DEBUG_DBG_FAULT_TARGET_COVARIANCE_WIDTH = 1;
+inline constexpr std::uint32_t DEBUG_DBG_FAULT_TARGET_COVARIANCE_MASK = 0x00000008u;
+inline constexpr unsigned DEBUG_DBG_FAULT_TARGET_CFAR_LSB = 4;
+inline constexpr unsigned DEBUG_DBG_FAULT_TARGET_CFAR_WIDTH = 1;
+inline constexpr std::uint32_t DEBUG_DBG_FAULT_TARGET_CFAR_MASK = 0x00000010u;
+inline constexpr unsigned DEBUG_DBG_FAULT_TARGET_PACKET_LSB = 5;
+inline constexpr unsigned DEBUG_DBG_FAULT_TARGET_PACKET_WIDTH = 1;
+inline constexpr std::uint32_t DEBUG_DBG_FAULT_TARGET_PACKET_MASK = 0x00000020u;
+inline constexpr unsigned DEBUG_DBG_FAULT_TARGET_MEMORY_LSB = 6;
+inline constexpr unsigned DEBUG_DBG_FAULT_TARGET_MEMORY_WIDTH = 1;
+inline constexpr std::uint32_t DEBUG_DBG_FAULT_TARGET_MEMORY_MASK = 0x00000040u;
+inline constexpr unsigned DEBUG_DBG_FAULT_TARGET_HISTORY_LSB = 7;
+inline constexpr unsigned DEBUG_DBG_FAULT_TARGET_HISTORY_WIDTH = 1;
+inline constexpr std::uint32_t DEBUG_DBG_FAULT_TARGET_HISTORY_MASK = 0x00000080u;
+inline constexpr std::uint32_t DEBUG_DBG_FAULT_REPORT_ADDR = 0x8024u;
+inline constexpr std::uint32_t DEBUG_DBG_FAULT_REPORT_RESET = 0x00000000u;
+inline constexpr unsigned DEBUG_DBG_FAULT_REPORT_PFB_LSB = 0;
+inline constexpr unsigned DEBUG_DBG_FAULT_REPORT_PFB_WIDTH = 1;
+inline constexpr std::uint32_t DEBUG_DBG_FAULT_REPORT_PFB_MASK = 0x00000001u;
+inline constexpr unsigned DEBUG_DBG_FAULT_REPORT_FFT_LSB = 1;
+inline constexpr unsigned DEBUG_DBG_FAULT_REPORT_FFT_WIDTH = 1;
+inline constexpr std::uint32_t DEBUG_DBG_FAULT_REPORT_FFT_MASK = 0x00000002u;
+inline constexpr unsigned DEBUG_DBG_FAULT_REPORT_BEAMFORMER_LSB = 2;
+inline constexpr unsigned DEBUG_DBG_FAULT_REPORT_BEAMFORMER_WIDTH = 1;
+inline constexpr std::uint32_t DEBUG_DBG_FAULT_REPORT_BEAMFORMER_MASK = 0x00000004u;
+inline constexpr unsigned DEBUG_DBG_FAULT_REPORT_COVARIANCE_LSB = 3;
+inline constexpr unsigned DEBUG_DBG_FAULT_REPORT_COVARIANCE_WIDTH = 1;
+inline constexpr std::uint32_t DEBUG_DBG_FAULT_REPORT_COVARIANCE_MASK = 0x00000008u;
+inline constexpr unsigned DEBUG_DBG_FAULT_REPORT_CFAR_LSB = 4;
+inline constexpr unsigned DEBUG_DBG_FAULT_REPORT_CFAR_WIDTH = 1;
+inline constexpr std::uint32_t DEBUG_DBG_FAULT_REPORT_CFAR_MASK = 0x00000010u;
+inline constexpr unsigned DEBUG_DBG_FAULT_REPORT_PACKET_LSB = 5;
+inline constexpr unsigned DEBUG_DBG_FAULT_REPORT_PACKET_WIDTH = 1;
+inline constexpr std::uint32_t DEBUG_DBG_FAULT_REPORT_PACKET_MASK = 0x00000020u;
+inline constexpr unsigned DEBUG_DBG_FAULT_REPORT_MEMORY_LSB = 6;
+inline constexpr unsigned DEBUG_DBG_FAULT_REPORT_MEMORY_WIDTH = 1;
+inline constexpr std::uint32_t DEBUG_DBG_FAULT_REPORT_MEMORY_MASK = 0x00000040u;
+inline constexpr unsigned DEBUG_DBG_FAULT_REPORT_HISTORY_LSB = 7;
+inline constexpr unsigned DEBUG_DBG_FAULT_REPORT_HISTORY_WIDTH = 1;
+inline constexpr std::uint32_t DEBUG_DBG_FAULT_REPORT_HISTORY_MASK = 0x00000080u;
+inline constexpr std::uint32_t DEBUG_DBG_MEM_CTRL_ADDR = 0x8028u;
+inline constexpr std::uint32_t DEBUG_DBG_MEM_CTRL_RESET = 0x00000801u;
+inline constexpr unsigned DEBUG_DBG_MEM_CTRL_ENABLE_LSB = 0;
+inline constexpr unsigned DEBUG_DBG_MEM_CTRL_ENABLE_WIDTH = 1;
+inline constexpr std::uint32_t DEBUG_DBG_MEM_CTRL_ENABLE_MASK = 0x00000001u;
+inline constexpr unsigned DEBUG_DBG_MEM_CTRL_SOFT_RESET_LSB = 1;
+inline constexpr unsigned DEBUG_DBG_MEM_CTRL_SOFT_RESET_WIDTH = 1;
+inline constexpr std::uint32_t DEBUG_DBG_MEM_CTRL_SOFT_RESET_MASK = 0x00000002u;
+inline constexpr unsigned DEBUG_DBG_MEM_CTRL_LATENCY_LSB = 8;
+inline constexpr unsigned DEBUG_DBG_MEM_CTRL_LATENCY_WIDTH = 8;
+inline constexpr std::uint32_t DEBUG_DBG_MEM_CTRL_LATENCY_MASK = 0x0000FF00u;
+inline constexpr unsigned DEBUG_DBG_MEM_CTRL_FAULT_MODE_LSB = 24;
+inline constexpr unsigned DEBUG_DBG_MEM_CTRL_FAULT_MODE_WIDTH = 2;
+inline constexpr std::uint32_t DEBUG_DBG_MEM_CTRL_FAULT_MODE_MASK = 0x03000000u;
+inline constexpr std::uint32_t DEBUG_DBG_MEM_STATUS_ADDR = 0x802Cu;
+inline constexpr std::uint32_t DEBUG_DBG_MEM_STATUS_RESET = 0x00000000u;
+inline constexpr unsigned DEBUG_DBG_MEM_STATUS_INFLIGHT_LSB = 0;
+inline constexpr unsigned DEBUG_DBG_MEM_STATUS_INFLIGHT_WIDTH = 8;
+inline constexpr std::uint32_t DEBUG_DBG_MEM_STATUS_INFLIGHT_MASK = 0x000000FFu;
+inline constexpr unsigned DEBUG_DBG_MEM_STATUS_HW_MAX_INFLIGHT_LSB = 8;
+inline constexpr unsigned DEBUG_DBG_MEM_STATUS_HW_MAX_INFLIGHT_WIDTH = 8;
+inline constexpr std::uint32_t DEBUG_DBG_MEM_STATUS_HW_MAX_INFLIGHT_MASK = 0x0000FF00u;
+inline constexpr unsigned DEBUG_DBG_MEM_STATUS_OUTSTANDING_TAG_LSB = 16;
+inline constexpr unsigned DEBUG_DBG_MEM_STATUS_OUTSTANDING_TAG_WIDTH = 8;
+inline constexpr std::uint32_t DEBUG_DBG_MEM_STATUS_OUTSTANDING_TAG_MASK = 0x00FF0000u;
+inline constexpr unsigned DEBUG_DBG_MEM_STATUS_FAULT_RANGE_LSB = 24;
+inline constexpr unsigned DEBUG_DBG_MEM_STATUS_FAULT_RANGE_WIDTH = 1;
+inline constexpr std::uint32_t DEBUG_DBG_MEM_STATUS_FAULT_RANGE_MASK = 0x01000000u;
+inline constexpr unsigned DEBUG_DBG_MEM_STATUS_FAULT_PROTOCOL_LSB = 25;
+inline constexpr unsigned DEBUG_DBG_MEM_STATUS_FAULT_PROTOCOL_WIDTH = 1;
+inline constexpr std::uint32_t DEBUG_DBG_MEM_STATUS_FAULT_PROTOCOL_MASK = 0x02000000u;
+inline constexpr unsigned DEBUG_DBG_MEM_STATUS_FAULT_TIMEOUT_LSB = 26;
+inline constexpr unsigned DEBUG_DBG_MEM_STATUS_FAULT_TIMEOUT_WIDTH = 1;
+inline constexpr std::uint32_t DEBUG_DBG_MEM_STATUS_FAULT_TIMEOUT_MASK = 0x04000000u;
+inline constexpr std::uint32_t DEBUG_DBG_MEM_REQ_COUNT_ADDR = 0x8030u;
+inline constexpr std::uint32_t DEBUG_DBG_MEM_REQ_COUNT_RESET = 0x00000000u;
+inline constexpr unsigned DEBUG_DBG_MEM_REQ_COUNT_VALUE_LSB = 0;
+inline constexpr unsigned DEBUG_DBG_MEM_REQ_COUNT_VALUE_WIDTH = 32;
+inline constexpr std::uint32_t DEBUG_DBG_MEM_REQ_COUNT_VALUE_MASK = 0xFFFFFFFFu;
+inline constexpr std::uint32_t DEBUG_DBG_MEM_RSP_COUNT_ADDR = 0x8034u;
+inline constexpr std::uint32_t DEBUG_DBG_MEM_RSP_COUNT_RESET = 0x00000000u;
+inline constexpr unsigned DEBUG_DBG_MEM_RSP_COUNT_VALUE_LSB = 0;
+inline constexpr unsigned DEBUG_DBG_MEM_RSP_COUNT_VALUE_WIDTH = 32;
+inline constexpr std::uint32_t DEBUG_DBG_MEM_RSP_COUNT_VALUE_MASK = 0xFFFFFFFFu;
+
 // covar: Integration settings for the SPEC 7.
 inline constexpr std::uint32_t COVAR_BASE = 0x9000u;
 inline constexpr std::uint32_t COVAR_COVAR_CTRL_ADDR = 0x9000u;
@@ -1062,12 +1246,113 @@ inline constexpr unsigned PACKET_PACKET_OBSERVE_STAGE_LSB = 8;
 inline constexpr unsigned PACKET_PACKET_OBSERVE_STAGE_WIDTH = 4;
 inline constexpr std::uint32_t PACKET_PACKET_OBSERVE_STAGE_MASK = 0x00000F00u;
 
+// telemetry: The telemetry_clk-domain aggregate counters (SPEC 8, SPEC 9, issue #19).
+inline constexpr std::uint32_t TELEMETRY_BASE = 0xC000u;
+inline constexpr std::uint32_t TELEMETRY_TELE_CTRL_ADDR = 0xC000u;
+inline constexpr std::uint32_t TELEMETRY_TELE_CTRL_RESET = 0x00000001u;
+inline constexpr unsigned TELEMETRY_TELE_CTRL_ENABLE_LSB = 0;
+inline constexpr unsigned TELEMETRY_TELE_CTRL_ENABLE_WIDTH = 1;
+inline constexpr std::uint32_t TELEMETRY_TELE_CTRL_ENABLE_MASK = 0x00000001u;
+inline constexpr unsigned TELEMETRY_TELE_CTRL_SNAPSHOT_LSB = 8;
+inline constexpr unsigned TELEMETRY_TELE_CTRL_SNAPSHOT_WIDTH = 1;
+inline constexpr std::uint32_t TELEMETRY_TELE_CTRL_SNAPSHOT_MASK = 0x00000100u;
+inline constexpr unsigned TELEMETRY_TELE_CTRL_CLEAR_LSB = 9;
+inline constexpr unsigned TELEMETRY_TELE_CTRL_CLEAR_WIDTH = 1;
+inline constexpr std::uint32_t TELEMETRY_TELE_CTRL_CLEAR_MASK = 0x00000200u;
+inline constexpr unsigned TELEMETRY_TELE_CTRL_STICKY_CLEAR_LSB = 10;
+inline constexpr unsigned TELEMETRY_TELE_CTRL_STICKY_CLEAR_WIDTH = 1;
+inline constexpr std::uint32_t TELEMETRY_TELE_CTRL_STICKY_CLEAR_MASK = 0x00000400u;
+inline constexpr std::uint32_t TELEMETRY_TELE_STATUS_ADDR = 0xC004u;
+inline constexpr std::uint32_t TELEMETRY_TELE_STATUS_RESET = 0x00000000u;
+inline constexpr unsigned TELEMETRY_TELE_STATUS_SNAP_VALID_LSB = 0;
+inline constexpr unsigned TELEMETRY_TELE_STATUS_SNAP_VALID_WIDTH = 1;
+inline constexpr std::uint32_t TELEMETRY_TELE_STATUS_SNAP_VALID_MASK = 0x00000001u;
+inline constexpr unsigned TELEMETRY_TELE_STATUS_BUSY_LSB = 1;
+inline constexpr unsigned TELEMETRY_TELE_STATUS_BUSY_WIDTH = 1;
+inline constexpr std::uint32_t TELEMETRY_TELE_STATUS_BUSY_MASK = 0x00000002u;
+inline constexpr unsigned TELEMETRY_TELE_STATUS_OVERRUN_LSB = 2;
+inline constexpr unsigned TELEMETRY_TELE_STATUS_OVERRUN_WIDTH = 1;
+inline constexpr std::uint32_t TELEMETRY_TELE_STATUS_OVERRUN_MASK = 0x00000004u;
+inline constexpr unsigned TELEMETRY_TELE_STATUS_HEALTHY_LSB = 8;
+inline constexpr unsigned TELEMETRY_TELE_STATUS_HEALTHY_WIDTH = 1;
+inline constexpr std::uint32_t TELEMETRY_TELE_STATUS_HEALTHY_MASK = 0x00000100u;
+inline constexpr std::uint32_t TELEMETRY_TELE_EVENT_RATE_ADDR = 0xC008u;
+inline constexpr std::uint32_t TELEMETRY_TELE_EVENT_RATE_RESET = 0x00000000u;
+inline constexpr unsigned TELEMETRY_TELE_EVENT_RATE_VALUE_LSB = 0;
+inline constexpr unsigned TELEMETRY_TELE_EVENT_RATE_VALUE_WIDTH = 32;
+inline constexpr std::uint32_t TELEMETRY_TELE_EVENT_RATE_VALUE_MASK = 0xFFFFFFFFu;
+inline constexpr std::uint32_t TELEMETRY_TELE_PACKET_DROP_ADDR = 0xC00Cu;
+inline constexpr std::uint32_t TELEMETRY_TELE_PACKET_DROP_RESET = 0x00000000u;
+inline constexpr unsigned TELEMETRY_TELE_PACKET_DROP_VALUE_LSB = 0;
+inline constexpr unsigned TELEMETRY_TELE_PACKET_DROP_VALUE_WIDTH = 32;
+inline constexpr std::uint32_t TELEMETRY_TELE_PACKET_DROP_VALUE_MASK = 0xFFFFFFFFu;
+inline constexpr std::uint32_t TELEMETRY_TELE_FAULT_COUNT_ADDR = 0xC010u;
+inline constexpr std::uint32_t TELEMETRY_TELE_FAULT_COUNT_RESET = 0x00000000u;
+inline constexpr unsigned TELEMETRY_TELE_FAULT_COUNT_VALUE_LSB = 0;
+inline constexpr unsigned TELEMETRY_TELE_FAULT_COUNT_VALUE_WIDTH = 32;
+inline constexpr std::uint32_t TELEMETRY_TELE_FAULT_COUNT_VALUE_MASK = 0xFFFFFFFFu;
+inline constexpr std::uint32_t TELEMETRY_TELE_CDC_ERROR_ADDR = 0xC014u;
+inline constexpr std::uint32_t TELEMETRY_TELE_CDC_ERROR_RESET = 0x00000000u;
+inline constexpr unsigned TELEMETRY_TELE_CDC_ERROR_VALUE_LSB = 0;
+inline constexpr unsigned TELEMETRY_TELE_CDC_ERROR_VALUE_WIDTH = 32;
+inline constexpr std::uint32_t TELEMETRY_TELE_CDC_ERROR_VALUE_MASK = 0xFFFFFFFFu;
+inline constexpr std::uint32_t TELEMETRY_TELE_OVERFLOW_ADDR = 0xC018u;
+inline constexpr std::uint32_t TELEMETRY_TELE_OVERFLOW_RESET = 0x00000000u;
+inline constexpr unsigned TELEMETRY_TELE_OVERFLOW_VALUE_LSB = 0;
+inline constexpr unsigned TELEMETRY_TELE_OVERFLOW_VALUE_WIDTH = 32;
+inline constexpr std::uint32_t TELEMETRY_TELE_OVERFLOW_VALUE_MASK = 0xFFFFFFFFu;
+inline constexpr std::uint32_t TELEMETRY_TELE_SATURATE_ADDR = 0xC01Cu;
+inline constexpr std::uint32_t TELEMETRY_TELE_SATURATE_RESET = 0x00000000u;
+inline constexpr unsigned TELEMETRY_TELE_SATURATE_VALUE_LSB = 0;
+inline constexpr unsigned TELEMETRY_TELE_SATURATE_VALUE_WIDTH = 32;
+inline constexpr std::uint32_t TELEMETRY_TELE_SATURATE_VALUE_MASK = 0xFFFFFFFFu;
+inline constexpr std::uint32_t TELEMETRY_TELE_SEQ_ERRORS_ADDR = 0xC020u;
+inline constexpr std::uint32_t TELEMETRY_TELE_SEQ_ERRORS_RESET = 0x00000000u;
+inline constexpr unsigned TELEMETRY_TELE_SEQ_ERRORS_VALUE_LSB = 0;
+inline constexpr unsigned TELEMETRY_TELE_SEQ_ERRORS_VALUE_WIDTH = 32;
+inline constexpr std::uint32_t TELEMETRY_TELE_SEQ_ERRORS_VALUE_MASK = 0xFFFFFFFFu;
+inline constexpr std::uint32_t TELEMETRY_TELE_HEALTH_ADDR = 0xC024u;
+inline constexpr std::uint32_t TELEMETRY_TELE_HEALTH_RESET = 0x00000000u;
+inline constexpr unsigned TELEMETRY_TELE_HEALTH_PACKET_DROP_LSB = 0;
+inline constexpr unsigned TELEMETRY_TELE_HEALTH_PACKET_DROP_WIDTH = 1;
+inline constexpr std::uint32_t TELEMETRY_TELE_HEALTH_PACKET_DROP_MASK = 0x00000001u;
+inline constexpr unsigned TELEMETRY_TELE_HEALTH_CDC_ERROR_LSB = 1;
+inline constexpr unsigned TELEMETRY_TELE_HEALTH_CDC_ERROR_WIDTH = 1;
+inline constexpr std::uint32_t TELEMETRY_TELE_HEALTH_CDC_ERROR_MASK = 0x00000002u;
+inline constexpr unsigned TELEMETRY_TELE_HEALTH_OVERFLOW_LSB = 2;
+inline constexpr unsigned TELEMETRY_TELE_HEALTH_OVERFLOW_WIDTH = 1;
+inline constexpr std::uint32_t TELEMETRY_TELE_HEALTH_OVERFLOW_MASK = 0x00000004u;
+inline constexpr unsigned TELEMETRY_TELE_HEALTH_SATURATION_LSB = 3;
+inline constexpr unsigned TELEMETRY_TELE_HEALTH_SATURATION_WIDTH = 1;
+inline constexpr std::uint32_t TELEMETRY_TELE_HEALTH_SATURATION_MASK = 0x00000008u;
+inline constexpr unsigned TELEMETRY_TELE_HEALTH_SEQ_ERROR_LSB = 4;
+inline constexpr unsigned TELEMETRY_TELE_HEALTH_SEQ_ERROR_WIDTH = 1;
+inline constexpr std::uint32_t TELEMETRY_TELE_HEALTH_SEQ_ERROR_MASK = 0x00000010u;
+inline constexpr unsigned TELEMETRY_TELE_HEALTH_FAULT_INJECTED_LSB = 5;
+inline constexpr unsigned TELEMETRY_TELE_HEALTH_FAULT_INJECTED_WIDTH = 1;
+inline constexpr std::uint32_t TELEMETRY_TELE_HEALTH_FAULT_INJECTED_MASK = 0x00000020u;
+inline constexpr unsigned TELEMETRY_TELE_HEALTH_MEM_ERROR_LSB = 6;
+inline constexpr unsigned TELEMETRY_TELE_HEALTH_MEM_ERROR_WIDTH = 1;
+inline constexpr std::uint32_t TELEMETRY_TELE_HEALTH_MEM_ERROR_MASK = 0x00000040u;
+inline constexpr unsigned TELEMETRY_TELE_HEALTH_CFAR_FAULT_LSB = 7;
+inline constexpr unsigned TELEMETRY_TELE_HEALTH_CFAR_FAULT_WIDTH = 1;
+inline constexpr std::uint32_t TELEMETRY_TELE_HEALTH_CFAR_FAULT_MASK = 0x00000080u;
+inline constexpr std::uint32_t TELEMETRY_TELE_GEOMETRY_ADDR = 0xC028u;
+inline constexpr std::uint32_t TELEMETRY_TELE_GEOMETRY_RESET = 0x00000000u;
+inline constexpr unsigned TELEMETRY_TELE_GEOMETRY_RATIO_NUM_LSB = 0;
+inline constexpr unsigned TELEMETRY_TELE_GEOMETRY_RATIO_NUM_WIDTH = 12;
+inline constexpr std::uint32_t TELEMETRY_TELE_GEOMETRY_RATIO_NUM_MASK = 0x00000FFFu;
+inline constexpr unsigned TELEMETRY_TELE_GEOMETRY_RATIO_DEN_LSB = 12;
+inline constexpr unsigned TELEMETRY_TELE_GEOMETRY_RATIO_DEN_WIDTH = 12;
+inline constexpr std::uint32_t TELEMETRY_TELE_GEOMETRY_RATIO_DEN_MASK = 0x00FFF000u;
+inline constexpr unsigned TELEMETRY_TELE_GEOMETRY_SNAPSHOT_LATENCY_LSB = 24;
+inline constexpr unsigned TELEMETRY_TELE_GEOMETRY_SNAPSHOT_LATENCY_WIDTH = 8;
+inline constexpr std::uint32_t TELEMETRY_TELE_GEOMETRY_SNAPSHOT_LATENCY_MASK = 0xFF000000u;
+
 // ---- planned windows (declared, not implemented in this build) ----------
-// debug 0x8000: planned by #19. Accesses return error=1.
-inline constexpr std::uint32_t DEBUG_BASE = 0x8000u;
 
 // ---- tables --------------------------------------------------------------
-inline constexpr BlockInfo kBlocks[12] = {
+inline constexpr BlockInfo kBlocks[13] = {
     {"id", 0x0000u, 0x1000u, true, 4},
     {"build_params", 0x1000u, 0x1000u, true, 12},
     {"ctrl", 0x2000u, 0x1000u, true, 4},
@@ -1076,17 +1361,18 @@ inline constexpr BlockInfo kBlocks[12] = {
     {"coeff", 0x5000u, 0x1000u, true, 10},
     {"cfar", 0x6000u, 0x1000u, true, 9},
     {"counters", 0x7000u, 0x1000u, true, 21},
-    {"debug", 0x8000u, 0x1000u, false, 0},
+    {"debug", 0x8000u, 0x1000u, true, 14},
     {"covar", 0x9000u, 0x1000u, true, 7},
     {"history", 0xA000u, 0x1000u, true, 13},
     {"packet", 0xB000u, 0x1000u, true, 12},
+    {"telemetry", 0xC000u, 0x1000u, true, 11},
 };
 
-inline constexpr RegInfo kRegisters[100] = {
+inline constexpr RegInfo kRegisters[125] = {
     {"id", "MAGIC", 0x0000u, 0, 0, Access::kRo, 0x52414441u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u},
-    {"id", "VERSION", 0x0004u, 0, 1, Access::kRo, 0x01070001u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u},
-    {"id", "GEOMETRY", 0x0008u, 0, 2, Access::kRo, 0x1020640Cu, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u},
-    {"id", "CAPABILITY", 0x000Cu, 0, 3, Access::kRo, 0x00000EFFu, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u},
+    {"id", "VERSION", 0x0004u, 0, 1, Access::kRo, 0x01080001u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u},
+    {"id", "GEOMETRY", 0x0008u, 0, 2, Access::kRo, 0x10207D0Du, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u},
+    {"id", "CAPABILITY", 0x000Cu, 0, 3, Access::kRo, 0x00001FFFu, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u},
     {"build_params", "N_ANTENNAS", 0x1000u, 1, 0, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
     {"build_params", "SAMPLES_PER_CYCLE", 0x1004u, 1, 1, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
     {"build_params", "FFT_SIZE", 0x1008u, 1, 2, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
@@ -1151,51 +1437,76 @@ inline constexpr RegInfo kRegisters[100] = {
     {"counters", "SEQ_UNTRACKED_COUNT", 0x7048u, 7, 18, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
     {"counters", "SEQ_STATUS", 0x704Cu, 7, 19, Access::kMixed, 0x00000000u, 0x00000000u, 0x0000000Fu, 0x00000000u, 0x00000F00u, 0x0000000Fu},
     {"counters", "WRAP_STATUS", 0x7050u, 7, 20, Access::kW1c, 0x00000000u, 0x00000000u, 0x000001FFu, 0x00000000u, 0x00000000u, 0x000001FFu},
-    {"covar", "COVAR_CTRL", 0x9000u, 8, 0, Access::kMixed, 0x00000031u, 0x000000F3u, 0x00000000u, 0x00000300u, 0x00000000u, 0x000003F3u},
-    {"covar", "COVAR_WINDOW", 0x9004u, 8, 1, Access::kRw, 0x00000010u, 0x0000FFFFu, 0x00000000u, 0x00000000u, 0x00000000u, 0x0000FFFFu},
-    {"covar", "COVAR_PAIR_ENABLE", 0x9008u, 8, 2, Access::kRw, 0x00000001u, 0xFFFFFFFFu, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu},
-    {"covar", "COVAR_PAIR_TABLE", 0x900Cu, 8, 3, Access::kMixed, 0x00000000u, 0x00FFFFFFu, 0x00000000u, 0x01000000u, 0x00000000u, 0x01FFFFFFu},
-    {"covar", "COVAR_STATUS", 0x9010u, 8, 4, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
-    {"covar", "COVAR_SAT_STATUS", 0x9014u, 8, 5, Access::kW1c, 0x00000000u, 0x00000000u, 0x00000007u, 0x00000000u, 0x00000000u, 0x00000007u},
-    {"covar", "COVAR_SAT_COUNT", 0x9018u, 8, 6, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
-    {"history", "HISTORY_CTRL", 0xA000u, 9, 0, Access::kMixed, 0x00000001u, 0x00000003u, 0x00000000u, 0x00000700u, 0x00000000u, 0x00000703u},
-    {"history", "HISTORY_DEPTH", 0xA004u, 9, 1, Access::kRw, 0x00000000u, 0x000003FFu, 0x00000000u, 0x00000000u, 0x00000000u, 0x000003FFu},
-    {"history", "HISTORY_STATUS", 0xA008u, 9, 2, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x1FFFFFFFu, 0x00000000u},
-    {"history", "HISTORY_GEOMETRY", 0xA00Cu, 9, 3, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x07FFFFFFu, 0x00000000u},
-    {"history", "HISTORY_GEOMETRY2", 0xA010u, 9, 4, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
-    {"history", "HISTORY_FRAMES_DONE", 0xA014u, 9, 5, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
-    {"history", "HISTORY_OVERWRITE", 0xA018u, 9, 6, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
-    {"history", "HISTORY_COLLISION", 0xA01Cu, 9, 7, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
-    {"history", "HISTORY_ERROR", 0xA020u, 9, 8, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
-    {"history", "HISTORY_READS", 0xA024u, 9, 9, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
-    {"history", "HISTORY_WRITE_BEATS", 0xA028u, 9, 10, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
-    {"history", "HISTORY_SKEW", 0xA02Cu, 9, 11, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
-    {"history", "HISTORY_FAULT", 0xA030u, 9, 12, Access::kW1c, 0x00000000u, 0x00000000u, 0x0000000Fu, 0x00000000u, 0x00000000u, 0x0000000Fu},
-    {"packet", "PACKET_CTRL", 0xB000u, 10, 0, Access::kMixed, 0x00000001u, 0x00000001u, 0x00000000u, 0x00000100u, 0x00000000u, 0x00000101u},
-    {"packet", "PACKET_STATUS", 0xB004u, 10, 1, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
-    {"packet", "PACKET_GEOMETRY", 0xB008u, 10, 2, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
-    {"packet", "PACKET_FORMAT", 0xB00Cu, 10, 3, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
-    {"packet", "PACKET_FAULT", 0xB010u, 10, 4, Access::kRw, 0x00000000u, 0x31FF11F3u, 0x00000000u, 0x00000000u, 0x00000000u, 0x31FF11F3u},
-    {"packet", "PACKET_ERROR", 0xB014u, 10, 5, Access::kW1c, 0x00000000u, 0x00000000u, 0x00001F0Fu, 0x00000000u, 0x00000000u, 0x00001F0Fu},
-    {"packet", "PACKET_FLITS", 0xB018u, 10, 6, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
-    {"packet", "PACKET_STALLS", 0xB01Cu, 10, 7, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
-    {"packet", "PACKET_WATERMARK", 0xB020u, 10, 8, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00FFFFFFu, 0x00000000u},
-    {"packet", "PACKET_PKT_IN", 0xB024u, 10, 9, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
-    {"packet", "PACKET_PKT_OUT", 0xB028u, 10, 10, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
-    {"packet", "PACKET_OBSERVE", 0xB02Cu, 10, 11, Access::kRw, 0x00000000u, 0x00000F1Fu, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000F1Fu},
+    {"debug", "DBG_SNAP_CTRL", 0x8000u, 8, 0, Access::kMixed, 0x00000008u, 0x00000009u, 0x00000000u, 0x00000006u, 0x00000000u, 0x0000000Fu},
+    {"debug", "DBG_SNAP_SOURCE", 0x8004u, 8, 1, Access::kMixed, 0x00000000u, 0x0000000Fu, 0x00000000u, 0x00000000u, 0x00FF0000u, 0x0000000Fu},
+    {"debug", "DBG_SNAP_DEPTH", 0x8008u, 8, 2, Access::kMixed, 0x00000040u, 0x00000FFFu, 0x00000000u, 0x00000000u, 0x0FFF0000u, 0x00000FFFu},
+    {"debug", "DBG_SNAP_STATUS", 0x800Cu, 8, 3, Access::kMixed, 0x00000000u, 0x00000000u, 0x0000000Eu, 0x00000000u, 0x0FFF0001u, 0x0000000Eu},
+    {"debug", "DBG_SNAP_POINTER", 0x8010u, 8, 4, Access::kRw, 0x80000000u, 0x80000FFFu, 0x00000000u, 0x00000000u, 0x00000000u, 0x80000FFFu},
+    {"debug", "DBG_SNAP_DATA", 0x8014u, 8, 5, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"debug", "DBG_SNAP_DATA_HI", 0x8018u, 8, 6, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"debug", "DBG_SNAP_DATA_META", 0x801Cu, 8, 7, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x0F0FFFFFu, 0x00000000u},
+    {"debug", "DBG_FAULT_TARGET", 0x8020u, 8, 8, Access::kRw, 0x00000000u, 0x000000FFu, 0x00000000u, 0x00000000u, 0x00000000u, 0x000000FFu},
+    {"debug", "DBG_FAULT_REPORT", 0x8024u, 8, 9, Access::kW1c, 0x00000000u, 0x00000000u, 0x000000FFu, 0x00000000u, 0x00000000u, 0x000000FFu},
+    {"debug", "DBG_MEM_CTRL", 0x8028u, 8, 10, Access::kMixed, 0x00000801u, 0x0300FF01u, 0x00000000u, 0x00000002u, 0x00000000u, 0x0300FF03u},
+    {"debug", "DBG_MEM_STATUS", 0x802Cu, 8, 11, Access::kMixed, 0x00000000u, 0x00000000u, 0x07000000u, 0x00000000u, 0x00FFFFFFu, 0x07000000u},
+    {"debug", "DBG_MEM_REQ_COUNT", 0x8030u, 8, 12, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"debug", "DBG_MEM_RSP_COUNT", 0x8034u, 8, 13, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"covar", "COVAR_CTRL", 0x9000u, 9, 0, Access::kMixed, 0x00000031u, 0x000000F3u, 0x00000000u, 0x00000300u, 0x00000000u, 0x000003F3u},
+    {"covar", "COVAR_WINDOW", 0x9004u, 9, 1, Access::kRw, 0x00000010u, 0x0000FFFFu, 0x00000000u, 0x00000000u, 0x00000000u, 0x0000FFFFu},
+    {"covar", "COVAR_PAIR_ENABLE", 0x9008u, 9, 2, Access::kRw, 0x00000001u, 0xFFFFFFFFu, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu},
+    {"covar", "COVAR_PAIR_TABLE", 0x900Cu, 9, 3, Access::kMixed, 0x00000000u, 0x00FFFFFFu, 0x00000000u, 0x01000000u, 0x00000000u, 0x01FFFFFFu},
+    {"covar", "COVAR_STATUS", 0x9010u, 9, 4, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"covar", "COVAR_SAT_STATUS", 0x9014u, 9, 5, Access::kW1c, 0x00000000u, 0x00000000u, 0x00000007u, 0x00000000u, 0x00000000u, 0x00000007u},
+    {"covar", "COVAR_SAT_COUNT", 0x9018u, 9, 6, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"history", "HISTORY_CTRL", 0xA000u, 10, 0, Access::kMixed, 0x00000001u, 0x00000003u, 0x00000000u, 0x00000700u, 0x00000000u, 0x00000703u},
+    {"history", "HISTORY_DEPTH", 0xA004u, 10, 1, Access::kRw, 0x00000000u, 0x000003FFu, 0x00000000u, 0x00000000u, 0x00000000u, 0x000003FFu},
+    {"history", "HISTORY_STATUS", 0xA008u, 10, 2, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x1FFFFFFFu, 0x00000000u},
+    {"history", "HISTORY_GEOMETRY", 0xA00Cu, 10, 3, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x07FFFFFFu, 0x00000000u},
+    {"history", "HISTORY_GEOMETRY2", 0xA010u, 10, 4, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"history", "HISTORY_FRAMES_DONE", 0xA014u, 10, 5, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"history", "HISTORY_OVERWRITE", 0xA018u, 10, 6, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"history", "HISTORY_COLLISION", 0xA01Cu, 10, 7, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"history", "HISTORY_ERROR", 0xA020u, 10, 8, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"history", "HISTORY_READS", 0xA024u, 10, 9, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"history", "HISTORY_WRITE_BEATS", 0xA028u, 10, 10, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"history", "HISTORY_SKEW", 0xA02Cu, 10, 11, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"history", "HISTORY_FAULT", 0xA030u, 10, 12, Access::kW1c, 0x00000000u, 0x00000000u, 0x0000000Fu, 0x00000000u, 0x00000000u, 0x0000000Fu},
+    {"packet", "PACKET_CTRL", 0xB000u, 11, 0, Access::kMixed, 0x00000001u, 0x00000001u, 0x00000000u, 0x00000100u, 0x00000000u, 0x00000101u},
+    {"packet", "PACKET_STATUS", 0xB004u, 11, 1, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"packet", "PACKET_GEOMETRY", 0xB008u, 11, 2, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"packet", "PACKET_FORMAT", 0xB00Cu, 11, 3, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"packet", "PACKET_FAULT", 0xB010u, 11, 4, Access::kRw, 0x00000000u, 0x31FF11F3u, 0x00000000u, 0x00000000u, 0x00000000u, 0x31FF11F3u},
+    {"packet", "PACKET_ERROR", 0xB014u, 11, 5, Access::kW1c, 0x00000000u, 0x00000000u, 0x00001F0Fu, 0x00000000u, 0x00000000u, 0x00001F0Fu},
+    {"packet", "PACKET_FLITS", 0xB018u, 11, 6, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"packet", "PACKET_STALLS", 0xB01Cu, 11, 7, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"packet", "PACKET_WATERMARK", 0xB020u, 11, 8, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00FFFFFFu, 0x00000000u},
+    {"packet", "PACKET_PKT_IN", 0xB024u, 11, 9, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"packet", "PACKET_PKT_OUT", 0xB028u, 11, 10, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"packet", "PACKET_OBSERVE", 0xB02Cu, 11, 11, Access::kRw, 0x00000000u, 0x00000F1Fu, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000F1Fu},
+    {"telemetry", "TELE_CTRL", 0xC000u, 12, 0, Access::kMixed, 0x00000001u, 0x00000001u, 0x00000000u, 0x00000700u, 0x00000000u, 0x00000701u},
+    {"telemetry", "TELE_STATUS", 0xC004u, 12, 1, Access::kMixed, 0x00000000u, 0x00000000u, 0x00000004u, 0x00000000u, 0x00000103u, 0x00000004u},
+    {"telemetry", "TELE_EVENT_RATE", 0xC008u, 12, 2, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"telemetry", "TELE_PACKET_DROP", 0xC00Cu, 12, 3, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"telemetry", "TELE_FAULT_COUNT", 0xC010u, 12, 4, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"telemetry", "TELE_CDC_ERROR", 0xC014u, 12, 5, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"telemetry", "TELE_OVERFLOW", 0xC018u, 12, 6, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"telemetry", "TELE_SATURATE", 0xC01Cu, 12, 7, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"telemetry", "TELE_SEQ_ERRORS", 0xC020u, 12, 8, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"telemetry", "TELE_HEALTH", 0xC024u, 12, 9, Access::kW1c, 0x00000000u, 0x00000000u, 0x000000FFu, 0x00000000u, 0x00000000u, 0x000000FFu},
+    {"telemetry", "TELE_GEOMETRY", 0xC028u, 12, 10, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
 };
 
-inline constexpr FieldInfo kFields[253] = {
+inline constexpr FieldInfo kFields[330] = {
     {"id", "MAGIC", "MAGIC", 0, 32, 0xFFFFFFFFu, Access::kRo, 0x52414441u},
     {"id", "VERSION", "MAJOR", 24, 8, 0xFF000000u, Access::kRo, 0x00000001u},
-    {"id", "VERSION", "MINOR", 16, 8, 0x00FF0000u, Access::kRo, 0x00000007u},
+    {"id", "VERSION", "MINOR", 16, 8, 0x00FF0000u, Access::kRo, 0x00000008u},
     {"id", "VERSION", "PATCH", 8, 8, 0x0000FF00u, Access::kRo, 0x00000000u},
     {"id", "VERSION", "SCHEMA", 0, 8, 0x000000FFu, Access::kRo, 0x00000001u},
-    {"id", "GEOMETRY", "N_BLOCKS", 0, 8, 0x000000FFu, Access::kRo, 0x0000000Cu},
-    {"id", "GEOMETRY", "N_REGS", 8, 8, 0x0000FF00u, Access::kRo, 0x00000064u},
+    {"id", "GEOMETRY", "N_BLOCKS", 0, 8, 0x000000FFu, Access::kRo, 0x0000000Du},
+    {"id", "GEOMETRY", "N_REGS", 8, 8, 0x0000FF00u, Access::kRo, 0x0000007Du},
     {"id", "GEOMETRY", "DATA_W", 16, 8, 0x00FF0000u, Access::kRo, 0x00000020u},
     {"id", "GEOMETRY", "ADDR_W", 24, 8, 0xFF000000u, Access::kRo, 0x00000010u},
-    {"id", "CAPABILITY", "BLOCK_MASK", 0, 32, 0xFFFFFFFFu, Access::kRo, 0x00000EFFu},
+    {"id", "CAPABILITY", "BLOCK_MASK", 0, 32, 0xFFFFFFFFu, Access::kRo, 0x00001FFFu},
     {"build_params", "N_ANTENNAS", "VALUE", 0, 32, 0xFFFFFFFFu, Access::kRoHw, 0x00000000u},
     {"build_params", "SAMPLES_PER_CYCLE", "VALUE", 0, 32, 0xFFFFFFFFu, Access::kRoHw, 0x00000000u},
     {"build_params", "FFT_SIZE", "VALUE", 0, 32, 0xFFFFFFFFu, Access::kRoHw, 0x00000000u},
@@ -1358,6 +1669,57 @@ inline constexpr FieldInfo kFields[253] = {
     {"counters", "WRAP_STATUS", "SATURATE", 6, 1, 0x00000040u, Access::kW1c, 0x00000000u},
     {"counters", "WRAP_STATUS", "CDC_ERROR", 7, 1, 0x00000080u, Access::kW1c, 0x00000000u},
     {"counters", "WRAP_STATUS", "SNAPSHOT_ID", 8, 1, 0x00000100u, Access::kW1c, 0x00000000u},
+    {"debug", "DBG_SNAP_CTRL", "ARM", 0, 1, 0x00000001u, Access::kRw, 0x00000000u},
+    {"debug", "DBG_SNAP_CTRL", "TRIGGER", 1, 1, 0x00000002u, Access::kRwp, 0x00000000u},
+    {"debug", "DBG_SNAP_CTRL", "STATUS_CLEAR", 2, 1, 0x00000004u, Access::kRwp, 0x00000000u},
+    {"debug", "DBG_SNAP_CTRL", "ONE_SHOT", 3, 1, 0x00000008u, Access::kRw, 0x00000001u},
+    {"debug", "DBG_SNAP_SOURCE", "SOURCE_SEL", 0, 4, 0x0000000Fu, Access::kRw, 0x00000000u},
+    {"debug", "DBG_SNAP_SOURCE", "N_SOURCES", 16, 8, 0x00FF0000u, Access::kRoHw, 0x00000000u},
+    {"debug", "DBG_SNAP_DEPTH", "DEPTH", 0, 12, 0x00000FFFu, Access::kRw, 0x00000040u},
+    {"debug", "DBG_SNAP_DEPTH", "BUF_DEPTH", 16, 12, 0x0FFF0000u, Access::kRoHw, 0x00000000u},
+    {"debug", "DBG_SNAP_STATUS", "CAPTURING", 0, 1, 0x00000001u, Access::kRoHw, 0x00000000u},
+    {"debug", "DBG_SNAP_STATUS", "CAPTURE_DONE", 1, 1, 0x00000002u, Access::kW1c, 0x00000000u},
+    {"debug", "DBG_SNAP_STATUS", "OVERRUN", 2, 1, 0x00000004u, Access::kW1c, 0x00000000u},
+    {"debug", "DBG_SNAP_STATUS", "SOURCE_INVALID", 3, 1, 0x00000008u, Access::kW1c, 0x00000000u},
+    {"debug", "DBG_SNAP_STATUS", "WR_PTR", 16, 12, 0x0FFF0000u, Access::kRoHw, 0x00000000u},
+    {"debug", "DBG_SNAP_POINTER", "INDEX", 0, 12, 0x00000FFFu, Access::kRw, 0x00000000u},
+    {"debug", "DBG_SNAP_POINTER", "AUTO_INC", 31, 1, 0x80000000u, Access::kRw, 0x00000001u},
+    {"debug", "DBG_SNAP_DATA", "VALUE", 0, 32, 0xFFFFFFFFu, Access::kRoHw, 0x00000000u},
+    {"debug", "DBG_SNAP_DATA_HI", "VALUE", 0, 32, 0xFFFFFFFFu, Access::kRoHw, 0x00000000u},
+    {"debug", "DBG_SNAP_DATA_META", "SEQ", 0, 16, 0x0000FFFFu, Access::kRoHw, 0x00000000u},
+    {"debug", "DBG_SNAP_DATA_META", "ID", 16, 4, 0x000F0000u, Access::kRoHw, 0x00000000u},
+    {"debug", "DBG_SNAP_DATA_META", "SOF", 24, 1, 0x01000000u, Access::kRoHw, 0x00000000u},
+    {"debug", "DBG_SNAP_DATA_META", "EOF", 25, 1, 0x02000000u, Access::kRoHw, 0x00000000u},
+    {"debug", "DBG_SNAP_DATA_META", "VALID", 26, 1, 0x04000000u, Access::kRoHw, 0x00000000u},
+    {"debug", "DBG_SNAP_DATA_META", "FAULT", 27, 1, 0x08000000u, Access::kRoHw, 0x00000000u},
+    {"debug", "DBG_FAULT_TARGET", "PFB", 0, 1, 0x00000001u, Access::kRw, 0x00000000u},
+    {"debug", "DBG_FAULT_TARGET", "FFT", 1, 1, 0x00000002u, Access::kRw, 0x00000000u},
+    {"debug", "DBG_FAULT_TARGET", "BEAMFORMER", 2, 1, 0x00000004u, Access::kRw, 0x00000000u},
+    {"debug", "DBG_FAULT_TARGET", "COVARIANCE", 3, 1, 0x00000008u, Access::kRw, 0x00000000u},
+    {"debug", "DBG_FAULT_TARGET", "CFAR", 4, 1, 0x00000010u, Access::kRw, 0x00000000u},
+    {"debug", "DBG_FAULT_TARGET", "PACKET", 5, 1, 0x00000020u, Access::kRw, 0x00000000u},
+    {"debug", "DBG_FAULT_TARGET", "MEMORY", 6, 1, 0x00000040u, Access::kRw, 0x00000000u},
+    {"debug", "DBG_FAULT_TARGET", "HISTORY", 7, 1, 0x00000080u, Access::kRw, 0x00000000u},
+    {"debug", "DBG_FAULT_REPORT", "PFB", 0, 1, 0x00000001u, Access::kW1c, 0x00000000u},
+    {"debug", "DBG_FAULT_REPORT", "FFT", 1, 1, 0x00000002u, Access::kW1c, 0x00000000u},
+    {"debug", "DBG_FAULT_REPORT", "BEAMFORMER", 2, 1, 0x00000004u, Access::kW1c, 0x00000000u},
+    {"debug", "DBG_FAULT_REPORT", "COVARIANCE", 3, 1, 0x00000008u, Access::kW1c, 0x00000000u},
+    {"debug", "DBG_FAULT_REPORT", "CFAR", 4, 1, 0x00000010u, Access::kW1c, 0x00000000u},
+    {"debug", "DBG_FAULT_REPORT", "PACKET", 5, 1, 0x00000020u, Access::kW1c, 0x00000000u},
+    {"debug", "DBG_FAULT_REPORT", "MEMORY", 6, 1, 0x00000040u, Access::kW1c, 0x00000000u},
+    {"debug", "DBG_FAULT_REPORT", "HISTORY", 7, 1, 0x00000080u, Access::kW1c, 0x00000000u},
+    {"debug", "DBG_MEM_CTRL", "ENABLE", 0, 1, 0x00000001u, Access::kRw, 0x00000001u},
+    {"debug", "DBG_MEM_CTRL", "SOFT_RESET", 1, 1, 0x00000002u, Access::kRwp, 0x00000000u},
+    {"debug", "DBG_MEM_CTRL", "LATENCY", 8, 8, 0x0000FF00u, Access::kRw, 0x00000008u},
+    {"debug", "DBG_MEM_CTRL", "FAULT_MODE", 24, 2, 0x03000000u, Access::kRw, 0x00000000u},
+    {"debug", "DBG_MEM_STATUS", "INFLIGHT", 0, 8, 0x000000FFu, Access::kRoHw, 0x00000000u},
+    {"debug", "DBG_MEM_STATUS", "HW_MAX_INFLIGHT", 8, 8, 0x0000FF00u, Access::kRoHw, 0x00000000u},
+    {"debug", "DBG_MEM_STATUS", "OUTSTANDING_TAG", 16, 8, 0x00FF0000u, Access::kRoHw, 0x00000000u},
+    {"debug", "DBG_MEM_STATUS", "FAULT_RANGE", 24, 1, 0x01000000u, Access::kW1c, 0x00000000u},
+    {"debug", "DBG_MEM_STATUS", "FAULT_PROTOCOL", 25, 1, 0x02000000u, Access::kW1c, 0x00000000u},
+    {"debug", "DBG_MEM_STATUS", "FAULT_TIMEOUT", 26, 1, 0x04000000u, Access::kW1c, 0x00000000u},
+    {"debug", "DBG_MEM_REQ_COUNT", "VALUE", 0, 32, 0xFFFFFFFFu, Access::kRoHw, 0x00000000u},
+    {"debug", "DBG_MEM_RSP_COUNT", "VALUE", 0, 32, 0xFFFFFFFFu, Access::kRoHw, 0x00000000u},
     {"covar", "COVAR_CTRL", "ENABLE", 0, 1, 0x00000001u, Access::kRw, 0x00000001u},
     {"covar", "COVAR_CTRL", "EXP_MODE", 1, 1, 0x00000002u, Access::kRw, 0x00000000u},
     {"covar", "COVAR_CTRL", "EXP_K", 4, 4, 0x000000F0u, Access::kRw, 0x00000003u},
@@ -1439,6 +1801,32 @@ inline constexpr FieldInfo kFields[253] = {
     {"packet", "PACKET_PKT_OUT", "VALUE", 0, 32, 0xFFFFFFFFu, Access::kRoHw, 0x00000000u},
     {"packet", "PACKET_OBSERVE", "PORT", 0, 5, 0x0000001Fu, Access::kRw, 0x00000000u},
     {"packet", "PACKET_OBSERVE", "STAGE", 8, 4, 0x00000F00u, Access::kRw, 0x00000000u},
+    {"telemetry", "TELE_CTRL", "ENABLE", 0, 1, 0x00000001u, Access::kRw, 0x00000001u},
+    {"telemetry", "TELE_CTRL", "SNAPSHOT", 8, 1, 0x00000100u, Access::kRwp, 0x00000000u},
+    {"telemetry", "TELE_CTRL", "CLEAR", 9, 1, 0x00000200u, Access::kRwp, 0x00000000u},
+    {"telemetry", "TELE_CTRL", "STICKY_CLEAR", 10, 1, 0x00000400u, Access::kRwp, 0x00000000u},
+    {"telemetry", "TELE_STATUS", "SNAP_VALID", 0, 1, 0x00000001u, Access::kRoHw, 0x00000000u},
+    {"telemetry", "TELE_STATUS", "BUSY", 1, 1, 0x00000002u, Access::kRoHw, 0x00000000u},
+    {"telemetry", "TELE_STATUS", "OVERRUN", 2, 1, 0x00000004u, Access::kW1c, 0x00000000u},
+    {"telemetry", "TELE_STATUS", "HEALTHY", 8, 1, 0x00000100u, Access::kRoHw, 0x00000000u},
+    {"telemetry", "TELE_EVENT_RATE", "VALUE", 0, 32, 0xFFFFFFFFu, Access::kRoHw, 0x00000000u},
+    {"telemetry", "TELE_PACKET_DROP", "VALUE", 0, 32, 0xFFFFFFFFu, Access::kRoHw, 0x00000000u},
+    {"telemetry", "TELE_FAULT_COUNT", "VALUE", 0, 32, 0xFFFFFFFFu, Access::kRoHw, 0x00000000u},
+    {"telemetry", "TELE_CDC_ERROR", "VALUE", 0, 32, 0xFFFFFFFFu, Access::kRoHw, 0x00000000u},
+    {"telemetry", "TELE_OVERFLOW", "VALUE", 0, 32, 0xFFFFFFFFu, Access::kRoHw, 0x00000000u},
+    {"telemetry", "TELE_SATURATE", "VALUE", 0, 32, 0xFFFFFFFFu, Access::kRoHw, 0x00000000u},
+    {"telemetry", "TELE_SEQ_ERRORS", "VALUE", 0, 32, 0xFFFFFFFFu, Access::kRoHw, 0x00000000u},
+    {"telemetry", "TELE_HEALTH", "PACKET_DROP", 0, 1, 0x00000001u, Access::kW1c, 0x00000000u},
+    {"telemetry", "TELE_HEALTH", "CDC_ERROR", 1, 1, 0x00000002u, Access::kW1c, 0x00000000u},
+    {"telemetry", "TELE_HEALTH", "OVERFLOW", 2, 1, 0x00000004u, Access::kW1c, 0x00000000u},
+    {"telemetry", "TELE_HEALTH", "SATURATION", 3, 1, 0x00000008u, Access::kW1c, 0x00000000u},
+    {"telemetry", "TELE_HEALTH", "SEQ_ERROR", 4, 1, 0x00000010u, Access::kW1c, 0x00000000u},
+    {"telemetry", "TELE_HEALTH", "FAULT_INJECTED", 5, 1, 0x00000020u, Access::kW1c, 0x00000000u},
+    {"telemetry", "TELE_HEALTH", "MEM_ERROR", 6, 1, 0x00000040u, Access::kW1c, 0x00000000u},
+    {"telemetry", "TELE_HEALTH", "CFAR_FAULT", 7, 1, 0x00000080u, Access::kW1c, 0x00000000u},
+    {"telemetry", "TELE_GEOMETRY", "RATIO_NUM", 0, 12, 0x00000FFFu, Access::kRoHw, 0x00000000u},
+    {"telemetry", "TELE_GEOMETRY", "RATIO_DEN", 12, 12, 0x00FFF000u, Access::kRoHw, 0x00000000u},
+    {"telemetry", "TELE_GEOMETRY", "SNAPSHOT_LATENCY", 24, 8, 0xFF000000u, Access::kRoHw, 0x00000000u},
 };
 
 inline constexpr std::size_t kBlockTableSize = sizeof(kBlocks) / sizeof(kBlocks[0]);

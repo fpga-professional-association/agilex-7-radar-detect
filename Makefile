@@ -219,6 +219,25 @@ CONTROL_FILES := sim/verilator/files_control.f
 CONTROL_TEST  := test_control_regs
 CONTROL_BIN    = sim/verilator/build/fast_tiny_$(CONTROL_TOP)/V$(CONTROL_TOP)_$(CONTROL_TEST)
 
+# --- Phase-4 unit-test top (issue #19, SPEC 4.3 / 8 / 9 / 19 / 24) -----------
+# One self-contained build for the phase-4 register/memory modules, matching
+# the same "one top per subsystem" pattern the other blocks use:
+#   telemetry_regs.sv         cfg_clk register interface, tel_clk counters
+#   snapshot_debug.sv         one-clock ring-buffer capture
+#   fault_injection.sv        debug window register file + per-block dispatch
+#   mem_arbiter.sv            N-to-1 abstract-memory arbiter (the #24 seam)
+#   behavioral_mem_model.sv   deterministic-latency responder + storage
+# Four tests share the top:
+#   test_telemetry_counters   cfg_clk snapshot of tel_clk counters + health
+#   test_fault_injection      per-block fault dispatch + report bits
+#   test_snapshot_debug       arm/trigger/done ring capture
+#   test_dma_end_to_end       WRITE/READ roundtrip proving zero lost/dup events
+PHASE4_TOP   := phase4_top
+PHASE4_FILES := sim/verilator/files_phase4.f
+PHASE4_TESTS := test_telemetry_counters test_fault_injection \
+                test_snapshot_debug test_dma_end_to_end
+PHASE4_BIN_DIR = sim/verilator/build/fast_tiny_$(PHASE4_TOP)
+
 # --- telemetry primitives (issue #8, SPEC 9 / 13.1 / 13.4 / 14) ------------
 # A fifth self-contained build, for the reason the others have one: a failure in
 # it is unambiguously a telemetry failure. telemetry_top holds the SPEC 9
@@ -650,10 +669,13 @@ define LINT_RECIPE
 	@printf '[lint] 15/17 %s\n' '$(ALIGN_TOP)'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
 	    --top $(ALIGN_TOP) --files $(ALIGN_FILES) --test $(ALIGN_TEST)
-	@printf '[lint] 16/17 %s\n' '$(PACKET_TOP)'
+	@printf '[lint] 16/18 %s\n' '$(PACKET_TOP)'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
 	    --top $(PACKET_TOP) --files $(PACKET_FILES) --test $(firstword $(PACKET_TESTS))
-	@printf '[lint] 17/17 %s (medium config)\n' '$(PIPE_TOP)'
+	@printf '[lint] 17/18 %s\n' '$(PHASE4_TOP)'
+	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
+	    --top $(PHASE4_TOP) --files $(PHASE4_FILES) --test $(firstword $(PHASE4_TESTS))
+	@printf '[lint] 18/18 %s (medium config)\n' '$(PIPE_TOP)'
 	$(BUILD_VERILATOR) --mode lint --config $(PIPE_CONFIG) --jobs $(JOBS) \
 	    --top $(PIPE_TOP) --files $(PIPE_FILES) --test test_pipeline_continuous
 endef
@@ -774,6 +796,12 @@ define SIM_TINY_RECIPE
 	    $(BUILD_VERILATOR) --mode fast --config tiny --jobs $(JOBS) \
 	        --top $(PACKET_TOP) --files $(PACKET_FILES) --test $$t || exit 1; \
 	  done
+	@for t in $(PHASE4_TESTS); do \
+	    $(BUILD_VERILATOR) --mode fast --config tiny --jobs $(JOBS) \
+	        --top $(PHASE4_TOP) --files $(PHASE4_FILES) --test $$t || exit 1; \
+	  done
+	@printf '[sim-tiny] phase-4 regmap-completeness check\n'
+	$(PYTHON) sim/tests/test_regmap_completeness.py
 	@printf '[sim-tiny] seeds: %s\n' '$(SEEDS)'
 	@printf '[sim-tiny] tests: %s %s %s %s %s %s %s %s %s %s %s %s %s %s %s\n' '$(TEST)' '$(STREAM_TEST)' \
 	    '$(VIOL_TEST)' '$(CONTROL_TEST)' '$(CDC_TESTS)' '$(CDCV_TEST)' \
@@ -819,6 +847,10 @@ define SIM_TINY_RECIPE
 	    for t in $(PACKET_TESTS); do \
 	      printf '\n[sim-tiny] ===== seed %s : %s =====\n' "$$s" "$$t"; \
 	      ./$(PACKET_BIN_DIR)/V$(PACKET_TOP)_$$t +seed=$$s +results=$(RESULTS_DIR) || rc=1; \
+	    done; \
+	    for t in $(PHASE4_TESTS); do \
+	      printf '\n[sim-tiny] ===== seed %s : %s =====\n' "$$s" "$$t"; \
+	      ./$(PHASE4_BIN_DIR)/V$(PHASE4_TOP)_$$t +seed=$$s +results=$(RESULTS_DIR) || rc=1; \
 	    done; \
 	  done; \
 	  if [ $$rc -ne 0 ]; then \

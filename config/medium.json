@@ -19,7 +19,12 @@
     "PACKET_W",
     "N_COVAR_PAIRS",
     "CFAR_MAX_GUARD",
-    "CFAR_MAX_REF"
+    "CFAR_MAX_REF",
+    "SNAPSHOT_BUF_DEPTH",
+    "SNAPSHOT_N_SOURCES",
+    "MEM_DEPTH_BYTES",
+    "MEM_MAX_INFLIGHT",
+    "MEM_DEFAULT_LATENCY"
   ],
   "invariant_params": [
     "SAMPLE_W",
@@ -41,6 +46,11 @@
     "POWER_W": 40,
     "N_VIRTUAL_CHANS": 4,
     "CFAR_MAX_GUARD": 2,
-    "CFAR_MAX_REF": 16
+    "CFAR_MAX_REF": 16,
+    "SNAPSHOT_BUF_DEPTH": 128,
+    "SNAPSHOT_N_SOURCES": 8,
+    "MEM_DEPTH_BYTES": 16384,
+    "MEM_MAX_INFLIGHT": 32,
+    "MEM_DEFAULT_LATENCY": 16
   }
 }

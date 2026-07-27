@@ -4427,3 +4427,117 @@ DETECT events on the beam matching each target's `angle_idx` and
 the table alongside `three_targets_even`. Everything else here
 becomes a stronger property.
 
+---
+
+## 2026-07-27 -- Phase-4 telemetry, register-map, and abstract memory seam  (issue #19)
+
+**Context.** Phase 4 (SPEC 19) requires the register/control plane to become
+FULLY LIVE, adds `telemetry_clk` (SPEC 8) as a distinct counting domain, and
+introduces the abstract memory interface (SPEC 4.3, SPEC 19 Phase 4/9) as the
+exact seam issue #24 replaces with an HBM2e AXI adapter. Two new register
+windows land: `debug` at 0x8000 (SPEC 9 "Snapshot and debug control" + a
+per-block extension of "Fault injection") and `telemetry` at 0xC000 (SPEC 8
+telemetry_clk-domain aggregate counters).
+
+**Decision 1 -- Memory-interface contract.** `rtl/memory/mem_req_rsp_if.sv`
+exports one packed `mem_req_t = {op, addr, len, tag, data, strb}` and one
+packed `mem_rsp_t = {status, tag, data}`. Both cross module ports as plain
+vectors (same rule as `reg_if_pkg::reg_req_t`, for the same reasons: portable
+across Verilator and Quartus, individually visible in waveforms). The signal
+list matches SPEC 5 stream shape: valid/ready on both request and response.
+Latency is DETERMINISTIC, set by `DBG_MEM_CTRL.LATENCY` at 0x8028; every
+request has the same delay so a seed reproduces the same event ordering.
+`rtl/memory/mem_arbiter.sv` is documented in its header as the exact seam
+issue #24 replaces with `hbm_axi_adapter`; nothing upstream of it names AXI
+or HBM. `rtl/memory/behavioral_mem_model.sv` is a Verilator-only responder
+with a small in-RTL byte store and per-request fault injection
+(range/protocol/timeout).
+
+*Consequences.* The upstream RTL (event aggregator, future covariance store)
+uses `mem_pkg` types unchanged when issue #24 lands. The arbiter's per-port
+tag table pattern generalises to N producers; the phase-4 test wires ONE
+producer, but the shape supports the fanned-in traffic Phase 5 introduces.
+*Alternative rejected:* SV `interface` + modports. It buys nothing this design
+uses and breaks portability to Quartus and the C++ harness.
+
+**Decision 2 -- Debug window claims both Snapshot AND Fault Injection.**
+`Snapshot and debug control` is the primary group at 0x8000: DBG_SNAP_CTRL is
+the arm/trigger/status contract SPEC 9 asks for, DBG_SNAP_POINTER/DEPTH/DATA
+configure and read the capture ring. Fault injection appears TWICE in the map
+(0x3000 owns the fault TYPE dimension, 0x8000 owns the per-block TARGET
+dimension); a pulse from 0x3000 with an all-zero mask at 0x8020 is a no-op, so
+"safe-disable-by-default" is a property both windows enforce together and one
+window cannot break.
+
+*Consequences.* `test_regmap_completeness.py` REQUIRES Fault injection to be
+claimed by both `fault` and `debug`; any future refactor that consolidates
+them will fail that gate loudly. The split lets a stray write at 0x3000
+never inject any fault (mask=0 at 0x8020) and lets a stray write at 0x8020
+never inject any fault (no pulse from 0x3000). Two independent failures
+required rather than one.
+*Alternative rejected:* One window with type-and-target as one bitmap. It
+would break the 0x3000 invariant that every register there has the same
+six-bit assignment, which is what makes 0x300C count a single mask.
+
+**Decision 3 -- Telemetry_clk snapshot uses a toggle + wide-vector CDC read.**
+`telemetry_regs.sv` gathers 7 x 32-bit counters plus a 32-bit health bitmap
+into one bundle in tel_clk. A cfg-domain SNAPSHOT pulse crosses to tel_clk via
+`cdc_pulse`. On the pulsed edge, tel_clk latches every counter into
+`tel_bundle_q` and toggles `tel_done_tog_q`. cfg-side detects the toggle
+through `cdc_sync2` and, on the observed change, samples `tel_bundle_q` as a
+wide vector. The many-bit crossing is safe by construction: `tel_bundle_q`
+updates only on tel_snap_pulse, and the next pulse waits for the cfg-side to
+issue another SNAPSHOT (blocked by TELE_STATUS.BUSY).
+
+*Alternative rejected:* `cdc_handshake` on the whole 256-bit bundle. Larger
+crossing to verify, no better properties. The chosen pattern crosses ONE
+toggle bit and reads the vector when it is known-stable, which is the same
+pattern telemetry_block.sv uses for its own snapshot at 0x7000.
+
+**Decision 4 -- Health bits fire as one-cycle hw_set pulses, not levels.**
+The W1C engine in reg_csr_block has the rule "a hardware set beats a
+simultaneous software clear". If hw_set were a level tracking the sticky
+tel-side flag, software could never W1C-clear the register bit while the
+tel-side flag stayed set. So `health_pulse_q` in telemetry_regs.sv fires
+per bit for exactly ONE cfg_clk cycle: the cycle after a snapshot completes
+in which THAT bit newly appears in the shadow (rising edge relative to
+`health_last_q`). Software then W1C-clears and the register bit stays 0 until
+the NEXT snapshot reports a fresh event.
+`TELE_STATUS.HEALTHY` is derived from the REGISTER STORAGE (not from the
+pending store) so software's acknowledge is immediately visible: cleared bits
+count as "no fault" for the top-level roll-up.
+
+**Decision 5 -- CFAR detection -> packet fabric -> memory model wiring
+(Phase 4 scope, no pipeline datapath changes).** The issue asks for CFAR
+detections routed through the packet network into the behavioral memory. In
+Phase 4, the WIRING BETWEEN blocks lives at unit-test scope (phase4_top): a
+producer stream is fed directly into mem_arbiter, the test proves zero
+lost/duplicated events end-to-end. Wiring the CFAR->packet->memory hop into
+`benchmark_pipeline_top` is intentionally deferred to Phase 5 (issue #20) to
+keep Decision 7's "power/CFAR taps beam 0/bin 0 only" invariant untouched
+here. The seam that lets #20 do the wiring in ONE PLACE is exactly what
+mem_arbiter.sv is documented as, so the deferral costs nothing except one
+integration test top.
+
+*Alternative rejected:* Wire mem_arbiter into benchmark_pipeline_top today.
+It would need to instantiate the whole 0x3000-0x8000-0xC000 register stack in
+the pipeline top plus fan the CFAR event stream through a pkt_ingress with a
+per-packet 176-bit CFAR event assembly. Every one of those pieces is separate
+work with its own tests, and doing them together would make a phase-4 failure
+indistinguishable from a phase-5 wiring bug.
+
+**Decision 6 -- Register-plane debug/telemetry windows are BARE reg_csr_block
+instances in control_top.** The live blocks (telemetry_regs, snapshot_debug,
+fault_injection) are only wired in phase4_top, mirroring the pattern that
+control_top uses for counters (bare reg_csr_block) vs telemetry_top (live
+telemetry_block). control_top's job is to prove the PLANE decodes and
+answers correctly; wiring a live phase-4 block into it would make a plane
+failure and a phase-4 failure indistinguishable.
+
+**Follow-up.** Issue #24 replaces `mem_arbiter.sv` with `hbm_axi_adapter.sv`,
+adds HBM2e IP under `quartus/ip/`, and the abstract memory tests continue to
+run against `behavioral_mem_model.sv` for regression. The upstream RTL and
+the phase-4 tests do not change. Issue #20 wires CFAR detections through the
+packet fabric into the abstract memory in `benchmark_pipeline_top` when the
+per-(beam, bin) fan-out is landed.
+

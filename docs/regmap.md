@@ -7,10 +7,10 @@ for the register and control plane ([SPEC.md](../SPEC.md) §9, issue #7). Edit t
 and re-run the generator; `make regmap-check` fails the build on any hand edit here or
 on a source change that was never regenerated.
 
-- Register-map version: **1.7.0** (schema 1)
+- Register-map version: **1.8.0** (schema 1)
 - Interface: 32-bit data, 16-bit byte address, 4 byte enables
 - Window per block: `0x1000` bytes
-- Blocks declared: 12 (11 implemented), registers implemented: 100
+- Blocks declared: 13 (13 implemented), registers implemented: 125
 
 ## Access types
 
@@ -37,10 +37,11 @@ the non-writable bits (`error=0`).
 | `coeff` | `0x5000`–`0x5FFF` | 10 | implemented | Coefficient and weight programming; Active bank selection |
 | `cfar` | `0x6000`–`0x6FFF` | 9 | implemented | CFAR settings |
 | `counters` | `0x7000`–`0x7FFF` | 21 | implemented | Stream counters; Stall counters; FIFO high-water marks; Overflow and saturation counts; Frame counts; Sequence errors; CDC errors; Snapshot and debug control |
-| `debug` | `0x8000`–`0x8FFF` | 0 | planned (#19) | Snapshot and debug control |
+| `debug` | `0x8000`–`0x8FFF` | 14 | implemented | Snapshot and debug control; Fault injection |
 | `covar` | `0x9000`–`0x9FFF` | 7 | implemented | Integration settings |
 | `history` | `0xA000`–`0xAFFF` | 13 | implemented | Active bank selection; Frame counts |
 | `packet` | `0xB000`–`0xBFFF` | 12 | implemented | Fault injection; Stall counters; FIFO high-water marks |
+| `telemetry` | `0xC000`–`0xCFFF` | 11 | implemented | Overflow and saturation counts; Sequence errors |
 
 Any address outside every implemented window, any address inside a window but beyond
 that block's last register, any unaligned address, a write with no byte enables set,
@@ -55,9 +56,9 @@ Fixed identification of the control plane itself. Every field is a constant fold
 | Offset | Address | Register | Access | Reset | Description |
 |---|---|---|---|---|---|
 | `0x000` | `0x0000` | `MAGIC` | RO | `0x52414441` | Constant marker. Reading 0x52414441 ('RADA') at block base proves a control plane is present and the address decode is alive. |
-| `0x004` | `0x0004` | `VERSION` | RO | `0x01070001` | Register-map version, from regmap_version in the source of truth. Static build data, deliberately not a git describe: the same source tree must produce the same register contents on any machine, and a VCS-derived value would make the generated artefacts depend on checkout state. |
-| `0x008` | `0x0008` | `GEOMETRY` | RO | `0x1020640C` | Shape of the register plane, so a discovery walk needs no compiled-in constants. |
-| `0x00C` | `0x000C` | `CAPABILITY` | RO | `0x00000EFF` | One bit per declared block, set when that block is implemented in this build. Bit i is block i in declaration order; a planned block reads 0 and its window returns error. |
+| `0x004` | `0x0004` | `VERSION` | RO | `0x01080001` | Register-map version, from regmap_version in the source of truth. Static build data, deliberately not a git describe: the same source tree must produce the same register contents on any machine, and a VCS-derived value would make the generated artefacts depend on checkout state. |
+| `0x008` | `0x0008` | `GEOMETRY` | RO | `0x10207D0D` | Shape of the register plane, so a discovery walk needs no compiled-in constants. |
+| `0x00C` | `0x000C` | `CAPABILITY` | RO | `0x00001FFF` | One bit per declared block, set when that block is implemented in this build. Bit i is block i in declaration order; a planned block reads 0 and its window returns error. |
 
 ### `ID.MAGIC` — `0x0000`
 
@@ -70,7 +71,7 @@ Fixed identification of the control plane itself. Every field is a constant fold
 | Bits | Field | Access | Reset | Source | Description |
 |---|---|---|---|---|---|
 | `31:24` | `MAJOR` | RO | `0x1` | — | Incompatible layout change. |
-| `23:16` | `MINOR` | RO | `0x7` | — | Registers or fields added. |
+| `23:16` | `MINOR` | RO | `0x8` | — | Registers or fields added. |
 | `15:8` | `PATCH` | RO | `0x0` | — | Documentation-only change. |
 | `7:0` | `SCHEMA` | RO | `0x1` | — | Source-of-truth schema version. |
 
@@ -78,8 +79,8 @@ Fixed identification of the control plane itself. Every field is a constant fold
 
 | Bits | Field | Access | Reset | Source | Description |
 |---|---|---|---|---|---|
-| `7:0` | `N_BLOCKS` | RO | `0xC` | — | Declared blocks, implemented and planned. |
-| `15:8` | `N_REGS` | RO | `0x64` | — | Implemented registers across all blocks. |
+| `7:0` | `N_BLOCKS` | RO | `0xD` | — | Declared blocks, implemented and planned. |
+| `15:8` | `N_REGS` | RO | `0x7D` | — | Implemented registers across all blocks. |
 | `23:16` | `DATA_W` | RO | `0x20` | — | Register data width in bits. |
 | `31:24` | `ADDR_W` | RO | `0x10` | — | Register address width in bits. |
 
@@ -87,7 +88,7 @@ Fixed identification of the control plane itself. Every field is a constant fold
 
 | Bits | Field | Access | Reset | Source | Description |
 |---|---|---|---|---|---|
-| `31:0` | `BLOCK_MASK` | RO | `0xEFF` | — | Implemented-block bitmap. |
+| `31:0` | `BLOCK_MASK` | RO | `0x1FFF` | — | Implemented-block bitmap. |
 
 ## `build_params` — `0x1000`
 
@@ -686,10 +687,145 @@ Performance and health telemetry for one observed interface (rtl/common/telemetr
 
 ## `debug` — `0x8000`
 
-PLANNED. Snapshot capture, trigger configuration and debug readback.
+The SPEC 9 'Snapshot and debug control' group (issue #19), plus a per-block extension of the fault-injection window at 0x3000. The window is at 0x8000 exactly where reg_block_packet 'planned by #19' left it. Two register groups land here for a reason. Snapshot/debug is the primary group: DBG_SNAP_CTRL is the arm/trigger/status contract described in SPEC 9, DBG_SNAP_POINTER and DBG_SNAP_DEPTH configure the capture buffer, DBG_SNAP_STATUS reports capture-done and the write pointer. Fault injection here is a *scope extension* of the 0x3000 window: 0x3000 owns the six shared fault types (STREAM_CORRUPT..PACKET_DROP) and their sticky/count paths; this window's DBG_FAULT_TARGET names WHICH BLOCK a fault is aimed at, and DBG_MEM_CTRL owns the abstract-memory fault path #24 will inherit. Splitting a target field off the 0x3000 window would break the invariant that every 0x3000 register's fields have the same six-bit assignment, which is what makes the 0x3000 count and the 0x3000 status a single mask. Clock: cfg_clk; the trigger pulse and the arm bit cross into the OBSERVED block's domain through issue #6 primitives (cdc_pulse for the trigger, cdc_sync2 for the arm), so a snapshot arm survives a reader that inspects it in a different domain than the block writes it in.
 
-**Planned, not implemented in this build** (owning issues: #19).
-The window is reserved and every access to it returns `error=1`.
+| Offset | Address | Register | Access | Reset | Description |
+|---|---|---|---|---|---|
+| `0x000` | `0x8000` | `DBG_SNAP_CTRL` | MIXED | `0x00000008` | Snapshot capture arm and trigger. Two-step, same discipline as FAULT_ENABLE/FAULT_INJECT at 0x3000: ARM is a persistent bit that names WHAT will capture, TRIGGER is a one-cycle pulse that STARTS the capture. A pulse issued while ARM is 0 does nothing at all - no capture, no busy, no status. That is the single-stray-write defence, made once at 0x3000 and made again here for the same reason. A pulse with ARM set enters CAPTURING; the block clears CAPTURING and sets CAPTURE_DONE when its ring buffer has filled by DEPTH beats after the trigger. |
+| `0x004` | `0x8004` | `DBG_SNAP_SOURCE` | MIXED | `0x00000000` | What the snapshot samples. SOURCE_SEL names the observed interface (see fields below); the wiring in benchmark_sim_top routes the corresponding beat and metadata into the capture ring. This is a discovery register, deliberately: adding a snapshot target is an RTL change, and reporting the elaborated set of sources through N_SOURCES lets software refuse a value the build does not implement rather than sampling nothing. |
+| `0x008` | `0x8008` | `DBG_SNAP_DEPTH` | MIXED | `0x00000040` | Ring-buffer depth for the capture. Programmable so a short snapshot around a rare fault does not waste memory bandwidth and a long snapshot around a slow drift can look back further, without a re-elaboration. A depth of zero is clamped to one; a depth above BUF_DEPTH is clamped to BUF_DEPTH. |
+| `0x00C` | `0x800C` | `DBG_SNAP_STATUS` | MIXED | `0x00000000` | Live state of the current snapshot. CAPTURING is 1 while beats are being written; CAPTURE_DONE is a sticky bit set the cycle the last beat lands (cleared by DBG_SNAP_CTRL.STATUS_CLEAR). WR_PTR is the ring index software reads from - stable while CAPTURING is 0. The five bits together are the sequencing contract SPEC 9 asks the register plane to make visible: nobody has to guess whether a snapshot is ready. |
+| `0x010` | `0x8010` | `DBG_SNAP_POINTER` | RW | `0x80000000` | Read-back pointer. Writing a value seeds the next DBG_SNAP_DATA read at that ring index; auto-increment is on by default so a whole capture is dumped by reading DBG_SNAP_DATA repeatedly. The reader observes at most BUF_DEPTH beats; a request beyond that wraps to zero. This is the one point software touches the ring - the ring itself is in the block-level RAM and does not appear as a register. |
+| `0x014` | `0x8014` | `DBG_SNAP_DATA` | ROHW | `0x00000000` | One 32-bit word from the ring at the current INDEX. Reads return the low 32 bits of the captured beat, plus the four control bits (SOF, EOF, VALID, FAULT) if the beat carried them. A wider beat is exposed word by word: the second word is available at DBG_SNAP_DATA_HI. This is a READ-ONLY register; a write returns error=1. Reading always succeeds - the ring exists as long as the block does - but a read before any capture returns zero. |
+| `0x018` | `0x8018` | `DBG_SNAP_DATA_HI` | ROHW | `0x00000000` | High half of the ring word. Read the pair together to reconstruct a 64-bit observed beat; wider observed beats are truncated to 64 bits, which is enough for every source SOURCE_SEL enumerates. |
+| `0x01C` | `0x801C` | `DBG_SNAP_DATA_META` | ROHW | `0x00000000` | Metadata for the beat at INDEX: the frame flags, the stream identity and the sequence tag. Split off from DATA/DATA_HI so a fixed-width metadata field can carry a variable-width data field. The metadata's bit layout is CONFIGURATION-INDEPENDENT (12-bit index, 4-bit id, 16-bit seq, 4 flags), for the same reason the packet header is: the ring dump has to decode without a build-time header. |
+| `0x020` | `0x8020` | `DBG_FAULT_TARGET` | RW | `0x00000000` | Per-block fault-injection selection (SPEC 9 fault injection, issue #19). The 0x3000 window declares WHICH fault TYPE is armed and triggered; this register declares WHICH BLOCK receives it. A pulse at 0x3000 with BLOCK_MASK=0 here is a no-op - safe-disable-by-default, i.e. an all-zero write to either window cannot inject a fault into any block. The mask is per bit, so one arm/trigger pair can perturb several blocks at once; each block reports the pulse it received through its own status path. |
+| `0x024` | `0x8024` | `DBG_FAULT_REPORT` | W1C | `0x00000000` | Per-block fault-injection report. Bit b sticky-set the cycle a pulse from 0x3000 reached block b via DBG_FAULT_TARGET.  Complements FAULT_STATUS at 0x3000 (which records the fault TYPE) with the block dimension. Write 1 to clear; a hardware set in the same cycle as a clear wins, same rule the CSR engine applies elsewhere. |
+| `0x028` | `0x8028` | `DBG_MEM_CTRL` | MIXED | `0x00000801` | Abstract memory-interface control (SPEC 4.3, SPEC 19 Phase 4). The register plane's view of rtl/memory/mem_arbiter.sv - the exact seam issue #24 replaces with HBM2e AXI. ENABLE gates the whole interface; RESET pulses a soft reset that flushes any in-flight request and returns every credit; LATENCY sets the deterministic read/write latency of the behavioral model, so a test can force the same delay every seed sees. FAULT_MODE is the memory-side error-injection hook. |
+| `0x02C` | `0x802C` | `DBG_MEM_STATUS` | MIXED | `0x00000000` | Live memory-interface state. INFLIGHT is the number of outstanding requests, HW_MAX_INFLIGHT is the elaborated maximum (writes above it are refused), OUTSTANDING_TAG is the tag of the oldest un-answered request. FAULT bits are sticky reports of the abstract errors an HBM2e IP will eventually raise: address-range error, protocol error, timeout. |
+| `0x030` | `0x8030` | `DBG_MEM_REQ_COUNT` | ROHW | `0x00000000` | Requests issued through the abstract memory interface since the last DBG_MEM_CTRL.SOFT_RESET or DBG_SNAP_CTRL.STATUS_CLEAR. Saturating - a wrapped counter would say a busy interface was idle. |
+| `0x034` | `0x8034` | `DBG_MEM_RSP_COUNT` | ROHW | `0x00000000` | Responses returned. Compared against DBG_MEM_REQ_COUNT: their difference is the outstanding count only if no request has been dropped, so their agreement (minus INFLIGHT) is what the test_dma_end_to_end proof observes. |
+
+### `DEBUG.DBG_SNAP_CTRL` — `0x8000`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `0` | `ARM` | RW | `0x0` | — | Enable snapshot capture. Cleared, the trigger has no effect; setting it does NOT start a capture. |
+| `1` | `TRIGGER` | RWP | `0x0` | — | Writing 1 while ARM is set starts a capture at the next beat on the selected source. A second trigger while CAPTURE_BUSY holds is refused and flagged in DBG_SNAP_STATUS.OVERRUN. Always reads 0. |
+| `2` | `STATUS_CLEAR` | RWP | `0x0` | — | Writing 1 clears the sticky CAPTURE_DONE and OVERRUN bits, and zeroes the write pointer to prepare the next capture. Does not stop an in-flight capture; a trigger issued while CAPTURE_BUSY is set is refused, exactly as it is without this clear. |
+| `3` | `ONE_SHOT` | RW | `0x1` | — | Capture semantics. 1: capture DEPTH beats and stop; further beats do not overwrite (the ring becomes a linear buffer). 0: capture continuously into the ring; a reader always sees the DEPTH most recent beats. Default one-shot because a debugger snapshotting a fault is looking at the moment the fault happened, not the moment the reader got around to reading the register. |
+
+### `DEBUG.DBG_SNAP_SOURCE` — `0x8004`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `3:0` | `SOURCE_SEL` | RW | `0x0` | — | Snapshot source index. 0: PFB output antenna 0 (stream beat + sof/eof/seq). 1: FFT output antenna 0. 2: alignment network output. 3: beamformer output. 4: power/CFAR input. 5: CFAR detection output. 6: packet fabric egress. 7: memory request/response. Index >= N_SOURCES is clamped to zero and raises DBG_SNAP_STATUS.SOURCE_INVALID. |
+| `23:16` | `N_SOURCES` | ROHW | `0x0` | — | Elaborated source count. Reported by hardware so software can enumerate legal SOURCE_SEL values without a build-time header. |
+
+### `DEBUG.DBG_SNAP_DEPTH` — `0x8008`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `11:0` | `DEPTH` | RW | `0x40` | — | Beats to capture. Clamped to [1, BUF_DEPTH]. The default of 64 is enough to see a whole frame of the pipeline's slowest interface (align output, ~= 32 beats/frame at BIN_PAR=2 medium) plus context on either side. |
+| `27:16` | `BUF_DEPTH` | ROHW | `0x0` | — | Elaborated ring-buffer depth, the upper clamp on DEPTH. |
+
+### `DEBUG.DBG_SNAP_STATUS` — `0x800C`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `0` | `CAPTURING` | ROHW | `0x0` | — | A capture is in flight. |
+| `1` | `CAPTURE_DONE` | W1C | `0x0` | — | Sticky: at least one capture has completed since the last STATUS_CLEAR. |
+| `2` | `OVERRUN` | W1C | `0x0` | — | Sticky: a trigger was refused because CAPTURING was set. |
+| `3` | `SOURCE_INVALID` | W1C | `0x0` | — | Sticky: DBG_SNAP_SOURCE.SOURCE_SEL was >= N_SOURCES when a capture started; the capture ran against source 0 instead. |
+| `27:16` | `WR_PTR` | ROHW | `0x0` | — | Live ring-buffer write pointer. Stable while CAPTURING is 0; a reader that intends to walk the ring should observe CAPTURE_DONE first and CAPTURING second. |
+
+### `DEBUG.DBG_SNAP_POINTER` — `0x8010`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `11:0` | `INDEX` | RW | `0x0` | — | Read index into the ring, 0..BUF_DEPTH-1. Values above BUF_DEPTH-1 are clamped. |
+| `31` | `AUTO_INC` | RW | `0x1` | — | When 1, INDEX advances by one after every accepted DBG_SNAP_DATA read. Off in a debugger sweep that reads the same slot many times. |
+
+### `DEBUG.DBG_SNAP_DATA` — `0x8014`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `31:0` | `VALUE` | ROHW | `0x0` | — | Ring[INDEX][31:0]: the low 32 bits of the observed beat. Metadata is separately encoded in DBG_SNAP_DATA_META. |
+
+### `DEBUG.DBG_SNAP_DATA_HI` — `0x8018`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `31:0` | `VALUE` | ROHW | `0x0` | — | Ring[INDEX][63:32]. |
+
+### `DEBUG.DBG_SNAP_DATA_META` — `0x801C`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `15:0` | `SEQ` | ROHW | `0x0` | — | Sequence tag observed on the beat, when the source has one. |
+| `19:16` | `ID` | ROHW | `0x0` | — | Stream identity, when applicable. |
+| `24` | `SOF` | ROHW | `0x0` | — | Beat carried start_of_frame. |
+| `25` | `EOF` | ROHW | `0x0` | — | Beat carried end_of_frame. |
+| `26` | `VALID` | ROHW | `0x0` | — | Beat was actually accepted by the observed handshake. Cleared beats are idle cycles the capture chose to record in continuous mode; in one-shot mode every recorded beat has VALID set. |
+| `27` | `FAULT` | ROHW | `0x0` | — | Beat coincided with a live fault-injection pulse from the 0x3000 window. Correlates a captured beat with the fault that triggered its capture. |
+
+### `DEBUG.DBG_FAULT_TARGET` — `0x8020`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `0` | `PFB` | RW | `0x0` | — | Fault pulse reaches the PFB (issue #10 primitives). |
+| `1` | `FFT` | RW | `0x0` | — | Fault pulse reaches the FFT. |
+| `2` | `BEAMFORMER` | RW | `0x0` | — | Fault pulse reaches the beamformer. |
+| `3` | `COVARIANCE` | RW | `0x0` | — | Fault pulse reaches the covariance/power stage. |
+| `4` | `CFAR` | RW | `0x0` | — | Fault pulse reaches the CFAR detector. |
+| `5` | `PACKET` | RW | `0x0` | — | Fault pulse reaches the packet fabric (also drives its own FI hooks at 0xB010). |
+| `6` | `MEMORY` | RW | `0x0` | — | Fault pulse reaches the abstract memory model. |
+| `7` | `HISTORY` | RW | `0x0` | — | Fault pulse reaches the history memory (via HISTORY_CTRL.FORCE_UNSAFE analog). |
+
+### `DEBUG.DBG_FAULT_REPORT` — `0x8024`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `0` | `PFB` | W1C | `0x0` | — | A fault was delivered to PFB. |
+| `1` | `FFT` | W1C | `0x0` | — | A fault was delivered to FFT. |
+| `2` | `BEAMFORMER` | W1C | `0x0` | — | A fault was delivered to the beamformer. |
+| `3` | `COVARIANCE` | W1C | `0x0` | — | A fault was delivered to covariance/power. |
+| `4` | `CFAR` | W1C | `0x0` | — | A fault was delivered to CFAR. |
+| `5` | `PACKET` | W1C | `0x0` | — | A fault was delivered to the packet fabric. |
+| `6` | `MEMORY` | W1C | `0x0` | — | A fault was delivered to the memory model. |
+| `7` | `HISTORY` | W1C | `0x0` | — | A fault was delivered to the history memory. |
+
+### `DEBUG.DBG_MEM_CTRL` — `0x8028`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `0` | `ENABLE` | RW | `0x1` | — | Global enable for the abstract memory interface. Cleared, no request is issued and any pending response drains. |
+| `1` | `SOFT_RESET` | RWP | `0x0` | — | One-cycle pulse. Flushes the pending queue in the behavioral model and resets its tag counter. Not the same as writing ENABLE=0: reset also clears the sticky status bits. |
+| `15:8` | `LATENCY` | RW | `0x8` | — | Deterministic latency in memory-side cycles, applied to every request. 0 is illegal (a cycle-zero response would break the ready/valid decoupling in the arbiter) and is treated as 1. Values up to 255 are legal; the calibration for the SPEC 19 Phase 9 HBM2e attachment lives in a later issue. |
+| `25:24` | `FAULT_MODE` | RW | `0x0` | — | 0: no fault. 1: drop next request. 2: drop next response. 3: return response with STATUS.ERR set. Applies to the NEXT transaction after the write, then reverts to 0; the mode is not persistent so one trigger cannot silently corrupt every subsequent transaction. |
+
+### `DEBUG.DBG_MEM_STATUS` — `0x802C`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `7:0` | `INFLIGHT` | ROHW | `0x0` | — | Requests issued and not yet answered. |
+| `15:8` | `HW_MAX_INFLIGHT` | ROHW | `0x0` | — | Elaborated maximum outstanding count. |
+| `23:16` | `OUTSTANDING_TAG` | ROHW | `0x0` | — | Tag of the oldest un-answered request. Meaningful only when INFLIGHT > 0. |
+| `24` | `FAULT_RANGE` | W1C | `0x0` | — | Sticky: a request address exceeded the elaborated range. |
+| `25` | `FAULT_PROTOCOL` | W1C | `0x0` | — | Sticky: a request violated the abstract protocol (see mem_req_rsp_if.sv). |
+| `26` | `FAULT_TIMEOUT` | W1C | `0x0` | — | Sticky: a response was withheld past its deterministic latency plus the elaborated timeout. |
+
+### `DEBUG.DBG_MEM_REQ_COUNT` — `0x8030`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `31:0` | `VALUE` | ROHW | `0x0` | — | Saturating request count. |
+
+### `DEBUG.DBG_MEM_RSP_COUNT` — `0x8034`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `31:0` | `VALUE` | ROHW | `0x0` | — | Saturating response count. |
 
 ## `covar` — `0x9000`
 
@@ -986,6 +1122,107 @@ What this window does NOT contain is the CONTENT that rides over the network: th
 |---|---|---|---|---|---|
 | `4:0` | `PORT` | RW | `0x0` | — | Ingress and egress port index for PACKET_PKT_IN and PACKET_PKT_OUT. |
 | `11:8` | `STAGE` | RW | `0x0` | — | Switch stage index for PACKET_FLITS, PACKET_STALLS and PACKET_WATERMARK. |
+
+## `telemetry` — `0xC000`
+
+The telemetry_clk-domain aggregate counters (SPEC 8, SPEC 9, issue #19). Everything in this window counts in telemetry_clk (SPEC 8: 200 MHz nominal, an intentionally different frequency from core_clk and cfg_clk so a shared crossing is exercised rather than aliased) and is read across a cdc_handshake into cfg_clk. What lives here that does NOT live in the counters window at 0x7000 is the AGGREGATE view: 0x7000 observes ONE interface (a per-block instantiation), whereas 0xC000 rolls up the whole design's fault/drop/rate counters into one place a health monitor can read without walking every block. The two are consistent by construction - each field here is the sum of its per-block source counted the same way - and the counter that is authoritative when they disagree is the per-block one, because the per-block one is what its own test compares against its independent tally. The 0xC000 view exists so a system-level monitor does not have to.
+
+CLOCK: telemetry_clk is used by the counters themselves; the register interface crosses to cfg_clk with a cdc_handshake bundling every counter shadow as one snapshot, and TELE_STATUS.SNAP_VALID is the flag that reports whether the crossing has landed since reset. The BUSY bit is the flow control: a read while BUSY is set returns the last-completed snapshot rather than a live counter, because a live counter halfway through the crossing is not coherent.
+
+| Offset | Address | Register | Access | Reset | Description |
+|---|---|---|---|---|---|
+| `0x000` | `0xC000` | `TELE_CTRL` | MIXED | `0x00000001` | Master controls for the telemetry_clk aggregator. ENABLE gates every counter here (per-block counters at 0x7000 are unaffected). SNAPSHOT is a write-1-pulse that initiates the cdc_handshake crossing; the crossing has finite depth so a second SNAPSHOT while BUSY is refused and flagged in OVERRUN. CLEAR zeroes every count and every sticky bit in one cycle across the crossing. |
+| `0x004` | `0xC004` | `TELE_STATUS` | MIXED | `0x00000000` | Cross-domain state. SNAP_VALID is set the cycle a snapshot completes; BUSY is set from the SNAPSHOT pulse to the completion. HEALTHY is the top-level roll-up of the sticky HEALTH register: 1 iff no fault has been reported since the last STICKY_CLEAR. |
+| `0x008` | `0xC008` | `TELE_EVENT_RATE` | ROHW | `0x00000000` | Aggregate event count: CFAR detections plus packet-network deliveries. Saturating. Reading this across two snapshots and dividing by the elapsed time is the design's user-visible detection throughput. |
+| `0x00C` | `0xC00C` | `TELE_PACKET_DROP` | ROHW | `0x00000000` | Packets DROPPED anywhere in the fabric (SPEC 7.8, SPEC 9). Sums the packet fabric's per-stage drop paths (which do not exist in correct operation, so every count here is either a fault or a fault injected via the 0xB010 hook). Saturating. |
+| `0x010` | `0xC010` | `TELE_FAULT_COUNT` | ROHW | `0x00000000` | Total fault-injection pulses observed across every block, summed. Mirrors FAULT_COUNT at 0x300C for the injected fault-type dimension, but crossed into telemetry_clk so a health monitor can read it in the domain it lives in. Saturating. |
+| `0x014` | `0xC014` | `TELE_CDC_ERROR` | ROHW | `0x00000000` | SPEC 9 CDC errors summed across every crossing that reports one. Saturating; zero in correct operation. |
+| `0x018` | `0xC018` | `TELE_OVERFLOW` | ROHW | `0x00000000` | Aggregate FIFO overflow count across every observed FIFO. Zero in correct operation - overflow is a defect, not a traffic condition - so a non-zero value here is a design issue. Saturating. |
+| `0x01C` | `0xC01C` | `TELE_SATURATE` | ROHW | `0x00000000` | Aggregate fixed-point saturation count across every observed datapath. Non-zero is legal on loud input; a health monitor watches the RATE of change, not the absolute value. Saturating. |
+| `0x020` | `0xC020` | `TELE_SEQ_ERRORS` | ROHW | `0x00000000` | Sequence-fault events summed across every stream. GAP + DUP + REORDER + UNTRACKED; the per-fault-kind counts are at 0x7000 per block. Non-zero here means at least one stream broke its SPEC 5 sequence invariant. Saturating. |
+| `0x024` | `0xC024` | `TELE_HEALTH` | W1C | `0x00000000` | Sticky health flags across every block, one bit per fault category. Every bit here is a W1C summary of a corresponding sticky bit in the per-block window. The cheapest 'is anything wrong' check reads TELE_STATUS.HEALTHY. |
+| `0x028` | `0xC028` | `TELE_GEOMETRY` | ROHW | `0x00000000` | Elaborated telemetry_clk geometry. RATIO_NUM/RATIO_DEN report the telemetry_clk to cfg_clk period ratio as an integer fraction, so a reader can compute an event rate in per-second units without a compile-time constant. SNAPSHOT_LATENCY is the observed cdc_handshake completion latency, in cfg_clk cycles. |
+
+### `TELEMETRY.TELE_CTRL` — `0xC000`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `0` | `ENABLE` | RW | `0x1` | — | Global enable for the telemetry_clk counters. Reset to 1 so a design without software still measures. |
+| `8` | `SNAPSHOT` | RWP | `0x0` | — | Latch every telemetry_clk counter into its shadow, then cross the shadow into cfg_clk. Poll TELE_STATUS.BUSY for completion; a fresh SNAPSHOT while BUSY is refused. |
+| `9` | `CLEAR` | RWP | `0x0` | — | Zero every counter and every sticky bit. Crosses through a cdc_pulse so the clear reaches the telemetry_clk side deterministically. |
+| `10` | `STICKY_CLEAR` | RWP | `0x0` | — | Clear only the sticky HEALTH bits, leaving the counts intact. Used when a fault has been logged and the monitor wants a fresh reading of the same run. |
+
+### `TELEMETRY.TELE_STATUS` — `0xC004`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `0` | `SNAP_VALID` | ROHW | `0x0` | — | A snapshot has completed since reset or the last CLEAR. Reading a count while this is 0 returns 0, which is not the same as 'no events'. |
+| `1` | `BUSY` | ROHW | `0x0` | — | A cdc_handshake crossing is in flight. Refuses further SNAPSHOT pulses. |
+| `2` | `OVERRUN` | W1C | `0x0` | — | Sticky: a SNAPSHOT was refused because BUSY was set. |
+| `8` | `HEALTHY` | ROHW | `0x0` | — | 1 iff every field of TELE_HEALTH is 0. A monitor that checks this bit sees 'all clear' without decoding the flags. |
+
+### `TELEMETRY.TELE_EVENT_RATE` — `0xC008`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `31:0` | `VALUE` | ROHW | `0x0` | — | Aggregate event count. |
+
+### `TELEMETRY.TELE_PACKET_DROP` — `0xC00C`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `31:0` | `VALUE` | ROHW | `0x0` | — | Aggregate drop count. |
+
+### `TELEMETRY.TELE_FAULT_COUNT` — `0xC010`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `31:0` | `VALUE` | ROHW | `0x0` | — | Aggregate fault count. |
+
+### `TELEMETRY.TELE_CDC_ERROR` — `0xC014`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `31:0` | `VALUE` | ROHW | `0x0` | — | Aggregate CDC-error count. |
+
+### `TELEMETRY.TELE_OVERFLOW` — `0xC018`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `31:0` | `VALUE` | ROHW | `0x0` | — | Aggregate overflow count. |
+
+### `TELEMETRY.TELE_SATURATE` — `0xC01C`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `31:0` | `VALUE` | ROHW | `0x0` | — | Aggregate saturation count. |
+
+### `TELEMETRY.TELE_SEQ_ERRORS` — `0xC020`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `31:0` | `VALUE` | ROHW | `0x0` | — | Aggregate sequence-error count. |
+
+### `TELEMETRY.TELE_HEALTH` — `0xC024`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `0` | `PACKET_DROP` | W1C | `0x0` | — | A packet was dropped somewhere. |
+| `1` | `CDC_ERROR` | W1C | `0x0` | — | A CDC error was reported by any crossing. |
+| `2` | `OVERFLOW` | W1C | `0x0` | — | A FIFO overflow was reported. |
+| `3` | `SATURATION` | W1C | `0x0` | — | A datapath saturated at least once. |
+| `4` | `SEQ_ERROR` | W1C | `0x0` | — | A sequence fault was reported. |
+| `5` | `FAULT_INJECTED` | W1C | `0x0` | — | A fault was injected. This is the one flag whose set is EXPECTED under test - a monitor watching TELE_STATUS.HEALTHY must clear it after an injection. |
+| `6` | `MEM_ERROR` | W1C | `0x0` | — | The abstract memory interface reported an error (range, protocol or timeout). |
+| `7` | `CFAR_FAULT` | W1C | `0x0` | — | The CFAR detector reported a fault. |
+
+### `TELEMETRY.TELE_GEOMETRY` — `0xC028`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `11:0` | `RATIO_NUM` | ROHW | `0x0` | — | Numerator of the telemetry_clk period ratio. |
+| `23:12` | `RATIO_DEN` | ROHW | `0x0` | — | Denominator of the telemetry_clk period ratio. |
+| `31:24` | `SNAPSHOT_LATENCY` | ROHW | `0x0` | — | Observed handshake latency in cfg_clk cycles at the last completed SNAPSHOT. |
 
 ## Regenerating
 
