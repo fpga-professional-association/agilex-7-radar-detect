@@ -348,13 +348,16 @@ def cpp_sources(test: str, top: str = TOP_MODULE) -> list[str]:
     ``V<top>.h`` header and are only added when the top matches. That keeps
     ``pipeline_tb.cpp`` out of every non-pipeline build, exactly as
     ``packet_tb.h`` is confined to the packet builds (it is header-only, so
-    ``glob("*.cpp")`` never picks it up).
+    ``glob("*.cpp")`` never picks it up). ``iq_loader.cpp`` (issue #44 part 2)
+    consumes ``pipeline_tb`` types and is likewise confined to the pipeline
+    build.
     """
     all_cpp = sorted(str(p) for p in (REPO_ROOT / HARNESS_DIR).glob("*.cpp"))
     srcs: list[str] = []
+    pipeline_only = {"pipeline_tb.cpp", "iq_loader.cpp"}
     for p in all_cpp:
         base = Path(p).name
-        if base == "pipeline_tb.cpp" and top != "pipeline_top":
+        if base in pipeline_only and top != "pipeline_top":
             continue
         srcs.append(p)
     srcs.append(str(REPO_ROOT / SIM_MAIN))

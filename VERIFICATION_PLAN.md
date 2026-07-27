@@ -1455,3 +1455,81 @@ required to resolve this narrowing: it must fan the beamformer beat out
 per (beam, bin), instantiate one `covar_top` per pair, and feed a
 per-(beam, bin) CFAR grid. The Phase-3 metamorphic and stress runs
 accept this narrowing as scope; the Phase-5 acceptance gate will not.
+
+## 10. Synthetic-scene injection gate (issue #44)
+
+Issue #44 turns the per-block stimulus (impulses, tones, DC, random) into
+a *radar scene*: a multi-antenna IQ time series with named targets sitting
+in an AWGN floor, and a range-Doppler picture the reader can recognise.
+
+**Part 1 (merged, PR #45)** — `gen_target_iq.py` writes the Q1.15 IQ file
++ `scenario.json` ground truth; `range_doppler.py` renders the
+reference-chain range-Doppler map per antenna and prints a peak table.
+The gate is `make scenario SCENARIO=three_targets SEED=1`; a target
+whose range/Doppler peak sits within ±1 bin of ground truth PASSES.
+See `docs/range_doppler.md` for the axis definitions.
+
+**Part 2 (this issue)** — `test_pipeline_scenario` (built by
+`sim/tests/test_pipeline_scenario.cpp`) injects the same IQ through
+`benchmark_pipeline_top` and checks the CFAR detection stream against
+ground truth. The gate is `make sim-scenario` on `SEEDS='1 2 3'`.
+
+### Test flow
+
+1. Load `scenario.iq` and `scenario.json` via the C++ loader
+   (`sim/verilator/harness/iq_loader.{h,cpp}` — the counterpart of
+   `range_doppler.py:load_iq`).
+2. Configure the pipeline: CFAR mode CA, guard = 1/1, ref = 8/8,
+   alpha = 8.0 (UQ8.8 = 0x0800); PFB bank-1 = pass-through and
+   beamformer bank-1 = uniform 0x1000 weights, via
+   `Session::program_and_swap_to_active_banks`.
+3. Queue every one of the scenario's `HISTORY_FRAMES = 16` frames on
+   all four antennas.
+4. Single-cycle-step the core clock; on each cycle sample the CFAR
+   output stream (`m_valid && m_ready`) and decode DETECT events from
+   the low-order bits of `m_event_data` (kind at [0:1], bin at
+   [2:17], frame_id at [18:33] — see `rtl/packages/cfar_pkg.sv` for
+   the full event layout).
+5. For every scenario target, check that at least one DETECT event
+   landed within ±1 CFAR bin of the target's expected CFAR bin
+   (`fft_bin // BIN_PAR`, tapped parity only). Every DETECT NOT within
+   any target's window counts as a false alarm.
+6. Print a ground-truth-vs-detected table like `range_doppler.py`'s
+   peak table, and pass iff:
+   * every target detected within ±1 CFAR bin, AND
+   * false-alarm count ≤ 6 across all frames, AND
+   * `Session::errors().count() == 0` (the pipeline's SPEC 5 stream /
+     SPEC 8 CDC / SPEC 14 assertion set stays quiet), AND
+   * the input queue drains and every driven frame's `m_eof` beat is
+     observed.
+
+Tolerances, alpha choice, and the beam-check limitation are the
+subject of DECISIONS.md 2026-07-27 "Scenario-injection sim test
+tolerances (issue #44 part 2)".
+
+### Scenario constraints (Phase-3 narrowings)
+
+Because the Phase-3 pipeline taps ONE sample per beamformer beat —
+(beam 0, bin 0), with `BIN_PAR = 2` — the CFAR sees only the EVEN FFT
+bins, and beam discrimination is not observable with uniform beamformer
+weights. So Part 2 introduces a new built-in scenario:
+
+* `three_targets_even` — three targets at FFT bins 40, 96, 160
+  (mapping to CFAR bins 20, 48, 80), all at `angle_idx = 0`, and at
+  20/12/6 dB SNR. This is the default scenario `sim-scenario` runs.
+
+The original `three_targets` (bins 32, 67, 96; angles 1, 2, 3) remains
+the picture-gate scenario for Part 1 — its bins and angles exercise
+axes the reference chain can see but the Phase-3 tap cannot.
+
+Phase 5 (issue #20) is the follow-up that removes both narrowings: a
+per-(beam, bin) fan-out and per-beam CFAR restore full beam and bin
+discrimination in RTL, at which point `three_targets` becomes a
+sim-injection scenario too.
+
+### Runtime
+
+`make sim-scenario` builds `test_pipeline_scenario` once and runs it on
+each seed in `SEEDS`. Wall time on the reference host: ~20 s build +
+< 1 s per run, so three seeds fit under one minute total — well inside
+the 5-minute budget for the injection gate.
