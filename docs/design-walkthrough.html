@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agilex 7 Wideband Benchmark — Design Walkthrough</title>
+<style>
+  :root {
+    --bg: #ffffff; --fg: #1a1d21; --muted: #5b6470; --line: #d9dee5;
+    --accent: #0b63c5; --accent2: #7a3fa8; --chip: #eef2f7; --code: #f4f6f9;
+    --good: #1a7f37; --warn: #b35900;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14171b; --fg: #e6e9ee; --muted: #9aa4b0; --line: #2e353d;
+      --accent: #5ba3f0; --accent2: #c08ae0; --chip: #1e242b; --code: #1b2026;
+      --good: #4ac26b; --warn: #e8a04c;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 0 1rem 4rem; background: var(--bg); color: var(--fg);
+    font: 16px/1.6 system-ui, "Segoe UI", Roboto, sans-serif;
+  }
+  main { max-width: 62rem; margin: 0 auto; }
+  h1 { font-size: 1.9rem; margin: 2.2rem 0 0.3rem; }
+  h2 { font-size: 1.4rem; margin: 2.6rem 0 0.6rem; border-bottom: 2px solid var(--line); padding-bottom: 0.25rem; }
+  h3 { font-size: 1.08rem; margin: 1.6rem 0 0.4rem; }
+  .sub { color: var(--muted); margin: 0 0 1.2rem; }
+  .stage {
+    border: 1px solid var(--line); border-left: 4px solid var(--accent);
+    border-radius: 8px; padding: 0.2rem 1.2rem 0.9rem; margin: 1.4rem 0;
+  }
+  .stage h3 { margin-top: 1rem; }
+  .stage .io {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 0.8rem; margin: 0.7rem 0;
+  }
+  @media (max-width: 640px) { .stage .io { grid-template-columns: 1fr; } }
+  .io > div {
+    background: var(--chip); border-radius: 6px; padding: 0.5rem 0.8rem; font-size: 0.9rem;
+  }
+  .io b { color: var(--accent); }
+  code, pre {
+    font: 0.86em/1.5 ui-monospace, "Cascadia Code", Consolas, monospace;
+    background: var(--code); border-radius: 4px;
+  }
+  code { padding: 0.08em 0.35em; }
+  pre { padding: 0.7rem 1rem; overflow-x: auto; border: 1px solid var(--line); }
+  table { border-collapse: collapse; width: 100%; margin: 0.8rem 0; font-size: 0.9rem; }
+  th, td { border: 1px solid var(--line); padding: 0.35rem 0.6rem; text-align: left; }
+  th { background: var(--chip); }
+  .measured { color: var(--good); font-weight: 600; }
+  .pending { color: var(--warn); font-weight: 600; }
+  .tag {
+    display: inline-block; font-size: 0.72rem; font-weight: 700; letter-spacing: 0.04em;
+    background: var(--chip); color: var(--accent2); border: 1px solid var(--line);
+    border-radius: 999px; padding: 0.05rem 0.6rem; vertical-align: middle; margin-left: 0.5rem;
+  }
+  .diagram-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 8px; padding: 0.6rem; }
+  svg text { font-family: system-ui, sans-serif; }
+  a { color: var(--accent); }
+  .foot { color: var(--muted); font-size: 0.85rem; margin-top: 3rem; border-top: 1px solid var(--line); padding-top: 0.8rem; }
+</style>
+</head>
+<body>
+<main>
+
+<h1>From IQ Samples to Detections</h1>
+<p class="sub">A stage-by-stage walkthrough of the Agilex&nbsp;7 wideband multichannel
+processing benchmark on <b>AGMF039R47B1E1VC</b> (1,305,600 ALMs · 18,960 M20K · 12,300 DSP ·
+HBM2e). Facts marked <span class="measured">measured</span> come from Quartus Prime Pro 26.1
+calibration compiles on the real device; nothing here is estimated from datasheet arithmetic.</p>
+
+<h2>The pipeline at a glance</h2>
+<div class="diagram-wrap">
+<svg viewBox="0 0 1180 240" xmlns="http://www.w3.org/2000/svg" width="1180" height="240">
+  <defs>
+    <marker id="arr" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+      <path d="M0,0 L8,4 L0,8 z" fill="var(--accent)"/>
+    </marker>
+  </defs>
+  <g font-size="12.5" text-anchor="middle">
+    <!-- row 1 -->
+    <rect x="10"  y="30" width="100" height="52" rx="8" fill="none" stroke="var(--accent)" stroke-width="2"/>
+    <text x="60" y="52" fill="var(--fg)">Synthetic ADC</text><text x="60" y="68" fill="var(--muted)">16 ant × 8 IQ/clk</text>
+    <rect x="150" y="30" width="100" height="52" rx="8" fill="none" stroke="var(--accent)" stroke-width="2"/>
+    <text x="200" y="52" fill="var(--fg)">Polyphase FIR</text><text x="200" y="68" fill="var(--muted)">16 taps/phase</text>
+    <rect x="290" y="30" width="100" height="52" rx="8" fill="none" stroke="var(--accent)" stroke-width="2"/>
+    <text x="340" y="52" fill="var(--fg)">Streaming FFT</text><text x="340" y="68" fill="var(--muted)">1024-pt R2² SDF</text>
+    <rect x="430" y="30" width="110" height="52" rx="8" fill="none" stroke="var(--accent)" stroke-width="2"/>
+    <text x="485" y="52" fill="var(--fg)">History memory</text><text x="485" y="68" fill="var(--muted)">corner turn</text>
+    <rect x="580" y="30" width="110" height="52" rx="8" fill="none" stroke="var(--accent)" stroke-width="2"/>
+    <text x="635" y="52" fill="var(--fg)">Bin alignment</text><text x="635" y="68" fill="var(--muted)">Clos network</text>
+    <rect x="730" y="30" width="100" height="52" rx="8" fill="none" stroke="var(--accent)" stroke-width="2"/>
+    <text x="780" y="52" fill="var(--fg)">Beamformer</text><text x="780" y="68" fill="var(--muted)">16 beams</text>
+    <rect x="870" y="30" width="110" height="52" rx="8" fill="none" stroke="var(--accent)" stroke-width="2"/>
+    <text x="925" y="52" fill="var(--fg)">Power / Covar</text><text x="925" y="68" fill="var(--muted)">integration</text>
+    <rect x="1020" y="30" width="90" height="52" rx="8" fill="none" stroke="var(--accent)" stroke-width="2"/>
+    <text x="1065" y="52" fill="var(--fg)">CFAR</text><text x="1065" y="68" fill="var(--muted)">CA, exact</text>
+    <!-- row 2 -->
+    <rect x="730" y="150" width="180" height="52" rx="8" fill="none" stroke="var(--accent2)" stroke-width="2"/>
+    <text x="820" y="172" fill="var(--fg)">Packet network</text><text x="820" y="188" fill="var(--muted)">4 VCs · credit flow</text>
+    <rect x="960" y="150" width="150" height="52" rx="8" fill="none" stroke="var(--accent2)" stroke-width="2"/>
+    <text x="1035" y="172" fill="var(--fg)">DMA / HBM2e</text><text x="1035" y="188" fill="var(--muted)">abstract mem if</text>
+    <!-- arrows row 1 -->
+    <line x1="110" y1="56" x2="148" y2="56" stroke="var(--accent)" stroke-width="2" marker-end="url(#arr)"/>
+    <line x1="250" y1="56" x2="288" y2="56" stroke="var(--accent)" stroke-width="2" marker-end="url(#arr)"/>
+    <line x1="390" y1="56" x2="428" y2="56" stroke="var(--accent)" stroke-width="2" marker-end="url(#arr)"/>
+    <line x1="540" y1="56" x2="578" y2="56" stroke="var(--accent)" stroke-width="2" marker-end="url(#arr)"/>
+    <line x1="690" y1="56" x2="728" y2="56" stroke="var(--accent)" stroke-width="2" marker-end="url(#arr)"/>
+    <line x1="830" y1="56" x2="868" y2="56" stroke="var(--accent)" stroke-width="2" marker-end="url(#arr)"/>
+    <line x1="980" y1="56" x2="1018" y2="56" stroke="var(--accent)" stroke-width="2" marker-end="url(#arr)"/>
+    <!-- drop to row 2 -->
+    <path d="M1065,82 C1065,120 820,110 820,148" fill="none" stroke="var(--accent2)" stroke-width="2" marker-end="url(#arr)"/>
+    <line x1="910" y1="176" x2="958" y2="176" stroke="var(--accent2)" stroke-width="2" marker-end="url(#arr)"/>
+    <text x="360" y="130" fill="var(--muted)" font-size="12" text-anchor="start">telemetry, counters, power/covariance summaries and error events also feed the packet network</text>
+  </g>
+</svg>
+</div>
+
+<h2>0 · The data format everything shares</h2>
+<p>Every sample entering the machine is a <b>complex baseband IQ pair</b>: signed 16-bit I and
+signed 16-bit Q, interpreted as <b>Q1.15</b> fixed point (range −1.0 … +0.99997, resolution
+2<sup>−15</sup>). Coefficients and beam weights use the same format. All rounding is
+<b>round-to-nearest-even</b> and all saturation goes through one shared package
+(<code>rtl/packages/fxp_pkg.sv</code>) with a bit-identical C++ twin — chosen after measuring that
+round-half-up injects a coherent +½&nbsp;LSB-per-tie bias that would accumulate through the FIR,
+land as false DC energy in FFT bin 0, and pollute the CFAR threshold.</p>
+<p>Between blocks, data moves on one canonical <b>ready/valid stream bundle</b>
+(<code>stream_pkg.sv</code>): payload plus <code>start_of_frame</code>, <code>end_of_frame</code>,
+<code>stream_id</code>, <code>seq</code>, and <code>user</code> metadata. Two rules are enforced
+everywhere by assertions: payload is frozen while stalled, and <b>no combinational
+<code>ready</code> chain</b> may span module boundaries — every boundary has a skid or elastic
+buffer with a registered ready (this is what lets Quartus retime freely on HyperFlex).</p>
+
+<h2>1 · Synthetic ADC sources <span class="tag">ingress</span></h2>
+<div class="stage">
+  <div class="io">
+    <div><b>In:</b> nothing (self-stimulating) — programmable LFSR noise / DDS tone generators, or direct sample injection from the C++ test harness</div>
+    <div><b>Out:</b> 16 antenna streams × 8 complex Q1.15 samples per core clock = <b>4,096 bits of new IQ per cycle</b> at 450 MHz target</div>
+  </div>
+  <p>There is no real RF front end — the benchmark is about the fabric. The source block
+  produces deterministic, seedable stimulus so any run is exactly reproducible. In simulation
+  the harness can override it and inject arbitrary IQ scenarios (this is the hook the new
+  synthetic-target / range-Doppler issue builds on).</p>
+</div>
+
+<h2>2 · Per-antenna polyphase FIR banks <span class="tag">rtl/pfb</span></h2>
+<div class="stage">
+  <div class="io">
+    <div><b>In:</b> per antenna, 8 complex samples/cycle (8 polyphase lanes)</div>
+    <div><b>Out:</b> same rate, filtered — 8 complex Q1.15 samples/cycle, frame-aligned for the FFT</div>
+  </div>
+  <p>Each antenna gets a 16-tap-per-phase polyphase filter bank: the channelizer front end that
+  shapes each FFT bin's response (windowed-sinc prototype, designed and Q1.15-quantized by
+  <code>scripts/generate_coefficients.py</code>). Coefficients live in <b>dual banks</b>: software
+  loads the inactive bank over the config bus, then arms a swap that takes effect only at a frame
+  boundary — an assertion fires if data could ever mix banks mid-frame.</p>
+  <h3>What calibration measured</h3>
+  <p><span class="measured">Measured:</span> the textbook systolic DSP-cascade is a loss here —
+  a complex multiply already consumes the DSP block's internal adder, so there is no free chainout;
+  the adder-tree form is <b>19% faster</b> (537 vs 450 MHz at 8 lanes) and smaller. Full-scale cost:
+  <b>≈4,096 DSP blocks (33% of the device)</b> for 16 antennas.</p>
+</div>
+
+<h2>3 · Parallel streaming FFTs <span class="tag">rtl/fft</span></h2>
+<div class="stage">
+  <div class="io">
+    <div><b>In:</b> per antenna, 8 time-domain complex samples/cycle, continuous frames of 1024</div>
+    <div><b>Out:</b> per antenna, 8 frequency-bin complex values/cycle — 1024 bins per frame, with per-stage overflow flags</div>
+  </div>
+  <p>One independent 1024-point streaming FFT per antenna, built from <b>radix-2² single-path
+  delay-feedback</b> stages — no vendor FFT IP anywhere. Parallelism is a decimation-in-time
+  lane split: <i>P</i> identical smaller SDF cores plus log₂(P) merge butterflies, so scaling from
+  2 to 8 samples/cycle replicates cores instead of redesigning stages. Each stage applies a
+  fixed conditional right-shift (the scaling schedule) with RNE rounding; twiddle factors are
+  generated once, committed with a digest, and shared bit-exactly by RTL, C++, and Python.</p>
+  <p>This stage is what turns the fast-time axis into <b>range</b>: after the FFT, "frequency bin"
+  is the range gate a target's beat/delay frequency falls into.</p>
+  <h3>What calibration measured</h3>
+  <p><span class="measured">Measured:</span> with automatic placement the critical path landed
+  <i>inside</i> an M20K hard block (the 16-word delay-feedback line), where retiming cannot reach.
+  Forcing small feedback lines into LUT-RAM bought +32 MHz and freed 8 M20Ks per FFT.
+  <span class="pending">Open:</span> best block Fmax so far is 362 MHz vs the 450 MHz target —
+  the exact 6-level failing path is documented and queued for the autonomous timing-closure phase.</p>
+</div>
+
+<h2>4 · Time-frequency history & corner turn <span class="tag">rtl/memory</span></h2>
+<div class="stage">
+  <div class="io">
+    <div><b>In:</b> per antenna, FFT frames written bin-sequentially (write side, core clock)</div>
+    <div><b>Out:</b> on request <code>(bin, frame_offset)</code>: one aligned vector containing <b>that bin from all 16 antennas</b> (read side, history clock)</div>
+  </div>
+  <p>The memory heart of the design: a rotating store of the last <code>HISTORY_FRAMES</code> FFT
+  frames for every antenna, banked so that continuous full-rate writes never collide with reads.
+  The <b>corner turn</b> is the key trick — data is written per-antenna in frequency order but read
+  per-bin across antennas (what the beamformer needs). The bank/address mapping was chosen so both
+  directions are pure <b>bit slices</b>: the transpose costs zero arithmetic. This axis
+  (bin × frame history) is also exactly the data a slow-time Doppler FFT reads, which is how a
+  range-Doppler map falls out of this architecture.</p>
+  <h3>What calibration measured</h3>
+  <p><span class="measured">Measured:</span> M20K boundary registers are absorbed into the hard
+  block for free (removing them costs 98.6 MHz); a 32-bit word can fill at most 80% of an M20K
+  (parity-mode granularity). At the nominal 512-frame depth the full-scale store needs
+  <b>16,384 M20Ks = 86.4%</b> — above the 80% ceiling — so the parameter freeze will likely pick
+  <b>384 frames → 64.8%</b> (legal: only the FFT size must be a power of two). A subtle correctness
+  bound was caught by analysis: the readable window is <code>depth−2</code>, not <code>depth−1</code>,
+  because a maximum-offset read could race the slot being published — a bug no test could see.</p>
+</div>
+
+<h2>5 · Frequency-bin alignment network <span class="tag">rtl/align</span></h2>
+<div class="stage">
+  <div class="io">
+    <div><b>In:</b> possibly skewed/reordered history read responses, tagged (bin, frame, antenna-vector)</div>
+    <div><b>Out:</b> the beamformer's exact input beat: <b>8 bins per cycle × 16-antenna vectors</b>, common frame, bins in order, under backpressure</div>
+  </div>
+  <p>The marshaling layer between memory and math. It issues 8 bin-read requests per cycle across
+  the banks, collects responses that may arrive skewed, reassembles them keyed by their own
+  <code>(bin, frame)</code> identity (not a tag FIFO — a tag FIFO mislabels everything after the
+  first loss), and detects missing or duplicated samples with counters. Two full implementations
+  exist behind one interface, per the spec's mandated experiment.</p>
+  <h3>What calibration measured</h3>
+  <p><span class="measured">Measured — the architecture shoot-out:</span> the multistage
+  <b>omega/Clos network beats the direct crossbar on every axis</b> at full width: −24.6% ALMs,
+  ≥624 vs 296 MHz, and 76% vs <b>109% (oversubscribed)</b> peak interconnect demand — the
+  crossbar's critical path is 72% wire delay. <code>ALGN_NET_CLOS</code> is the shipping choice.</p>
+</div>
+
+<h2>6 · Complex beamforming matrix <span class="tag">rtl/beamformer</span></h2>
+<div class="stage">
+  <div class="io">
+    <div><b>In:</b> per cycle: 8 bins × 16-antenna complex vectors + a 16×16 complex weight matrix (double-banked)</div>
+    <div><b>Out:</b> per cycle: 8 bins × <b>16 beam</b> complex samples, Q1.15 with saturation flags, beam/bin identity in metadata</div>
+  </div>
+  <p>For every frequency bin, <code>Y[b] = Σₐ X[a]·W[b][a]</code> — 16 simultaneous spatial beams
+  from 16 antennas. Weights are runtime-programmable in double banks with frame-boundary swaps
+  (same discipline as FIR coefficients). Arithmetic: 4-real-multiply complex products
+  (<span class="measured">measured</span> better than the 3-mult Karatsuba form on this device —
+  Agilex DSP granularity means 3-mult saves no blocks and pays fabric adders), full-precision
+  pipelined accumulation tree, then <b>one</b> round/saturate at the end (rounding is
+  <span class="measured">measured</span> to be the expensive operation, not multiplication).</p>
+  <h3>What calibration measured</h3>
+  <p><span class="measured">Measured:</span> exactly 2 DSP per antenna per dot product, scaling
+  linearly → full-scale beam matrix = <b>4,096 DSPs (33.3%)</b>. Together with the PFB the design
+  sits at <b>67% DSP utilization before FFT/covariance/CFAR are counted</b> — the 75–90% target is
+  met with real math, not filler logic. Block Fmax 414 MHz today; limiting path (weight-store →
+  beam mux → operand) is named for the closure phase.</p>
+</div>
+
+<h2>7 · Power & covariance processing <span class="tag">rtl/covariance</span></h2>
+<div class="stage">
+  <div class="io">
+    <div><b>In:</b> beam (or antenna) complex samples per bin</div>
+    <div><b>Out:</b> 40-bit integrated power per bin per beam, window-boundary metadata; complex cross-power Rxy for selected pairs</div>
+  </div>
+  <p>Detection statistics. <code>Power = I² + Q²</code> is accumulated over a register-programmable
+  integration window (with an optional exponential-averaging mode); a cross-power engine computes
+  <code>Rxy = X·conj(Y)</code> for runtime-selected antenna/beam pairs. The 40-bit accumulator
+  format is exact for up to 255 maximum-amplitude samples (derived bound, tested at the 256-sample
+  clamp point), saturating with sticky flags beyond. Conjugation is implemented by operand swap
+  rather than negation, dodging the −32768 negation overflow. Window changes latch only at window
+  boundaries; flush is defined as bit-exact equivalence to a post-reset state.</p>
+</div>
+
+<h2>8 · CFAR detection <span class="tag">rtl/cfar</span></h2>
+<div class="stage">
+  <div class="io">
+    <div><b>In:</b> integrated power stream, bin-ordered per beam per window</div>
+    <div><b>Out:</b> sparse <b>176-bit self-verifying detection events</b> + one summary beat per frame per beam</div>
+  </div>
+  <p>Cell-averaging CFAR over frequency bins: for each cell under test, the noise floor is
+  estimated from programmable leading/lagging reference cells (skipping programmable guard cells),
+  and the decision is the <b>division-free exact integer comparison</b>
+  <code>cell·N_ref·2^F &gt; α·Σ(reference)</code> with α in Q8.8. Bins whose window is incomplete
+  (frame edges) are suppressed and counted, never guessed. Every detection event carries the four
+  operands of its own comparison — <b>any downstream consumer can re-verify the decision with
+  integer math</b>, which is exactly what the packet-network tests do.</p>
+</div>
+
+<h2>9 · Event aggregation & packet network <span class="tag">rtl/packet</span></h2>
+<div class="stage">
+  <div class="io">
+    <div><b>In:</b> 16+ ingress ports: CFAR events, power/covariance summaries, telemetry snapshots, error events</div>
+    <div><b>Out:</b> 512-bit-wide packets, routed and arbitrated to egress/memory, in-order per (source, VC, destination)</div>
+  </div>
+  <p>A multistage on-chip network — not a monolithic crossbar — built from pipelined 4×4 switch
+  stages with per-VC input FIFOs, registered round-robin arbitration, and <b>credit-based flow
+  control closed locally per hop</b>. Four virtual channels keep event classes from blocking each
+  other (a stalled bulk-capture VC cannot starve detection events — tested). Verified for zero
+  loss/duplication under random traffic, hotspot fairness, and VC isolation.
+  <span class="measured">Measured:</span> full-scale fabric ≈ <b>210k ALMs</b> — this block is the
+  deliberate routing-pressure driver, with routing already dominating its critical path (2.8 of
+  4.0 ns).</p>
+</div>
+
+<h2>10 · DMA / HBM abstract memory interface <span class="tag">phase 4/9</span></h2>
+<div class="stage">
+  <div class="io">
+    <div><b>In:</b> packetized events + bulk capture records</div>
+    <div><b>Out:</b> vendor-neutral request/response memory stream → behavioral model in simulation; HBM2e AXI pseudo-channels on silicon (Phase 9)</div>
+  </div>
+  <p>The pipeline never talks to vendor IP directly. A clean abstract memory interface is the
+  seam: Verilator sees a behavioral memory model; the device-specific top
+  (<code>benchmark_device_top</code>) will attach generated HBM2e controllers behind the same
+  interface in the final phase, leaving the portable hierarchy untouched.</p>
+</div>
+
+<h2>Clock domains</h2>
+<table>
+  <tr><th>Clock</th><th>Target</th><th>Carries</th></tr>
+  <tr><td><code>core_clk</code></td><td>450 MHz</td><td>PFB, FFT, beamformer, power/covariance, CFAR datapath</td></tr>
+  <tr><td><code>history_clk</code></td><td>400 MHz</td><td>history banks + corner-turn reads, alignment network</td></tr>
+  <tr><td><code>packet_clk</code></td><td>400 MHz</td><td>packet network</td></tr>
+  <tr><td><code>memory_clk</code></td><td>350 MHz</td><td>abstract DMA/HBM interface</td></tr>
+  <tr><td><code>cfg_clk</code></td><td>100 MHz</td><td>register plane, coefficient/weight loading</td></tr>
+  <tr><td><code>telemetry_clk</code></td><td>200 MHz</td><td>counters, health monitoring</td></tr>
+</table>
+<p>All crossings use the audited CDC library (Gray-pointer async FIFOs for bulk, two-flop/toggle/
+handshake synchronizers for signals) and appear in a machine-generated <b>CDC inventory</b> that
+fails the build if any crossing is untagged. Resets touch control state and validity only — never
+wide datapath registers — so HyperFlex retiming stays unconstrained.</p>
+
+<h2>How it is verified</h2>
+<ul>
+  <li><b>One parameterized RTL, four sizes.</b> <code>tiny</code> (2 ant, 64-pt FFT) and
+  <code>medium</code> (4 ant, 256-pt) run exhaustive Verilator regressions against a bit-exact C++
+  reference model (itself validated against NumPy). The <code>full</code> configuration gets smoke
+  tests plus the complete Quartus physical flow — simulation scale and synthesis scale are
+  deliberately decoupled.</li>
+  <li><b>Bit-exact oracles at every stage</b> — RTL vs C++ vs Python golden vectors, all loading the
+  same coefficient/twiddle/weight files. No tolerances anywhere except explicitly documented ones.</li>
+  <li><b>Fault injection is mandatory</b>: every block's test suite was proven capable of failing
+  by injecting a real bug (wrong twiddle, swapped bank bits, dropped conjugate…) and watching the
+  oracle catch it.</li>
+  <li><b>Every PR re-gated independently</b> before merge: lint (zero unwaived warnings — 2 narrow
+  waivers project-wide), multi-seed regressions, register-map drift check, CDC inventory.</li>
+</ul>
+
+<h2>Where the resources go (measured so far)</h2>
+<table>
+  <tr><th>Block</th><th>Resource</th><th>Full-scale projection</th><th>Basis</th></tr>
+  <tr><td>Polyphase FIR banks</td><td>DSP</td><td>≈4,096 (33%)</td><td class="measured">measured/linear</td></tr>
+  <tr><td>Beamforming matrix</td><td>DSP</td><td>4,096 (33.3%)</td><td class="measured">measured/exact</td></tr>
+  <tr><td>FFT banks</td><td>DSP + MLAB</td><td>10 DSP per 64-pt core; full-size TBD at freeze</td><td class="measured">measured, scaling at #20</td></tr>
+  <tr><td>History store</td><td>M20K</td><td>86.4% @ 512 frames → ~65% @ 384 (freeze pending)</td><td class="measured">measured geometry</td></tr>
+  <tr><td>Packet network</td><td>ALM</td><td>≈210,000</td><td class="measured">measured/linear</td></tr>
+  <tr><td>Covariance / CFAR</td><td>DSP/ALM</td><td>claims recorded, unmeasured</td><td class="pending">calibrates at #20</td></tr>
+</table>
+
+<h2>What comes out the end</h2>
+<p>For a scenario with real targets in it: the FFT maps each target's fast-time frequency to a
+<b>range bin</b>; the history store accumulates that bin across frames, where target motion appears
+as frame-to-frame phase rotation — the <b>Doppler</b> axis; the beamformer separates targets by
+<b>angle</b>; integration builds SNR; and CFAR emits a compact, self-verifying event for every
+bin/beam whose power stands statistically above its local noise — plus telemetry proving nothing
+was lost along the way. The forthcoming synthetic-target scenario generator (see the range-Doppler
+issue) closes the loop by injecting known targets and rendering the resulting range-Doppler maps
+with ground truth overlaid.</p>
+
+<p class="foot">Generated from the project state after PRs #26–#42 (issues #1–#16, #18 merged).
+Sources of truth: SPEC.md, ARCHITECTURE.md, DECISIONS.md, and the calibration JSON records in
+each PR. Device: AGMF039R47B1E1VC, Quartus Prime Pro 26.1.0 Build 110, Verilator 5.020.</p>
+
+</main>
+</body>
+</html>
