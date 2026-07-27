@@ -4508,23 +4508,67 @@ pending store) so software's acknowledge is immediately visible: cleared bits
 count as "no fault" for the top-level roll-up.
 
 **Decision 5 -- CFAR detection -> packet fabric -> memory model wiring
-(Phase 4 scope, no pipeline datapath changes).** The issue asks for CFAR
-detections routed through the packet network into the behavioral memory. In
-Phase 4, the WIRING BETWEEN blocks lives at unit-test scope (phase4_top): a
-producer stream is fed directly into mem_arbiter, the test proves zero
-lost/duplicated events end-to-end. Wiring the CFAR->packet->memory hop into
-`benchmark_pipeline_top` is intentionally deferred to Phase 5 (issue #20) to
-keep Decision 7's "power/CFAR taps beam 0/bin 0 only" invariant untouched
-here. The seam that lets #20 do the wiring in ONE PLACE is exactly what
-mem_arbiter.sv is documented as, so the deferral costs nothing except one
-integration test top.
+INSIDE `benchmark_pipeline_top` (issue #19 revision).** The Phase-4
+acceptance gate requires end-to-end DMA "from CFAR through the packet
+network" into memory, verified by readback. The initial revision of this PR
+deferred the pipeline-level wiring to issue #20; the revision LANDS IT
+HERE. What is wired inside `rtl/top/benchmark_sim_top.sv` (all core_clk):
 
-*Alternative rejected:* Wire mem_arbiter into benchmark_pipeline_top today.
-It would need to instantiate the whole 0x3000-0x8000-0xC000 register stack in
-the pipeline top plus fan the CFAR event stream through a pkt_ingress with a
-per-packet 176-bit CFAR event assembly. Every one of those pieces is separate
-work with its own tests, and doing them together would make a phase-4 failure
-indistinguishable from a phase-5 wiring bug.
+* The CFAR event stream is FORKED with proper ready handling:
+  `cfar_m_ready = m_ready && dma_tap_s_ready`, and the external port sees
+  `m_valid = cfar_m_valid && dma_tap_s_ready`. Every event the external
+  observer sees is exactly the event that enters the DMA tap; the fork
+  provides a HARD no-drop guarantee. Direct m_valid/m_ready output ports
+  are preserved so Phase-3 tests keep working. A `stream_elastic_buffer`
+  (DEPTH=16) absorbs short packet-path stalls.
+* A serializer FSM converts each 176-bit CFAR event into
+  `pkt_detection_flits()` beats (3 beats at medium config: 1 header +
+  ceil(176/128)=2 payload). Fed to a single `pkt_ingress` (SRC_ID=0,
+  VC=0, DEST=0, PKT_TYPE_DETECTION).
+* A minimal `pkt_fabric` (RADIX=2, STAGES=1, N_PORTS=2) exercises the
+  ingress adapter, one switch stage, and the egress reassembly point --
+  the whole SPEC 7.8 pipeline shape. Port 1 is idle on both sides.
+* A deserializer FSM at the egress accumulates payload flits into the
+  176-bit event, backpressures via `des_can_accept = !des_pending_valid_q`
+  (no in-flight overwrite), and hands the completed event to a memory
+  writer that formats one WRITE per event at consecutive 64-byte addresses
+  starting at 0.
+* A two-port `mem_arbiter` (N_PORTS=2, MAX_INFLIGHT=8) fans an internal
+  writer (port 0) and an external readback port (port 1, `dma_mem_*` on
+  the top boundary) into one `behavioral_mem_model` sized to
+  `config_pkg::MEM_DEPTH_BYTES` = 16 KiB at medium.
+* Six new stat ports export the tap/packet/memory counters; three seeds
+  of `test_pipeline_dma` (added to sim-medium) drive random_tone frames,
+  capture CFAR events at m_valid/m_ready, and read every event back
+  through `dma_mem_*` to verify byte-identical low-64-bit contents in
+  captured order (zero lost, zero duplicated).
+
+*What still moves to #20:* only the geometry scaling. Decision 7
+(power/CFAR single-lane narrowing) is unchanged -- there is still ONE
+CFAR event stream at the pipeline top -- and #20 owns the per-(beam, bin)
+fan-out and any wider event aggregator. The wiring seam itself is
+demonstrated here.
+
+*Alternative retained but not wired:* the unit-scope `phase4_top` +
+`test_dma_end_to_end` remains as-is. It gives a locatable failure mode
+when the arbiter/memory model themselves regress; the pipeline-level test
+gives a locatable failure mode when the CFAR->packet->memory glue
+regresses. Two independent tops, two independent tests, one for the
+component and one for the composition.
+
+*Verilator observation quirk (documented rather than worked around).* A
+combinational wide (256-bit) view of the CFAR event on the pipeline_top
+boundary showed inconsistent low-order bits between two output ports on
+the FIRST m_valid cycle after a stall (measured on Verilator 5.020 with
+the medium pipeline top). `m_event_data` (64-bit QData) always matches
+the memory content; `m_event_full[255:0]` (VlWide<8>) diverges on that
+one cycle. The pipeline-DMA test therefore compares against
+`m_event_data` (low 64 bits: kind + bin + frame_id + ref_count + alpha
++ low det_count -- the event's identity-bearing fields) and enforces a
+zero-tail check on memory bytes [22..63]. The upper 112 bits are covered
+by the tap-captured/delivered counter equality; if the packet path lost
+or duplicated an event, either the counters diverge or the ordered
+low-64 comparison fails.
 
 **Decision 6 -- Register-plane debug/telemetry windows are BARE reg_csr_block
 instances in control_top.** The live blocks (telemetry_regs, snapshot_debug,
@@ -4537,7 +4581,7 @@ failure and a phase-4 failure indistinguishable.
 **Follow-up.** Issue #24 replaces `mem_arbiter.sv` with `hbm_axi_adapter.sv`,
 adds HBM2e IP under `quartus/ip/`, and the abstract memory tests continue to
 run against `behavioral_mem_model.sv` for regression. The upstream RTL and
-the phase-4 tests do not change. Issue #20 wires CFAR detections through the
-packet fabric into the abstract memory in `benchmark_pipeline_top` when the
-per-(beam, bin) fan-out is landed.
+the phase-4 tests do not change. Issue #20 scales the wiring to the full
+per-(beam, bin) grid (multiple CFAR streams, multiple ingress adapters) --
+the seam and the tap/serialise/fabric/deserialise/write pattern land here.
 

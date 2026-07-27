@@ -563,7 +563,8 @@ ALIGN_BIN      = sim/verilator/build/fast_tiny_$(ALIGN_TOP)/V$(ALIGN_TOP)_$(ALIG
 PIPE_TOP     := pipeline_top
 PIPE_FILES   := sim/verilator/files_pipeline.f
 PIPE_TESTS   := test_pipeline_continuous test_pipeline_random \
-                test_pipeline_runtime_update test_pipeline_metamorphic
+                test_pipeline_runtime_update test_pipeline_metamorphic \
+                test_pipeline_dma
 PIPE_STRESS  := test_pipeline_stress
 # Pipeline targets default to CONFIG=medium (the size the Phase 3 gate
 # specifies). Set PIPE_CONFIG=... to override.

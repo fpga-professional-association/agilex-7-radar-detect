@@ -1583,22 +1583,49 @@ Every register-side check goes through the SPEC 9 protocol via harness
 RegDriver, exactly as software would.
 
 `sim/tests/test_dma_end_to_end.cpp` — four passes on `phase4_top` proving
-the DMA/HBM seam contract. Single write/read roundtrip: write a known
-pattern to address 0x100, read it back, verify byte-identical.
+the DMA/HBM seam contract in isolation. Single write/read roundtrip: write
+a known pattern to address 0x100, read it back, verify byte-identical.
 Burst: 16 unique random patterns written to consecutive addresses, then
 read back; DBG_MEM_REQ_COUNT and DBG_MEM_RSP_COUNT verified equal (zero
 lost, zero duplicated events). Soft reset: pulse SOFT_RESET, verify the
 counters clear. Range error: read address 0x1000 (past the 4 KiB byte
-store), verify DBG_MEM_STATUS.FAULT_RANGE is set.
+store), verify DBG_MEM_STATUS.FAULT_RANGE is set. This test proves the
+arbiter + memory model + fault paths at unit scope; a regression here
+localises to those blocks rather than to their composition with the CFAR
+core or the packet fabric.
 
-### Integration scope narrowings (Phase-4 only)
+`sim/tests/test_pipeline_dma.cpp` — end-to-end DMA proof on
+`benchmark_pipeline_top` at medium config (issue #19 revision, the
+Phase-4 acceptance gate for "CFAR through the packet network into memory,
+verified by readback"). Drives 4 random_tone frames through the full
+PFB->FFT->history->align->beamformer->power->CFAR chain; forks the CFAR
+event stream (must-both-accept fork with a DEPTH=16 elastic buffer);
+serialises each 176-bit event into `pkt_detection_flits()` beats through
+a small `pkt_fabric` (RADIX=2, STAGES=1); deserialises at the egress;
+writes one 512-bit memory word per event into `behavioral_mem_model`;
+reads every word back through the external `dma_mem_*` port on
+`pipeline_top` and asserts:
+* every captured CFAR beat has a corresponding memory word at address
+  (base + k * 64) with byte-identical low 64 bits (the identity-bearing
+  fields of the CFAR event: kind, bin, frame_id, ref_count, alpha, low
+  det_count);
+* memory bytes [22..63] are zero (the DMA writer zero-extends the
+  176-bit event into the 512-bit word);
+* `stat_dma_events_captured == stat_dma_events_delivered` for the run
+  (zero lost, zero duplicated over the packet path);
+* the captured count matches the memory-write count (fork integrity).
 
-The abstract memory model in phase4_top wires ONE producer to
-mem_arbiter, not the CFAR->packet->memory hop that Phase 5 assembles.
-`benchmark_pipeline_top` is unchanged in this phase (DECISIONS.md
-2026-07-27 issue #19 decision 5): the seam is proven, the wiring waits
-for issue #20 to land the per-(beam,bin) fan-out that gives
-CFAR->packet->memory a real traffic stream to carry.
+Wired into `sim-medium` (adds ~10 s per seed).
+
+### Integration scope narrowings (Phase-4)
+
+Decision 7 (power/CFAR single-lane narrowing) is UNCHANGED: the pipeline
+still taps ONE (beam 0, bin 0) sample per beat, so the pipeline emits one
+CFAR stream, and the DMA path carries one detection packet per event.
+Issue #20 introduces the per-(beam, bin) fan-out (multiple concurrent
+CFAR streams, wider ingress adapter aggregation); the SEAM and the
+serialise -> fabric -> deserialise -> memory pattern are already
+demonstrated here.
 
 ### Runtime
 

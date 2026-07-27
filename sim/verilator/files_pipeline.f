@@ -30,8 +30,12 @@ rtl/packages/pfb_pkg.sv
 rtl/packages/covar_pkg.sv
 rtl/packages/cfar_pkg.sv
 rtl/packages/history_pkg.sv
+rtl/packages/packet_pkg.sv
 rtl/beamformer/beamformer_pkg.sv
 rtl/align/align_pkg.sv
+
+// ---- issue #19 abstract memory (Phase 4) ----------------------------------
+rtl/memory/mem_req_rsp_if.sv
 
 // ---- SPEC 14 checkers instantiated by the RTL ------------------------------
 sim/assertions/stream_protocol_checker.sv
@@ -108,6 +112,17 @@ rtl/covariance/covar_engine.sv
 // ---- kernels: CFAR (SPEC 7.7) ---------------------------------------------
 rtl/cfar/cfar_window.sv
 rtl/cfar/cfar_core.sv
+
+// ---- issue #18 packet network (used by benchmark_pipeline_top's DMA tap) --
+rtl/packet/pkt_rr_arb.sv
+rtl/packet/pkt_ingress.sv
+rtl/packet/pkt_switch_stage.sv
+rtl/packet/pkt_egress.sv
+rtl/packet/pkt_fabric.sv
+
+// ---- issue #19 abstract memory backend (behavioural + arbiter) ------------
+rtl/memory/mem_arbiter.sv
+rtl/memory/behavioral_mem_model.sv
 
 // ---- pipeline top and control ---------------------------------------------
 rtl/top/benchmark_pipeline_ctrl.sv
