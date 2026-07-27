@@ -109,6 +109,10 @@ SEEDS        ?= 1 2 3
 JOBS         ?= 16
 TEST         ?= test_stream_loopback
 RESULTS_DIR  ?= results/simulation
+# Named scenario the `scenario` target renders (issue #44). Values are the keys
+# of gen_target_iq.SCENARIOS; three_targets is the built-in that #44's
+# acceptance gate calls out by name.
+SCENARIO     ?= three_targets
 
 # Deferred (`=`, not `:=`): PYTHON is probed further down, after host detection
 # has chosen the candidate order.
@@ -1066,6 +1070,7 @@ help:
 	@printf '%-18s %-9s %s\n' 'sim-stress'       'wsl'     'TODO(issue #17) long stress test'
 	@printf '%-18s %-9s %s\n' 'sim-coverage'     'wsl'     'TODO(issue #17) coverage build and report'
 	@printf '%-18s %-9s %s\n' 'sim-full-smoke'   'wsl'     'TODO(issue #20) full-scale smoke test'
+	@printf '%-18s %-9s %s\n' 'scenario'         'wsl'     'issue #44 (part 1): render range-Doppler map for SCENARIO=<name>'
 	@printf '\n'
 	@printf '%-18s %-9s %s\n' 'quartus-map'      'windows' 'Analysis and Synthesis (quartus_syn)'
 	@printf '%-18s %-9s %s\n' 'quartus-fit'      'windows' 'Analysis and Synthesis + Fitter'
@@ -1189,6 +1194,33 @@ sim-coverage:
 
 sim-full-smoke:
 	$(SIM_STUB_20)
+
+# `scenario` (issue #44, part 1): generate a synthetic multi-antenna target IQ
+# scene and render its range-Doppler map through the reference chain (PFB ->
+# per-frame FFT -> slow-time FFT per bin). Determined by SCENARIO=<name> and
+# SEED=<int>. Purely a Python flow — no Verilator build — so it needs numpy and
+# matplotlib but nothing from the RTL toolchain. Part 2 of #44 (the
+# sim-injection CFAR test) is blocked on issue #17 and is NOT dispatched here.
+ifeq ($(HOST_KIND),windows)
+scenario:
+	@printf '[dispatch] %s -> wsl -d %s make -C %s (SCENARIO=%s SEED=%s)\n' \
+	    '$@' '$(WSL_DISTRO)' '$(WSL_REPO_DIR)' '$(SCENARIO)' '$(SEED)'
+	@wsl.exe -d $(WSL_DISTRO) -- make -C $(WSL_REPO_DIR) $@ \
+	    SCENARIO='$(SCENARIO)' SEED='$(SEED)' \
+	    SCENARIO_CONFIG='$(SCENARIO_CONFIG)'
+else
+# SCENARIO_CONFIG defaults to `medium` (not the pipeline CONFIG=tiny default)
+# because the medium config is the one issue #44 targets for the sim-injection
+# test and produces the visually interesting map (FFT_SIZE=256, HISTORY_FRAMES
+# =16, N_ANTENNAS=4). Override with `SCENARIO_CONFIG=tiny` etc.
+SCENARIO_CONFIG ?= medium
+scenario:
+	@printf '[scenario] %s seed=%s config=%s\n' \
+	    '$(SCENARIO)' '$(SEED)' '$(SCENARIO_CONFIG)'
+	@$(PYTHON) model/python/range_doppler.py \
+	    --scenario '$(SCENARIO)' --seed '$(SEED)' \
+	    --config 'config/$(SCENARIO_CONFIG).json'
+endif
 
 # ===========================================================================
 # Quartus targets (SPEC.md 16) — Windows Quartus Prime Pro 26.1
@@ -1470,6 +1502,7 @@ reproduce-final:
 .PHONY: help env-check \
         lint numerics-check regmap-check fft-check cdc-inventory \
         sim-tiny sim-medium sim-random sim-stress sim-coverage sim-full-smoke \
+        scenario \
         coeff-check calibrate-fir calibrate-pfb8 calibrate-beamformer \
         calibrate-history calibrate-align \
         quartus-map quartus-fit quartus-sta quartus-report quartus-compile \
