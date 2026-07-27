@@ -258,9 +258,113 @@ def scenario_three_targets(cfg: ScenarioConfig, seed: int) -> Scenario:
     )
 
 
+def scenario_three_targets_even(cfg: ScenarioConfig, seed: int) -> Scenario:
+    """Three targets on the tapped-parity CFAR bins, angle 0 (beam 0 tap).
+
+    Part 2 of #44 injects a scenario through ``benchmark_pipeline_top``, whose
+    Phase-3 narrowing (DECISIONS.md 2026-07-27 Decision 7) taps ONE sample per
+    beamformer beat -- (beam 0, bin 0). With BIN_PAR = 2 the align network
+    maps LANE = bin mod BIN_PAR = bin[0], so lane 0 carries even FFT bins and
+    lane 1 carries odd bins. The beamformer packs
+    ``data[(k*BIN_PAR + j)*2*SAMPLE_W]`` = (beam k, bin j); the pipeline taps
+    j = 0 = EVEN FFT bins.
+
+    Beam discrimination is unavailable in Phase 3 with uniform beamformer
+    weights: coherent addition of a per-antenna phase gradient
+    ``exp(j 2 pi angle_idx * a / N_ANT)`` across ``N_ANT`` antennas with equal
+    weights is
+    ``N_ANT * sinc(pi*angle_idx)`` -- zero unless ``angle_idx == 0 (mod N_ANT)``.
+    A non-zero angle_idx target would be nulled at beam 0 with uniform
+    weights and become invisible to the tapped power path. So this scenario
+    puts every target at ``angle_idx = 0``; the reference visualiser still
+    prints the range-Doppler map and would find the peaks on antenna 0 (or
+    on any antenna, since the tone amplitude is the same on all when
+    angle_idx = 0).
+
+    The three range bins are even, span the low, middle and upper half of
+    the FFT range (avoiding DC and Nyquist for the same reason
+    ``scenario_three_targets`` gives), and after halving into CFAR bin
+    indices (``fft_bin // BIN_PAR``) sit well inside the fittable CFAR
+    window at MAX_GUARD = 2, MAX_REF = 16 (half-window 18; unfittable CFAR
+    bins are 0..17 and (F/BIN_PAR)-18..(F/BIN_PAR)-1 = 110..127 at
+    FFT_SIZE = 256, BIN_PAR = 2). Bins 32, 96 and 160 map to CFAR bins
+    16, 48 and 80 -- three well-separated, ALL fittable slots.
+
+    NOTE: bin 32 -> CFAR bin 16, JUST inside the half-window (bin 17 is the
+    first fittable). Moved up to 40 to have a comfortable margin for the
+    strong target, which is the one whose false-alarm bound is most
+    sensitive to a leaky edge. 40 // 2 = CFAR bin 20 which is well past
+    the last unfittable index 17.
+    """
+    f = cfg.fft_size
+    h = cfg.history_frames
+    # Three range bins, all EVEN (tapped parity), all far enough from either
+    # frame edge that the CFAR half-window (guard + ref) fits.
+    range_bins = [40, 96, 160]
+    dopplers   = [2, h - 3, h // 2 - 1]
+    snr_dbs    = [20.0, 12.0, 6.0]
+    targets = [
+        Target(f"t{i}_{name}", range_bins[i], dopplers[i], 0, snr_dbs[i])
+        for i, name in enumerate(("strong", "moderate", "weak"))
+    ]
+    return Scenario(
+        name="three_targets_even",
+        seed=seed,
+        targets=targets,
+        noise_sigma=0.005,
+        clutter_bin=-1,
+        clutter_amp=0.0,
+        target_amp=0.03,
+        description=(
+            "Three targets on tapped-parity (even) FFT bins, angle_idx=0 so "
+            "the beam-0 tap sees them coherently. Part-2 sim-injection "
+            "scenario: designed around DECISIONS.md 2026-07-27 Decision 7 "
+            "(single-lane power tap) and the medium config (FFT_SIZE=256, "
+            "BIN_PAR=2, HISTORY_FRAMES=16)."
+        ),
+        config={
+            "name": cfg.name,
+            "N_ANTENNAS": cfg.n_antennas,
+            "SAMPLES_PER_CYCLE": cfg.samples_per_cycle,
+            "FFT_SIZE": cfg.fft_size,
+            "HISTORY_FRAMES": cfg.history_frames,
+            "N_BEAMS": cfg.n_beams,
+            "SAMPLE_W": cfg.sample_w,
+        },
+    )
+
+
 SCENARIOS = {
     "three_targets": scenario_three_targets,
+    "three_targets_even": scenario_three_targets_even,
 }
+
+
+# ---------------------------------------------------------------------------
+# Bin-parity helper — used by the part-2 sim test (via the JSON sidecar) to
+# reason about which FFT bins the pipeline can see through its Phase-3 tap.
+# ---------------------------------------------------------------------------
+
+
+def cfar_bin_index(fft_bin: int, bin_par: int) -> int:
+    """CFAR bin index for a given FFT bin, at the pipeline's tap.
+
+    The pipeline taps (beam 0, bin 0) of each aligned beamformer beat, and
+    with BIN_PAR = N the alignment network puts FFT bin `k` on
+    (LANE = k mod N, GROUP = k // N). So bin 0 of a beat = LANE 0 = even FFT
+    bins. The CFAR sees one power sample per beat, in beat (group) order,
+    which is FFT bin // BIN_PAR for the tapped parity. This helper is the
+    one place that mapping is written down.
+    """
+    return fft_bin // bin_par
+
+
+def is_tapped_parity(fft_bin: int, bin_par: int) -> bool:
+    """True when the given FFT bin sits on lane 0 (the tapped parity).
+
+    Even FFT bins for BIN_PAR = 2.
+    """
+    return (fft_bin % bin_par) == 0
 
 
 # ---------------------------------------------------------------------------

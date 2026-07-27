@@ -579,7 +579,8 @@ define SIM_DISPATCH
 	@wsl.exe -d $(WSL_DISTRO) -- make -C $(WSL_REPO_DIR) $@ \
 	    CONFIG='$(CONFIG)' SEED='$(SEED)' SEEDS='$(SEEDS)' JOBS='$(JOBS)' \
 	    TEST='$(TEST)' RESULTS_DIR='$(RESULTS_DIR)' \
-	    PIPE_CONFIG='$(PIPE_CONFIG)' STRESS_CYCLES='$(STRESS_CYCLES)'
+	    PIPE_CONFIG='$(PIPE_CONFIG)' STRESS_CYCLES='$(STRESS_CYCLES)' \
+	    SCENARIO='$(SCENARIO)' SCENARIO_CONFIG='$(SCENARIO_CONFIG)'
 endef
 
 LINT_RECIPE      = $(SIM_DISPATCH)
@@ -593,6 +594,7 @@ SIM_MEDIUM_RECIPE   = $(SIM_DISPATCH)
 SIM_RANDOM_RECIPE   = $(SIM_DISPATCH)
 SIM_STRESS_RECIPE   = $(SIM_DISPATCH)
 SIM_COVERAGE_RECIPE = $(SIM_DISPATCH)
+SIM_SCENARIO_RECIPE = $(SIM_DISPATCH)
 SIM_STUB_20      = $(SIM_DISPATCH)
 
 else
@@ -1066,6 +1068,45 @@ define SIM_STRESS_RECIPE
 	@printf '\n[sim-stress] PASS\n'
 endef
 
+# --- scenario sim-injection recipe (issue #44 part 2) -----------------------
+# `sim-scenario`: for each seed in SEEDS, (a) generate an IQ scenario via
+# `gen_target_iq.py` and (b) inject it through `benchmark_pipeline_top` using
+# `test_pipeline_scenario`. Passes iff every ground-truth target is detected
+# within the documented bin tolerance and the false-alarm count stays under
+# the documented bound. Kept OUT of sim-medium (which is the Phase-3 gate)
+# because scenario injection is #44's own gate, not #17's; wired into the
+# same PIPE_CONFIG / build plumbing so nothing new is invented here.
+#
+# Runtime: single seed ~= 20 s (build) + < 10 s (run). Three seeds fits under
+# the ~5 min budget.
+SIM_SCENARIO_TEST     := test_pipeline_scenario
+SIM_SCENARIO_SCENARIO ?= three_targets_even
+
+define SIM_SCENARIO_RECIPE
+	@printf '[sim-scenario] issue #44 part 2: injection scenario '$(SIM_SCENARIO_SCENARIO)' seeds=%s\n' '$(SEEDS)'
+	@printf '[sim-scenario] config=%s\n' '$(PIPE_CONFIG)'
+	@printf '[sim-scenario] build %s (once)\n' '$(SIM_SCENARIO_TEST)'
+	$(BUILD_VERILATOR) --mode fast --config $(PIPE_CONFIG) --jobs $(JOBS) \
+	    --top $(PIPE_TOP) --files $(PIPE_FILES) --test $(SIM_SCENARIO_TEST)
+	@rc=0; for s in $(SEEDS); do \
+	    printf '\n[sim-scenario] ===== seed %s =====\n' "$$s"; \
+	    printf '[sim-scenario]   generate scenario\n'; \
+	    $(PYTHON) model/python/gen_target_iq.py \
+	        --scenario $(SIM_SCENARIO_SCENARIO) --seed $$s \
+	        --config config/$(PIPE_CONFIG).json \
+	        || { rc=1; continue; }; \
+	    printf '[sim-scenario]   inject into pipeline\n'; \
+	    ./$(PIPE_BIN_DIR)/V$(PIPE_TOP)_$(SIM_SCENARIO_TEST) \
+	        +seed=$$s +results=$(RESULTS_DIR) \
+	        +scenario=$(SIM_SCENARIO_SCENARIO) \
+	      || rc=1; \
+	  done; \
+	  if [ $$rc -ne 0 ]; then \
+	    printf '\n[sim-scenario] FAILED (seeds: %s)\n' '$(SEEDS)' 1>&2; exit 1; \
+	  fi; \
+	  printf '\n[sim-scenario] PASS: all seeds\n'
+endef
+
 # Coverage: a separate build with --coverage instrumentation, feeding all the
 # pipeline tests once each so their coverage merges into results/simulation/
 # coverage/coverage.dat via verilator_coverage.
@@ -1232,6 +1273,7 @@ help:
 	@printf '%-18s %-9s %s\n' 'sim-coverage'     'wsl'     'issue #17 coverage build; results/simulation/coverage/'
 	@printf '%-18s %-9s %s\n' 'sim-full-smoke'   'wsl'     'TODO(issue #20) full-scale smoke test'
 	@printf '%-18s %-9s %s\n' 'scenario'         'wsl'     'issue #44 (part 1): render range-Doppler map for SCENARIO=<name>'
+	@printf '%-18s %-9s %s\n' 'sim-scenario'     'wsl'     'issue #44 (part 2): inject scenario through pipeline, CFAR vs ground truth (SEEDS=$(SEEDS))'
 	@printf '\n'
 	@printf '%-18s %-9s %s\n' 'quartus-map'      'windows' 'Analysis and Synthesis (quartus_syn)'
 	@printf '%-18s %-9s %s\n' 'quartus-fit'      'windows' 'Analysis and Synthesis + Fitter'
@@ -1353,6 +1395,9 @@ sim-stress:
 
 sim-coverage:
 	$(SIM_COVERAGE_RECIPE)
+
+sim-scenario:
+	$(SIM_SCENARIO_RECIPE)
 
 sim-full-smoke:
 	$(SIM_STUB_20)
@@ -1664,6 +1709,7 @@ reproduce-final:
 .PHONY: help env-check \
         lint numerics-check regmap-check fft-check cdc-inventory \
         sim-tiny sim-medium sim-random sim-stress sim-coverage sim-full-smoke \
+        sim-scenario \
         scenario \
         coeff-check calibrate-fir calibrate-pfb8 calibrate-beamformer \
         calibrate-history calibrate-align \
