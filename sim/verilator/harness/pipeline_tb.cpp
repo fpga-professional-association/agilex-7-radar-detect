@@ -38,11 +38,14 @@ StimFrame impulse_frame() {
 
 StimFrame random_tone(std::mt19937_64& rng) {
   StimFrame f;
-  // One tone per antenna, at a slightly different bin per antenna so the
-  // FFT output has multiple non-zero bins.
+  // One tone per antenna at a random even bin (even so it maps into the
+  // (beam 0, bin 0)-per-beat CFAR tap; odd bins live on the untapped lane
+  // in the alignment output). Bins spread across the middle of the FFT
+  // range so guard/reference cells fit without truncation at either edge.
   for (unsigned a = 0; a < kNAnt; ++a) {
-    const unsigned bin = static_cast<unsigned>(
+    unsigned bin = static_cast<unsigned>(
         harness::uniform_u64(rng, 8, kFftSize / 2 - 8));
+    bin &= ~1u;   // even bins only
     const double omega = 2.0 * 3.14159265358979323846 * bin /
                          static_cast<double>(kFftSize);
     const double amp   = 6000.0;
@@ -170,7 +173,10 @@ bool Session::reset() {
   reset_->assert_all();
   if (reset_->release_all(time_limit_) != StopReason::kRunning) return false;
   enable_pipeline();
-  configure_history(kFftSize / 8);   // safe default depth (< HISTORY_FRAMES)
+  // History depth: 4 frames of retention, well under HISTORY_FRAMES=16.
+  // Enough for alignment's frame_off=0 lookback (reads newest complete
+  // frame) while keeping the initial fill short.
+  configure_history(4);
   configure_align(0);
   configure_cfar(1, 1, 4, 4, 0x2000); // conservative default settings
   return advance_cycles(64);
@@ -246,6 +252,7 @@ void Session::set_backpressure(BpProfile p) {
 }
 
 void Session::set_input_gap(double p) { input_gap_ = p; }
+void Session::set_global_input_gap(double p) { global_gap_ = p; }
 
 void Session::core_drive() {
   // Drive input beats to each antenna. Each antenna gets its own front-of-
@@ -260,6 +267,21 @@ void Session::core_drive() {
   // be consistent; here we simply track antenna 0's seq. The block's own
   // seq path is tied to the per-antenna input handshake, not to this bit.
   std::uint16_t seq_bits = 0;
+
+  // Global gap: one Bernoulli draw for the whole beat set. All antennas idle
+  // together on a gap cycle, preserving per-antenna phasing. This is the
+  // right stimulus for SPEC 13.2 "delay invariance".
+  const bool global_stall =
+      (global_gap_ > 0.0) && harness::bernoulli(gap_rng_, global_gap_);
+  if (global_stall) {
+    top_->s_valid = 0;
+    top_->s_sof   = 0;
+    top_->s_eof   = 0;
+    top_->s_seq   = 0;
+    top_->m_ready = m_ready_next() ? 1 : 0;
+    return;
+  }
+
   for (unsigned a = 0; a < kNAnt; ++a) {
     if (in_q_[a].empty()) continue;
     if (input_gap_ > 0.0 && harness::bernoulli(gap_rng_, input_gap_)) continue;
@@ -308,7 +330,29 @@ void Session::core_sample() {
   // Observe CFAR output.
   if (top_->m_valid && top_->m_ready) {
     ++beats_observed_;
-    if (top_->m_eof) ++frames_observed_;
+    if (top_->m_eof) {
+      ++frames_observed_;
+      // End-to-end seq monotonicity on the m_eof beat. m_seq is the SPEC 5
+      // sequence field carried through PFB -> FFT -> history -> align ->
+      // beamformer (BEAM_MUX=1, unchanged) -> power -> CFAR; a non-monotone
+      // step here means a block downstream reordered or dropped a frame.
+      const std::uint16_t s = static_cast<std::uint16_t>(top_->m_seq);
+      if (m_seq_seen_) {
+        // Treat 16-bit wrap correctly: a step is a violation only if the
+        // signed difference (s - last) mod 2^16 as an int16_t is negative.
+        const std::int16_t diff =
+            static_cast<std::int16_t>(static_cast<std::uint16_t>(s - m_seq_last_));
+        if (diff < 0) {
+          ++m_seq_violations_;
+          errors_.error("m_seq",
+                        std::string("m_seq non-monotone at m_eof: last=") +
+                            std::to_string(m_seq_last_) + " now=" +
+                            std::to_string(s));
+        }
+      }
+      m_seq_seen_ = true;
+      m_seq_last_ = s;
+    }
     ++detections_;
   }
 }
@@ -381,6 +425,64 @@ void Session::program_bf_weight(std::uint8_t bank, std::uint8_t addr,
 
 void Session::request_pipeline_swap() {
   pulse_core(&top_->cfg_pipe_swap_req);
+}
+
+bool Session::program_and_swap_to_active_banks() {
+  // PFB coefficient bank 1: PHASES=2, TAPS=8 -> 16 addresses, addressed in
+  // phase-major order (address = phase*TAPS + tap). Program tap 0 of each
+  // phase with a large-but-safe real coefficient and every other tap with
+  // zero. That makes the polyphase filter a phase-preserving identity in
+  // the passband, so a tone at the FFT input comes through at its own
+  // input amplitude (no filter gain change) and the tone bin remains
+  // dominant after the FFT. 0x00007FFF is Q1.15 (re=1-2^-15, im=0), the
+  // largest legal positive coefficient.
+  const std::uint32_t pfb_active = 0x00007FFFu;
+  const std::uint32_t pfb_zero   = 0x00000000u;
+  for (unsigned addr = 0; addr < 16; ++addr) {
+    // Address mapping: phase * TAPS + tap, TAPS=8. Tap 0 for each phase.
+    const unsigned tap = addr & 0x7u;
+    program_pfb_coeff(/*bank=*/1, static_cast<std::uint16_t>(addr),
+                      tap == 0 ? pfb_active : pfb_zero);
+  }
+  // Beamformer weights bank 1: N_BEAMS=4, N_ANT=4 -> 16 addresses. Uniform
+  // weights so the antenna-permutation invariant is a symmetric sum.
+  // A smaller weight (0x00001000 = 4096/32768 = 0.125) so the beam sum
+  // 4 * 0.125 * antenna_amp does not saturate; the resulting power stays
+  // in a comfortable range for the CFAR threshold check.
+  const std::uint32_t bf_val = 0x00001000u;
+  for (unsigned addr = 0; addr < 16; ++addr) {
+    program_bf_weight(/*bank=*/1, static_cast<std::uint8_t>(addr), bf_val);
+  }
+  request_pipeline_swap();
+  // Drive one warm-up frame so the swap fires at the next end-of-frame.
+  const std::uint64_t swap_before = pipeline_swap_count();
+  set_expect_detections(true);   // wait for the warm-up frame's CFAR output
+  queue_frame(zero_frame());
+  const bool ok = run_until_idle(40000ULL);
+  const bool swap_fired = pipeline_swap_count() > swap_before;
+
+  // Extra drain cycles so any residual pipeline state (align FIFO, elastic
+  // buffer, CFAR output eof) reaches quiescence before the caller starts.
+  advance_cycles(2000);
+
+  // Clear CFAR sticky counters so cfar_det_count() reflects only what the
+  // caller drives after this returns.
+  top_->cfg_cfar_status_clear = 1;
+  advance_cycles(2);
+  top_->cfg_cfar_status_clear = 0;
+  advance_cycles(2);
+
+  // Reset host-side accounting so the caller's frames start from zero.
+  frames_queued_ = 0;
+  frames_observed_ = 0;
+  beats_driven_ = 0;
+  beats_observed_ = 0;
+  detections_ = 0;
+  m_seq_seen_ = false;
+  m_seq_last_ = 0;
+  m_seq_violations_ = 0;
+  next_seq_ = 0;
+  return ok && swap_fired;
 }
 
 std::uint64_t Session::pipeline_swap_count() const {

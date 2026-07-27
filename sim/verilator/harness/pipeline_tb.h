@@ -106,7 +106,16 @@ class Session {
 
   // ---- knobs --------------------------------------------------------------
   void set_backpressure(BpProfile p);
-  void set_input_gap(double p);   // Bernoulli gap probability per beat.
+  // Bernoulli gap probability per beat. Applies independently PER ANTENNA:
+  // one draw per antenna per cycle so a "gap" is a per-antenna stall, not a
+  // global stall. Useful for backpressure / stall stimulus, less useful for
+  // "delay invariance" -- see set_global_input_gap.
+  void set_input_gap(double p);
+  // Bernoulli gap probability SHARED across antennas: on a gap cycle NO
+  // antenna presents a beat. This preserves per-antenna phasing (all
+  // antennas see the same delay pattern) and is the right stimulus for
+  // the SPEC 13.2 "delay invariance" metamorphic property.
+  void set_global_input_gap(double p);
   void set_expect_detections(bool on) { expect_detections_ = on; }
 
   // ---- pipeline configuration --------------------------------------------
@@ -126,6 +135,14 @@ class Session {
   // Request the pipeline controller to swap both banks at the next frame
   // boundary. A single 1-cycle pulse on cfg_pipe_swap_req.
   void request_pipeline_swap();
+
+  // Program bank 1 of both the PFB coefficients and the beamformer weights
+  // with a fixed pass-through pattern that yields non-zero CFAR power,
+  // request one pipeline swap, and drive one warm-up frame so the swap
+  // fires and the bank-1 coefficients become active. Callers that want
+  // meaningful (non-zero) CFAR detections in subsequent frames use this.
+  // Returns true if the swap fired (swap_count >= 1 afterwards).
+  bool program_and_swap_to_active_banks();
 
   // ---- running ------------------------------------------------------------
   // Advance until every queued beat has been driven, every detection frame
@@ -149,6 +166,14 @@ class Session {
   std::uint64_t cfar_det_count() const;
   std::uint64_t pipeline_swap_count() const;
   std::uint64_t pipeline_swap_overrun_count() const;
+
+  // Number of end-of-frame m_seq monotonicity violations observed on the
+  // detection output stream. Non-decreasing across the run is the SPEC 5
+  // invariant end-to-end through the pipeline; a nonzero value here means
+  // the sequence ID propagation between blocks lost or reordered frames.
+  std::uint64_t m_seq_violations() const { return m_seq_violations_; }
+  std::uint64_t m_seq_last() const       { return m_seq_last_; }
+  bool          m_seq_seen() const       { return m_seq_seen_; }
 
   // Cause reset again mid-run.
   void assert_reset();
@@ -182,7 +207,8 @@ class Session {
 
   // Backpressure and gap knobs
   BpProfile bp_profile_ = BpProfile::kNone;
-  double input_gap_ = 0.0;
+  double input_gap_ = 0.0;         // per-antenna independent
+  double global_gap_ = 0.0;        // shared across antennas
   bool expect_detections_ = false;
 
   // Detection output counters
@@ -191,6 +217,14 @@ class Session {
   std::uint64_t frames_queued_ = 0;
   std::uint64_t frames_observed_ = 0;
   std::uint64_t detections_ = 0;
+
+  // End-of-frame m_seq monotonicity monitor. m_seq_last_ records the last
+  // seq value observed at an m_eof handshake; m_seq_violations_ counts any
+  // (m_eof)-to-(next m_eof) transition that decreased the seq. Because the
+  // SEQ_W = 16 field wraps, the check uses signed difference modulo 2^16.
+  bool          m_seq_seen_       = false;
+  std::uint16_t m_seq_last_       = 0;
+  std::uint64_t m_seq_violations_ = 0;
 
   // Callback wiring
   void core_sample();

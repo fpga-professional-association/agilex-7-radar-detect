@@ -1,10 +1,23 @@
 // -----------------------------------------------------------------------------
 // test_pipeline_continuous - continuous-frame integration test for the
-// medium-config pipeline (issue #17, SPEC 13, SPEC 19 Phase 3).
+// medium-config pipeline (issue #17, SPEC 13.1, SPEC 19 Phase 3).
 //
-// STUB IMPLEMENTATION -- returns success once the RTL elaborates and one
-// frame worth of stimulus has been driven end-to-end without an assertion
-// firing. Extended in the sequence check and runtime-update tests.
+// Drives a sustained run of frames (default 64, override with +n_frames=<N>)
+// through the whole pipeline and checks END-TO-END SEQUENCE IDENTITY on the
+// CFAR detection output:
+//
+//   * m_seq observed at m_eof handshakes must be non-decreasing (SPEC 5
+//     seq propagation through PFB -> FFT -> history -> alignment ->
+//     beamformer -> power -> CFAR). The Session's core_sample() monitor
+//     counts violations; a nonzero count fails the run.
+//   * frames_observed at drain must exactly equal frames_driven; a strict
+//     equality, not a "at least this many". This catches frame loss inside
+//     the pipeline that a >= check would silently accept.
+//
+// The per-block stream_protocol_checker instances (bound inside every block
+// by their `ifndef SYNTHESIS` blocks) provide the per-hop seq continuity
+// under the SPEC 5 stability rule; this test cross-checks the whole chain
+// on the output side.
 // -----------------------------------------------------------------------------
 
 #include <cstdio>
@@ -45,9 +58,11 @@ int sim_test_main(const SimArgs& args) {
     return 1;
   }
 
-  // Drive a modest number of continuous frames end-to-end.
+  // A sustained run per SPEC 13.1. Default 64 frames = 8192 input beats * 4
+  // antennas + backpressure drain time, which still fits well under the
+  // 5-minute sim-medium wall-clock budget.
   const std::uint64_t n_frames = args.plusarg("n_frames").empty()
-      ? 8ULL
+      ? 64ULL
       : std::stoull(args.plusarg("n_frames"));
 
   sess.set_backpressure(pipeline_tb::BpProfile::kNone);
@@ -58,7 +73,30 @@ int sim_test_main(const SimArgs& args) {
     sess.queue_frame(pipeline_tb::random_tone(sess.rng()));
   }
 
-  const bool ok = sess.run_until_idle(n_frames * 20000ULL);
+  const bool drained = sess.run_until_idle(n_frames * 20000ULL);
+
+  // Sequence-ID accounting on the output side. Exact accounting: not >=.
+  const std::uint64_t frames_driven   = sess.frames_driven();
+  const std::uint64_t frames_observed = sess.frames_observed();
+  const std::uint64_t seq_violations  = sess.m_seq_violations();
+
+  bool pass = drained && sess.errors().count() == 0;
+
+  if (frames_driven != frames_observed) {
+    std::fprintf(stderr,
+                 "[test_pipeline_continuous] FRAME ACCOUNTING MISMATCH: "
+                 "driven=%llu observed=%llu (exact equality required)\n",
+                 static_cast<unsigned long long>(frames_driven),
+                 static_cast<unsigned long long>(frames_observed));
+    pass = false;
+  }
+  if (seq_violations != 0) {
+    std::fprintf(stderr,
+                 "[test_pipeline_continuous] m_seq monotonicity VIOLATIONS=%llu "
+                 "(end-to-end seq propagation broken)\n",
+                 static_cast<unsigned long long>(seq_violations));
+    pass = false;
+  }
 
   RunSummary summary;
   summary.test_name = "test_pipeline_continuous";
@@ -70,21 +108,22 @@ int sim_test_main(const SimArgs& args) {
   summary.frames_observed = sess.frames_observed();
   summary.beats_driven = sess.beats_driven();
   summary.beats_observed = sess.beats_observed();
-  summary.passed = ok && sess.errors().count() == 0;
-  summary.stop_reason = summary.passed ? "pass" : "fail";
+  summary.passed = pass;
+  summary.stop_reason = pass ? "pass" : "fail";
   summary.absorb(sess.errors());
   const std::string path = summary.write(args.results_dir);
   if (!path.empty()) {
     std::printf("[test_pipeline_continuous] summary: %s\n", path.c_str());
   }
 
-  std::printf("RESULT: %s (seed=%llu, %llu frames driven, %llu observed)\n",
-              summary.passed ? "PASS" : "FAIL",
+  std::printf("RESULT: %s (seed=%llu, %llu frames driven, %llu observed, seq_viol=%llu)\n",
+              pass ? "PASS" : "FAIL",
               static_cast<unsigned long long>(args.seed),
               static_cast<unsigned long long>(n_frames),
-              static_cast<unsigned long long>(summary.frames_observed));
+              static_cast<unsigned long long>(summary.frames_observed),
+              static_cast<unsigned long long>(seq_violations));
 
-  return summary.passed ? 0 : 1;
+  return pass ? 0 : 1;
 }
 
 }  // namespace harness

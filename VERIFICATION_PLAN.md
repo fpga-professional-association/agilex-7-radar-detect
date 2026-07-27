@@ -1434,3 +1434,24 @@ comes from `sim-tiny` — the same block-level tests at `--config tiny`,
 which is where each block is unit-verified anyway. See DECISIONS.md
 2026-07-27 for why the pipeline top and the larger block tops do not run
 under `--coverage`.
+
+### Integration scope narrowings (Phase-3 only)
+
+The Phase-3 pipeline top consumes only the first sample of each beamformer
+beat — (beam 0, bin 0) — feeds it into ONE `power_calc`, and does NOT
+instantiate a covariance engine. That is a deliberate narrowing whose
+justification is DECISIONS.md 2026-07-27 Decision 7. What is cut:
+
+* per-(beam, bin) power fan-out (BIN_PAR × BEAM_PAR = 2 × 4 = 8 samples
+  per beat; only sample 0 is tapped);
+* covariance integration (the `covar_top` block, verified independently
+  in #13, is not present in the integrated pipeline).
+
+The streaming behaviour (backpressure, sof/eof/seq propagation,
+frame-boundary bank swaps) is fully exercised on the tapped path, and the
+arithmetic and control of the missing blocks are unit-verified in #13
+and #14. The full-scale AGMF039 elaboration in Phase 5 (issue #20) is
+required to resolve this narrowing: it must fan the beamformer beat out
+per (beam, bin), instantiate one `covar_top` per pair, and feed a
+per-(beam, bin) CFAR grid. The Phase-3 metamorphic and stress runs
+accept this narrowing as scope; the Phase-5 acceptance gate will not.

@@ -4281,3 +4281,49 @@ its header comments at lines ~29 and ~42 spelled the WSL path
 carried the same typo. Fixed both. Verified `make sim-tiny` still works from the
 Windows-side dispatch after the fix.
 
+**Decision 7 — Stage-7 power fan-out narrowing (integration).** The Phase-3
+pipeline top consumes only the first sample of each beamformer beat --
+(beam 0, bin 0) -- feeds it to one `power_calc`, and does NOT instantiate a
+covariance engine. What is cut:
+
+* per-(beam, bin) power fan-out: the beamformer beat carries
+  BIN_PAR * BEAM_PAR = 2 * 4 = 8 complex samples; only sample 0 is tapped;
+* covariance integration: the `covar_top` block (verified in #13) is not
+  present in this integrated pipeline.
+
+Why: the Phase-3 gate is about STREAMING behaviour (backpressure propagation,
+sof/eof/seq propagation, frame-boundary bank swaps at the pipeline level) and
+about running the pipeline at millions of cycles under randomized stimulus.
+The arithmetic and control of `power_calc` / `covar_top` / `cfar_core` were
+each unit-verified against a bit-accurate model in issues #13 and #14; a
+per-(beam, bin) fan-out inside the pipeline adds BIN_PAR * BEAM_PAR - 1 more
+copies of the same power_calc and a covariance integrator, all of which would
+be exercised on the same (streaming, backpressure) properties the tapped path
+already exercises. That is a lot of state to add to a Verilator model whose
+`Syms.h` symbol table is already at the edge of the `--coverage` bug the same
+day's Decision 4 documents. The tapped path exercises exactly one instance of
+each stream seam.
+
+Follow-up plan: the full-scale AGMF039 elaboration in Phase 5 (issue #20)
+MUST resolve this. Specifically, issue #20 requires that
+`benchmark_pipeline_top` (or its full-scale equivalent) fans the beamformer
+beat out per (beam, bin), instantiates one `covar_top` per pair, and feeds a
+per-(beam, bin) CFAR grid -- the geometry the SPEC §11 full configuration
+calls for. The `VERIFICATION_PLAN.md` Phase-3 section lists this narrowing as
+an integration deviation that is accepted for Phase 3 only.
+
+*Alternative rejected:* fanning power_calc out per (beam, bin) inside this
+issue. It grows the Verilator model by BIN_PAR * BEAM_PAR = 8 copies of an
+already-large stage plus one covar_top per pair, which is exactly the class
+of top that triggers the `--coverage` segfault documented in Decision 4.
+
+**Decision 8 — CFAR MAX_REF matches config/medium.json.** The `cfar_core`
+instance in `benchmark_sim_top.sv` is parameterised as `.MAX_REF(16)`,
+matching `config/medium.json`'s `CFAR_MAX_REF: 16` (SPEC §11 medium). The
+initial revision of this PR used `.MAX_REF(8)`, which was flagged by the
+review as a silent contract deviation. `MAX_REF = 16` costs an extra
+6-cell sliding-window sum on each side of the cell under test (`cfar_window`
+already elaborates to `MAX_GUARD + MAX_REF` per-side registers, at
+`MAX_REF = 16` it is `21 + 8 = 29` per side). Sim-medium wall time is
+unchanged within noise.
+

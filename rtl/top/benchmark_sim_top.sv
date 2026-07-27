@@ -35,12 +35,12 @@
 //         |                                 |  read port  (history_clk)
 //         v                                 v
 //                                  +----------------+
-//                                  |  align_net     |    BIN_PAR = 1: single
-//                                  |  (bin align)   |    read port and single
-//                                  +----------------+    lane, so the network
-//                                          |             reduces to a wire but
-//                                          | 1 stream    the sequence-ID check
-//                                          |             is fully exercised.
+//                                  |  align_net     |    BIN_PAR = 2: two
+//                                  |  (bin align)   |    read ports fed by
+//                                  +----------------+    two replicated
+//                                          |             history_core banks;
+//                                          | 1 stream    the crossbar routes
+//                                          |             both lanes.
 //                                          v
 //                                  +----------------+    core_clk / history_clk
 //                                  | history_clk -> |    crossing back (SPEC 8)
@@ -95,12 +95,14 @@
 //                          FFT_SIZE = 256, PFB_TAPS = 8, N_BEAMS = 4,
 //                          HISTORY_FRAMES = 16)
 // -----------------------------------------------------------------------------
-// BIN_PAR is fixed to 1: it removes the alignment network's crossbar / omega
-// choice at integration and keeps history_core's read port count at one. The
-// per-block sweeps in #16 (BIN_PAR = 2, 4) still exercise the network; the
-// pipeline exercises the block-to-block wiring and the frame-boundary rule,
-// which are BIN_PAR-independent. See DECISIONS.md 2026-07-27
-// "Pipeline BIN_PAR = 1".
+// BIN_PAR = 2 is the alignment network's minimum legal geometry
+// (align_pkg::algn_geom_ok requires BIN_PAR >= 2 and a power of two).
+// history_core exposes exactly one read port, so the pipeline replicates
+// history_core BIN_PAR times: both instances see the same write stream (their
+// s_ready ANDed per antenna) and each serves one of the align_net's two read
+// ports. This is a legitimate multi-port memory architecture and it exercises
+// the crossbar routing across BIN_PAR = 2 lanes in the integrated build. See
+// DECISIONS.md 2026-07-27 "Pipeline BIN_PAR = 2, replicated history_core".
 //
 // Lint contract: clean under `verilator --lint-only --Wall` with no waiver.
 // -----------------------------------------------------------------------------
@@ -679,7 +681,9 @@ module benchmark_pipeline_top
   assign stat_history_error_count  = hist_stat_error_count_dummy[0 +: 32];
 
   // ===========================================================================
-  // Stage 4: align_net -- one read port drives the network with BIN_PAR = 1
+  // Stage 4: align_net -- BIN_PAR = 2 read ports fed by BIN_PAR replicated
+  // history_core instances; the network reassembles the (antenna, bin) plane
+  // into aligned beats for the beamformer.
   // ===========================================================================
   wire                            align_m_valid;
   wire                            align_m_ready;
@@ -711,7 +715,7 @@ module benchmark_pipeline_top
       .SAMPLE_W   (SAMPLE_W),
       .BIN_PAR    (BIN_PAR),
       .GROUPS     (GROUPS),
-      .NET_SEL    (0),                  // crossbar (single lane is a wire)
+      .NET_SEL    (0),                  // crossbar variant (BIN_PAR = 2 lanes)
       .MUX_STAGES (2),
       .RD_ID_W    (STREAM_ID_W),
       .RD_SEQ_W   (SEQ_W),
@@ -899,13 +903,20 @@ module benchmark_pipeline_top
   assign bf_pipeline_busy    = bf_cfg_swap_busy;
 
   // ===========================================================================
-  // Stage 7: power_calc per beat -- one beat carries BIN_PAR * BEAM_PAR
-  //          complex beam samples. To keep the CFAR side simple, we compute a
-  //          single power stream from the first beam and first bin of each
-  //          beat. A real design fans out per (beam, bin); this pipeline is a
-  //          verification vehicle for the STREAMING behaviour so we exercise
-  //          the first (beam, bin) path and leave the fan-out as a follow-up.
-  //          The power_calc kernel itself has been unit-verified in #13.
+  // Stage 7: power_calc per beat -- SCOPE NARROWING
+  //          The beamformer beat carries BIN_PAR * BEAM_PAR complex samples
+  //          (2 * 4 = 8 for the medium pipeline). The full-scale design would
+  //          fan out per (beam, bin) and feed a covariance-integration stage
+  //          in parallel. This integration instead taps ONE sample per beat
+  //          -- (beam 0, bin 0) -- feeds one power_calc, and skips the
+  //          covariance engine entirely. That is the largest integration
+  //          narrowing in this PR; the STREAMING behaviour (backpressure,
+  //          sof/eof/seq propagation, frame-boundary swaps) is fully
+  //          exercised, and the arithmetic of power_calc / covariance is
+  //          unit-verified in #13. The follow-up plan is to fan out per
+  //          (beam, bin) and re-instantiate covariance in the full-scale
+  //          elaboration under issue #20. See DECISIONS.md 2026-07-27
+  //          "Decision 7 -- Stage-7 power fan-out narrowing (integration)".
   // ===========================================================================
   stream_fields_t bf_out_fields;
   assign bf_out_fields = stream_unpack(BF_M_GEOM, stream_payload_t'(bf_m_payload));
@@ -973,15 +984,28 @@ module benchmark_pipeline_top
       cfar_s_fields));
 
   // Elastic buffer between power_calc (fixed latency, always accepts) and
-  // CFAR (SPEC 5 ready). The buffer's occupancy is small: power_calc emits at
-  // most one beat per input beat, and CFAR runs at the same clock, so a
-  // depth of 8 is ample. Its ready feeds bf_m_ready through the credit gate.
-  wire [$clog2(9)-1:0] elastic_occ_dummy;
-  wire                 pc_eb_s_ready_dummy;
+  // CFAR (SPEC 5 ready). power_calc is a fixed-latency stage with NO s_ready:
+  // once bf_m_ready lets a beat into power_calc, the beat WILL arrive at the
+  // elastic buffer PIPE_STAGES cycles later regardless of downstream ready.
+  // So bf_m_ready is the ONE handshake that must protect the buffer against
+  // overflow -- there is no back door.
+  //
+  // Margin: with PIPE_STAGES=2 and DEPTH=8 the worst case is
+  //   occupancy N with 2 beats in-flight, we accept one more (3 in-flight).
+  // If we stop upstream at (occupancy < DEPTH - 3), i.e. occupancy <= 4,
+  // that leaves 3 free slots for the 2 in-flight beats plus 1 for the beat
+  // just admitted this cycle (before the CFAR side has drained anything).
+  // Even under sustained CFAR stall, the buffer only reaches occupancy 5+3=8
+  // = DEPTH before bf_m_ready deasserts and no further beats enter.
+  localparam int unsigned POWER_EB_DEPTH  = 8;
+  localparam int unsigned POWER_EB_MARGIN = 3;   // 2 pipe stages + 1 in-flight
+
+  wire [$clog2(POWER_EB_DEPTH+1)-1:0] elastic_occ;
+  wire                                pc_eb_s_ready;
 
   stream_elastic_buffer #(
       .PAYLOAD_W   (CFAR_S_PAYLOAD_W),
-      .DEPTH       (8),
+      .DEPTH       (POWER_EB_DEPTH),
       .DATA_W      (CFAR_POWER_W),
       .STREAM_ID_W (STREAM_ID_W),
       .SEQ_W       (SEQ_W),
@@ -990,21 +1014,33 @@ module benchmark_pipeline_top
       .clk       (core_clk),
       .rst_n     (core_rst_n),
       .s_valid   (pc_valid_out),
-      .s_ready   (pc_eb_s_ready_dummy),  // power_calc has no ready
+      .s_ready   (pc_eb_s_ready),
       .s_payload (cfar_s_payload_pre),
       .m_valid   (cfar_s_valid),
       .m_ready   (cfar_s_ready),
       .m_payload (cfar_s_payload),
-      .occupancy (elastic_occ_dummy)
+      .occupancy (elastic_occ)
   );
 
-  // Credit-style bf_m_ready: assert as long as the power path can accept.
-  // Because power_calc is fixed-latency it always accepts; the elastic buffer
-  // holds up to DEPTH beats, so we assert bf_m_ready whenever the elastic
-  // buffer is not near full. To keep the wire simple we always assert it
-  // (the buffer will never overflow because SPC beats per cycle > 1 does not
-  // happen: pc_consume is a single-bit valid).
-  assign bf_m_ready = 1'b1;
+  // bf_m_ready: propagate CFAR backpressure back to the beamformer via the
+  // elastic buffer's occupancy. Deasserted early enough (DEPTH - MARGIN = 5)
+  // to cover the POWER_CALC PIPE_STAGES=2 beats already in flight plus the
+  // beat we might admit this cycle before the buffer sees them.
+  assign bf_m_ready = (elastic_occ < $clog2(POWER_EB_DEPTH+1)'(POWER_EB_DEPTH - POWER_EB_MARGIN));
+
+`ifndef SYNTHESIS
+  // A pc_valid_out beat MUST be accepted by the elastic buffer -- power_calc
+  // has no s_ready. If bf_m_ready ever admits a beat while the buffer cannot
+  // absorb the resulting pc_valid_out PIPE_STAGES cycles later, a valid
+  // beat is silently lost. Named failure rather than a silent regression.
+  always_ff @(posedge core_clk) begin
+    if (core_rst_n) begin
+      a_power_eb_no_drop : assert (!pc_valid_out || pc_eb_s_ready)
+        else $fatal(1, "benchmark_sim_top: power_calc beat dropped by elastic buffer (occupancy=%0d) -- bf_m_ready backpressure regressed",
+                    elastic_occ);
+    end
+  end
+`endif
 
   // ===========================================================================
   // Stage 8: CFAR detector
@@ -1033,7 +1069,7 @@ module benchmark_pipeline_top
 
   cfar_core #(
       .MAX_GUARD    (2),                     // config_pkg::CFAR_MAX_GUARD
-      .MAX_REF      (8),                     // covers medium sweep
+      .MAX_REF      (16),                    // config_pkg::CFAR_MAX_REF (medium)
       .OUT_DEPTH    (8),
       .STREAM_ID_W  (STREAM_ID_W),
       .SEQ_W        (SEQ_W),
