@@ -17,7 +17,7 @@ M-Series M039, R47B, HBM2e + 4x F-Tile).
 (`wsl -d Ubuntu-24.04`); all Quartus targets run on Windows using
 `C:\altera_pro\26.1\quartus\bin64\quartus_sh.exe`. The Makefile must dispatch each
 target to the correct side and work when invoked from either side. The repo lives at
-`D:\agielx-7-radar-test` = `/mnt/d/agielx-7-radar-test` in WSL.
+`D:\agilex-7-radar-test` = `/mnt/d/agilex-7-radar-test` in WSL.
 
 ## Process
 
