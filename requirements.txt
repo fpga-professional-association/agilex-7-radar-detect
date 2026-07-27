@@ -9,3 +9,9 @@
 # Vector generation, coefficient generation, and reference-model support
 # (model/python/, scripts/generate_coefficients.py).
 numpy>=1.26
+
+# Documentation figures only (scripts/gen_walkthrough_figs.py). Not needed to
+# build, simulate, or verify anything — the generated PNGs are committed inside
+# docs/design-walkthrough.html. Pillow arrives as a matplotlib dependency and is
+# used for the deterministic 8-bit palette quantisation of those PNGs.
+matplotlib>=3.8
