@@ -120,3 +120,4 @@ lint_off -rule UNUSEDSIGNAL -file "*rtl/top/benchmark_sim_top.sv" -match "*'cfar
 lint_off -rule UNUSEDSIGNAL -file "*rtl/top/benchmark_sim_top.sv" -match "*'bf_out_fields'*"
 lint_off -rule UNUSEDSIGNAL -file "*rtl/top/benchmark_sim_top.sv" -match "*'pfb_frame_v'*"
 lint_off -rule UNUSEDSIGNAL -file "*rtl/top/benchmark_sim_top.sv" -match "*'rf'*"
+lint_off -rule UNUSEDSIGNAL -file "*rtl/top/benchmark_sim_top.sv" -match "*'s_seq'*"

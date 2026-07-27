@@ -600,53 +600,56 @@ define LINT_RECIPE
 	    '$(CONFIG)' 'sim/verilator/lint_waivers.vlt'
 	$(REGMAP_CHECK_RECIPE)
 	$(FFT_TWIDDLE_CHECK_RECIPE)
-	@printf '[lint] 1/16 %s\n' 'benchmark_sim_top'
+	@printf '[lint] 1/17 %s\n' 'benchmark_sim_top'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) --test $(TEST)
-	@printf '[lint] 2/16 %s\n' '$(STREAM_TOP)'
+	@printf '[lint] 2/17 %s\n' '$(STREAM_TOP)'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
 	    --top $(STREAM_TOP) --files $(STREAM_FILES) --test $(STREAM_TEST)
-	@printf '[lint] 3/16 %s\n' '$(VIOL_TOP)'
+	@printf '[lint] 3/17 %s\n' '$(VIOL_TOP)'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
 	    --top $(VIOL_TOP) --files $(VIOL_FILES) --test $(VIOL_TEST)
-	@printf '[lint] 4/16 %s\n' '$(CONTROL_TOP)'
+	@printf '[lint] 4/17 %s\n' '$(CONTROL_TOP)'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
 	    --top $(CONTROL_TOP) --files $(CONTROL_FILES) --test $(CONTROL_TEST)
-	@printf '[lint] 5/16 %s\n' '$(CDC_TOP)'
+	@printf '[lint] 5/17 %s\n' '$(CDC_TOP)'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
 	    --top $(CDC_TOP) --files $(CDC_FILES) --test $(firstword $(CDC_TESTS))
-	@printf '[lint] 6/16 %s\n' '$(CDCV_TOP)'
+	@printf '[lint] 6/17 %s\n' '$(CDCV_TOP)'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
 	    --top $(CDCV_TOP) --files $(CDCV_FILES) --test $(CDCV_TEST)
-	@printf '[lint] 7/16 %s\n' '$(TELEM_TOP)'
+	@printf '[lint] 7/17 %s\n' '$(TELEM_TOP)'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
 	    --top $(TELEM_TOP) --files $(TELEM_FILES) --test $(firstword $(TELEM_TESTS))
-	@printf '[lint] 8/16 %s\n' '$(CMULT_TOP)'
+	@printf '[lint] 8/17 %s\n' '$(CMULT_TOP)'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
 	    --top $(CMULT_TOP) --files $(CMULT_FILES) --test $(CMULT_TEST)
-	@printf '[lint] 9/16 %s\n' '$(PFB_TOP)'
+	@printf '[lint] 9/17 %s\n' '$(PFB_TOP)'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
 	    --top $(PFB_TOP) --files $(PFB_FILES) --test $(PFB_TEST)
-	@printf '[lint] 10/16 %s\n' '$(FFT_TOP)'
+	@printf '[lint] 10/17 %s\n' '$(FFT_TOP)'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
 	    --top $(FFT_TOP) --files $(FFT_FILES) --test $(FFT_TEST)
-	@printf '[lint] 11/16 %s\n' '$(COVAR_TOP)'
+	@printf '[lint] 11/17 %s\n' '$(COVAR_TOP)'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
 	    --top $(COVAR_TOP) --files $(COVAR_FILES) --test $(COVAR_TEST)
-	@printf '[lint] 12/16 %s\n' '$(BF_TOP)'
+	@printf '[lint] 12/17 %s\n' '$(BF_TOP)'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
 	    --top $(BF_TOP) --files $(BF_FILES) --test $(BF_TEST)
-	@printf '[lint] 13/16 %s\n' '$(CFAR_TOP)'
+	@printf '[lint] 13/17 %s\n' '$(CFAR_TOP)'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
 	    --top $(CFAR_TOP) --files $(CFAR_FILES) --test $(CFAR_TEST)
-	@printf '[lint] 14/16 %s\n' '$(HISTORY_TOP)'
+	@printf '[lint] 14/17 %s\n' '$(HISTORY_TOP)'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
 	    --top $(HISTORY_TOP) --files $(HISTORY_FILES) --test $(HISTORY_TEST)
-	@printf '[lint] 15/16 %s\n' '$(ALIGN_TOP)'
+	@printf '[lint] 15/17 %s\n' '$(ALIGN_TOP)'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
 	    --top $(ALIGN_TOP) --files $(ALIGN_FILES) --test $(ALIGN_TEST)
-	@printf '[lint] 16/16 %s\n' '$(PACKET_TOP)'
+	@printf '[lint] 16/17 %s\n' '$(PACKET_TOP)'
 	$(BUILD_VERILATOR) --mode lint --config $(CONFIG) --jobs $(JOBS) \
 	    --top $(PACKET_TOP) --files $(PACKET_FILES) --test $(firstword $(PACKET_TESTS))
+	@printf '[lint] 17/17 %s (medium config)\n' '$(PIPE_TOP)'
+	$(BUILD_VERILATOR) --mode lint --config $(PIPE_CONFIG) --jobs $(JOBS) \
+	    --top $(PIPE_TOP) --files $(PIPE_FILES) --test test_pipeline_continuous
 endef
 
 # `sim-tiny`: SPEC 12.1 fast build of every simulation top, then every test
