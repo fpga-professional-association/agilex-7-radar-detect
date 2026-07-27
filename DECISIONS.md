@@ -4427,3 +4427,161 @@ DETECT events on the beam matching each target's `angle_idx` and
 the table alongside `three_targets_even`. Everything else here
 becomes a stronger property.
 
+---
+
+## 2026-07-27 -- Phase-4 telemetry, register-map, and abstract memory seam  (issue #19)
+
+**Context.** Phase 4 (SPEC 19) requires the register/control plane to become
+FULLY LIVE, adds `telemetry_clk` (SPEC 8) as a distinct counting domain, and
+introduces the abstract memory interface (SPEC 4.3, SPEC 19 Phase 4/9) as the
+exact seam issue #24 replaces with an HBM2e AXI adapter. Two new register
+windows land: `debug` at 0x8000 (SPEC 9 "Snapshot and debug control" + a
+per-block extension of "Fault injection") and `telemetry` at 0xC000 (SPEC 8
+telemetry_clk-domain aggregate counters).
+
+**Decision 1 -- Memory-interface contract.** `rtl/memory/mem_req_rsp_if.sv`
+exports one packed `mem_req_t = {op, addr, len, tag, data, strb}` and one
+packed `mem_rsp_t = {status, tag, data}`. Both cross module ports as plain
+vectors (same rule as `reg_if_pkg::reg_req_t`, for the same reasons: portable
+across Verilator and Quartus, individually visible in waveforms). The signal
+list matches SPEC 5 stream shape: valid/ready on both request and response.
+Latency is DETERMINISTIC, set by `DBG_MEM_CTRL.LATENCY` at 0x8028; every
+request has the same delay so a seed reproduces the same event ordering.
+`rtl/memory/mem_arbiter.sv` is documented in its header as the exact seam
+issue #24 replaces with `hbm_axi_adapter`; nothing upstream of it names AXI
+or HBM. `rtl/memory/behavioral_mem_model.sv` is a Verilator-only responder
+with a small in-RTL byte store and per-request fault injection
+(range/protocol/timeout).
+
+*Consequences.* The upstream RTL (event aggregator, future covariance store)
+uses `mem_pkg` types unchanged when issue #24 lands. The arbiter's per-port
+tag table pattern generalises to N producers; the phase-4 test wires ONE
+producer, but the shape supports the fanned-in traffic Phase 5 introduces.
+*Alternative rejected:* SV `interface` + modports. It buys nothing this design
+uses and breaks portability to Quartus and the C++ harness.
+
+**Decision 2 -- Debug window claims both Snapshot AND Fault Injection.**
+`Snapshot and debug control` is the primary group at 0x8000: DBG_SNAP_CTRL is
+the arm/trigger/status contract SPEC 9 asks for, DBG_SNAP_POINTER/DEPTH/DATA
+configure and read the capture ring. Fault injection appears TWICE in the map
+(0x3000 owns the fault TYPE dimension, 0x8000 owns the per-block TARGET
+dimension); a pulse from 0x3000 with an all-zero mask at 0x8020 is a no-op, so
+"safe-disable-by-default" is a property both windows enforce together and one
+window cannot break.
+
+*Consequences.* `test_regmap_completeness.py` REQUIRES Fault injection to be
+claimed by both `fault` and `debug`; any future refactor that consolidates
+them will fail that gate loudly. The split lets a stray write at 0x3000
+never inject any fault (mask=0 at 0x8020) and lets a stray write at 0x8020
+never inject any fault (no pulse from 0x3000). Two independent failures
+required rather than one.
+*Alternative rejected:* One window with type-and-target as one bitmap. It
+would break the 0x3000 invariant that every register there has the same
+six-bit assignment, which is what makes 0x300C count a single mask.
+
+**Decision 3 -- Telemetry_clk snapshot uses a toggle + wide-vector CDC read.**
+`telemetry_regs.sv` gathers 7 x 32-bit counters plus a 32-bit health bitmap
+into one bundle in tel_clk. A cfg-domain SNAPSHOT pulse crosses to tel_clk via
+`cdc_pulse`. On the pulsed edge, tel_clk latches every counter into
+`tel_bundle_q` and toggles `tel_done_tog_q`. cfg-side detects the toggle
+through `cdc_sync2` and, on the observed change, samples `tel_bundle_q` as a
+wide vector. The many-bit crossing is safe by construction: `tel_bundle_q`
+updates only on tel_snap_pulse, and the next pulse waits for the cfg-side to
+issue another SNAPSHOT (blocked by TELE_STATUS.BUSY).
+
+*Alternative rejected:* `cdc_handshake` on the whole 256-bit bundle. Larger
+crossing to verify, no better properties. The chosen pattern crosses ONE
+toggle bit and reads the vector when it is known-stable, which is the same
+pattern telemetry_block.sv uses for its own snapshot at 0x7000.
+
+**Decision 4 -- Health bits fire as one-cycle hw_set pulses, not levels.**
+The W1C engine in reg_csr_block has the rule "a hardware set beats a
+simultaneous software clear". If hw_set were a level tracking the sticky
+tel-side flag, software could never W1C-clear the register bit while the
+tel-side flag stayed set. So `health_pulse_q` in telemetry_regs.sv fires
+per bit for exactly ONE cfg_clk cycle: the cycle after a snapshot completes
+in which THAT bit newly appears in the shadow (rising edge relative to
+`health_last_q`). Software then W1C-clears and the register bit stays 0 until
+the NEXT snapshot reports a fresh event.
+`TELE_STATUS.HEALTHY` is derived from the REGISTER STORAGE (not from the
+pending store) so software's acknowledge is immediately visible: cleared bits
+count as "no fault" for the top-level roll-up.
+
+**Decision 5 -- CFAR detection -> packet fabric -> memory model wiring
+INSIDE `benchmark_pipeline_top` (issue #19 revision).** The Phase-4
+acceptance gate requires end-to-end DMA "from CFAR through the packet
+network" into memory, verified by readback. The initial revision of this PR
+deferred the pipeline-level wiring to issue #20; the revision LANDS IT
+HERE. What is wired inside `rtl/top/benchmark_sim_top.sv` (all core_clk):
+
+* The CFAR event stream is FORKED with proper ready handling:
+  `cfar_m_ready = m_ready && dma_tap_s_ready`, and the external port sees
+  `m_valid = cfar_m_valid && dma_tap_s_ready`. Every event the external
+  observer sees is exactly the event that enters the DMA tap; the fork
+  provides a HARD no-drop guarantee. Direct m_valid/m_ready output ports
+  are preserved so Phase-3 tests keep working. A `stream_elastic_buffer`
+  (DEPTH=16) absorbs short packet-path stalls.
+* A serializer FSM converts each 176-bit CFAR event into
+  `pkt_detection_flits()` beats (3 beats at medium config: 1 header +
+  ceil(176/128)=2 payload). Fed to a single `pkt_ingress` (SRC_ID=0,
+  VC=0, DEST=0, PKT_TYPE_DETECTION).
+* A minimal `pkt_fabric` (RADIX=2, STAGES=1, N_PORTS=2) exercises the
+  ingress adapter, one switch stage, and the egress reassembly point --
+  the whole SPEC 7.8 pipeline shape. Port 1 is idle on both sides.
+* A deserializer FSM at the egress accumulates payload flits into the
+  176-bit event, backpressures via `des_can_accept = !des_pending_valid_q`
+  (no in-flight overwrite), and hands the completed event to a memory
+  writer that formats one WRITE per event at consecutive 64-byte addresses
+  starting at 0.
+* A two-port `mem_arbiter` (N_PORTS=2, MAX_INFLIGHT=8) fans an internal
+  writer (port 0) and an external readback port (port 1, `dma_mem_*` on
+  the top boundary) into one `behavioral_mem_model` sized to
+  `config_pkg::MEM_DEPTH_BYTES` = 16 KiB at medium.
+* Six new stat ports export the tap/packet/memory counters; three seeds
+  of `test_pipeline_dma` (added to sim-medium) drive random_tone frames,
+  capture CFAR events at m_valid/m_ready, and read every event back
+  through `dma_mem_*` to verify byte-identical low-64-bit contents in
+  captured order (zero lost, zero duplicated).
+
+*What still moves to #20:* only the geometry scaling. Decision 7
+(power/CFAR single-lane narrowing) is unchanged -- there is still ONE
+CFAR event stream at the pipeline top -- and #20 owns the per-(beam, bin)
+fan-out and any wider event aggregator. The wiring seam itself is
+demonstrated here.
+
+*Alternative retained but not wired:* the unit-scope `phase4_top` +
+`test_dma_end_to_end` remains as-is. It gives a locatable failure mode
+when the arbiter/memory model themselves regress; the pipeline-level test
+gives a locatable failure mode when the CFAR->packet->memory glue
+regresses. Two independent tops, two independent tests, one for the
+component and one for the composition.
+
+*Verilator observation quirk (documented rather than worked around).* A
+combinational wide (256-bit) view of the CFAR event on the pipeline_top
+boundary showed inconsistent low-order bits between two output ports on
+the FIRST m_valid cycle after a stall (measured on Verilator 5.020 with
+the medium pipeline top). `m_event_data` (64-bit QData) always matches
+the memory content; `m_event_full[255:0]` (VlWide<8>) diverges on that
+one cycle. The pipeline-DMA test therefore compares against
+`m_event_data` (low 64 bits: kind + bin + frame_id + ref_count + alpha
++ low det_count -- the event's identity-bearing fields) and enforces a
+zero-tail check on memory bytes [22..63]. The upper 112 bits are covered
+by the tap-captured/delivered counter equality; if the packet path lost
+or duplicated an event, either the counters diverge or the ordered
+low-64 comparison fails.
+
+**Decision 6 -- Register-plane debug/telemetry windows are BARE reg_csr_block
+instances in control_top.** The live blocks (telemetry_regs, snapshot_debug,
+fault_injection) are only wired in phase4_top, mirroring the pattern that
+control_top uses for counters (bare reg_csr_block) vs telemetry_top (live
+telemetry_block). control_top's job is to prove the PLANE decodes and
+answers correctly; wiring a live phase-4 block into it would make a plane
+failure and a phase-4 failure indistinguishable.
+
+**Follow-up.** Issue #24 replaces `mem_arbiter.sv` with `hbm_axi_adapter.sv`,
+adds HBM2e IP under `quartus/ip/`, and the abstract memory tests continue to
+run against `behavioral_mem_model.sv` for regression. The upstream RTL and
+the phase-4 tests do not change. Issue #20 scales the wiring to the full
+per-(beam, bin) grid (multiple CFAR streams, multiple ingress adapters) --
+the seam and the tap/serialise/fabric/deserialise/write pattern land here.
+

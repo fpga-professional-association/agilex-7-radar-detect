@@ -22,7 +22,7 @@ Each gate must pass from a clean checkout before the next phase begins.
 | 1 Common infrastructure | unit tests, random stalls, CDC tests, assertions pass | numerics (#4), stream primitives + protocol assertions (#5) and the register/control plane (#7) pass; CDC TODO | #4–#8 |
 | 2 DSP kernels | bit-accurate vs C++ model; directed, random, boundary coverage | TODO | #9–#14 |
 | 3 Medium pipeline | continuous frames, random backpressure, config changes, stress, coverage | TODO | #15–#17 |
-| 4 Packet/control fabric | no loss or duplication; random destination/stall; priority and fairness; counters | TODO | #18, #19 |
+| 4 Packet/control fabric | no loss or duplication; random destination/stall; priority and fairness; counters | packet fabric (#18) done; telemetry_regs, snapshot_debug, fault_injection, mem_arbiter, behavioral_mem_model, regmap-completeness gate all pass under `make sim-tiny` (#19) | #18, #19 |
 | 5 Full-scale elaboration | Verilator compiles full config; smoke passes; Quartus A&S succeeds; no logic removal; resource in target region | TODO | #20 |
 | 6 Initial fit | immutable baseline captured (source, project, reports, seed, sim result, utilization, timing, power) | TODO | #21 |
 | 7 Timing closure | every iteration re-proves function before acceptance | TODO | #22 |
@@ -1533,3 +1533,102 @@ sim-injection scenario too.
 each seed in `SEEDS`. Wall time on the reference host: ~20 s build +
 < 1 s per run, so three seeds fit under one minute total — well inside
 the 5-minute budget for the injection gate.
+
+## 11. Phase 4 — Telemetry, register-map, DMA seam (issue #19)
+
+SPEC §19 Phase 4 asks for the register/control plane to be FULLY LIVE, adds
+`telemetry_clk` as a live counting domain, and introduces the abstract memory
+interface as the seam issue #24 replaces with HBM2e AXI. The gate runs on
+`phase4_top`, the unit-test top that binds the five phase-4 modules together
+under one register plane. Every §9 group in `control/regmap.json` is checked
+by `test_regmap_completeness.py` at every `make sim-tiny` (the script is a
+prerequisite of the sim-tiny target).
+
+### Tests
+
+`sim/tests/test_regmap_completeness.py` — cross-checks the source of truth
+`control/regmap.json` against the SPEC §9 group manifest. Fails if any group
+is unclaimed, if any implemented block has no registers, if any register or
+field has an empty description, if the phase-4 required registers
+(DBG_SNAP_CTRL, DBG_SNAP_STATUS, DBG_SNAP_DATA, DBG_FAULT_TARGET,
+DBG_MEM_CTRL, DBG_MEM_STATUS, DBG_MEM_REQ_COUNT, DBG_MEM_RSP_COUNT) are
+missing, or if the fault-injection group is not claimed by BOTH the 0x3000
+and 0x8000 windows. Runs under Python 3 with no third-party dependencies.
+
+`sim/tests/test_telemetry_counters.cpp` — four passes on `phase4_top`.
+Reset defaults (SNAP_VALID=0, HEALTHY=1, all counters 0). Event accumulation:
+fires ev_detection ten times in tel_clk, snapshots, verifies TELE_EVENT_RATE
+reads exactly 10. Health sticky: fires ev_packet_drop, verifies HEALTHY=0
+and TELE_HEALTH.PACKET_DROP is set; W1C-clears it and verifies HEALTHY=1
+returns. TELE_CTRL.CLEAR: pulses CLEAR, snapshots, verifies TELE_EVENT_RATE
+reads 0. The test exercises the cdc_handshake bundle path
+(cfg_clk -> tel_clk pulse via cdc_pulse, tel_clk -> cfg_clk bundle via
+toggle + cdc_sync2).
+
+`sim/tests/test_fault_injection.cpp` — four passes on `phase4_top`.
+Safe-disable-by-default: TARGET=0 + fault_type_pulse -> zero block pulses,
+zero DBG_FAULT_REPORT bits. Single-block dispatch: TARGET=0x01, pulse ->
+only PFB pulse observed, report bit set. Multi-block dispatch: TARGET=0x70
+(CFAR|PACKET|MEMORY), pulse -> exactly those three bits pulse, report
+matches. W1C clear: write 1 to one bit, verify only that bit clears.
+Together these prove SPEC 24's "safe disable" plus the SPEC 9 report path.
+
+`sim/tests/test_snapshot_debug.cpp` — four passes on `phase4_top`.
+Unarmed trigger: TRIGGER pulse with ARM=0 -> no capture, no CAPTURE_DONE.
+Armed capture: fills the ring to DEPTH=8 with consecutive beats from
+source 0, reads them back through DBG_SNAP_DATA / DATA_META. Status clear:
+CTRL.STATUS_CLEAR clears CAPTURE_DONE and WR_PTR. Continuous mode:
+ONE_SHOT=0, capture runs continuously without ever setting CAPTURE_DONE.
+Every register-side check goes through the SPEC 9 protocol via harness
+RegDriver, exactly as software would.
+
+`sim/tests/test_dma_end_to_end.cpp` — four passes on `phase4_top` proving
+the DMA/HBM seam contract in isolation. Single write/read roundtrip: write
+a known pattern to address 0x100, read it back, verify byte-identical.
+Burst: 16 unique random patterns written to consecutive addresses, then
+read back; DBG_MEM_REQ_COUNT and DBG_MEM_RSP_COUNT verified equal (zero
+lost, zero duplicated events). Soft reset: pulse SOFT_RESET, verify the
+counters clear. Range error: read address 0x1000 (past the 4 KiB byte
+store), verify DBG_MEM_STATUS.FAULT_RANGE is set. This test proves the
+arbiter + memory model + fault paths at unit scope; a regression here
+localises to those blocks rather than to their composition with the CFAR
+core or the packet fabric.
+
+`sim/tests/test_pipeline_dma.cpp` — end-to-end DMA proof on
+`benchmark_pipeline_top` at medium config (issue #19 revision, the
+Phase-4 acceptance gate for "CFAR through the packet network into memory,
+verified by readback"). Drives 4 random_tone frames through the full
+PFB->FFT->history->align->beamformer->power->CFAR chain; forks the CFAR
+event stream (must-both-accept fork with a DEPTH=16 elastic buffer);
+serialises each 176-bit event into `pkt_detection_flits()` beats through
+a small `pkt_fabric` (RADIX=2, STAGES=1); deserialises at the egress;
+writes one 512-bit memory word per event into `behavioral_mem_model`;
+reads every word back through the external `dma_mem_*` port on
+`pipeline_top` and asserts:
+* every captured CFAR beat has a corresponding memory word at address
+  (base + k * 64) with byte-identical low 64 bits (the identity-bearing
+  fields of the CFAR event: kind, bin, frame_id, ref_count, alpha, low
+  det_count);
+* memory bytes [22..63] are zero (the DMA writer zero-extends the
+  176-bit event into the 512-bit word);
+* `stat_dma_events_captured == stat_dma_events_delivered` for the run
+  (zero lost, zero duplicated over the packet path);
+* the captured count matches the memory-write count (fork integrity).
+
+Wired into `sim-medium` (adds ~10 s per seed).
+
+### Integration scope narrowings (Phase-4)
+
+Decision 7 (power/CFAR single-lane narrowing) is UNCHANGED: the pipeline
+still taps ONE (beam 0, bin 0) sample per beat, so the pipeline emits one
+CFAR stream, and the DMA path carries one detection packet per event.
+Issue #20 introduces the per-(beam, bin) fan-out (multiple concurrent
+CFAR streams, wider ingress adapter aggregation); the SEAM and the
+serialise -> fabric -> deserialise -> memory pattern are already
+demonstrated here.
+
+### Runtime
+
+`make sim-tiny` runs every phase-4 test once per seed (3 seeds x 4 tests =
+12 phase-4 runs). Each run is < 0.5 s; the incremental cost is under 10 s
+of sim-tiny wall time.

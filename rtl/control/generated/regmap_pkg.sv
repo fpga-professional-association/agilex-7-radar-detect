@@ -21,15 +21,15 @@ package regmap_pkg;
   localparam int unsigned REGMAP_STRB_W = 4;
   localparam int unsigned REGMAP_WINDOW_BYTES = 4096;
   localparam int unsigned REGMAP_WINDOW_W = 12;
-  localparam int unsigned REGMAP_N_BLOCKS = 12;
-  localparam int unsigned REGMAP_N_BLOCKS_IMPL = 11;
-  localparam int unsigned REGMAP_N_REGS_TOTAL = 100;
-  localparam logic [31:0] REGMAP_BLOCK_MASK = 32'h00000EFF;
+  localparam int unsigned REGMAP_N_BLOCKS = 13;
+  localparam int unsigned REGMAP_N_BLOCKS_IMPL = 13;
+  localparam int unsigned REGMAP_N_REGS_TOTAL = 125;
+  localparam logic [31:0] REGMAP_BLOCK_MASK = 32'h00001FFF;
 
   // ---- implemented block windows, in fabric port order ----
   // The fabric decodes one master port onto these windows; index i here is index i
   // on every per-block port array of rtl/control/reg_fabric.sv.
-  localparam logic [REGMAP_N_BLOCKS_IMPL*REGMAP_ADDR_W-1:0] REGMAP_IMPL_BASE = {16'hB000, 16'hA000, 16'h9000, 16'h7000, 16'h6000, 16'h5000, 16'h4000, 16'h3000, 16'h2000, 16'h1000, 16'h0000};
+  localparam logic [REGMAP_N_BLOCKS_IMPL*REGMAP_ADDR_W-1:0] REGMAP_IMPL_BASE = {16'hC000, 16'hB000, 16'hA000, 16'h9000, 16'h8000, 16'h7000, 16'h6000, 16'h5000, 16'h4000, 16'h3000, 16'h2000, 16'h1000, 16'h0000};
   //   [0] id            base 0x0000  4 registers
   //   [1] build_params  base 0x1000  12 registers
   //   [2] ctrl          base 0x2000  4 registers
@@ -38,9 +38,11 @@ package regmap_pkg;
   //   [5] coeff         base 0x5000  10 registers
   //   [6] cfar          base 0x6000  9 registers
   //   [7] counters      base 0x7000  21 registers
-  //   [8] covar         base 0x9000  7 registers
-  //   [9] history       base 0xA000  13 registers
-  //   [10] packet        base 0xB000  12 registers
+  //   [8] debug         base 0x8000  14 registers
+  //   [9] covar         base 0x9000  7 registers
+  //   [10] history       base 0xA000  13 registers
+  //   [11] packet        base 0xB000  12 registers
+  //   [12] telemetry     base 0xC000  11 registers
 
   // -------------------------------------------------------------------------
   // Block 0: id — implemented
@@ -132,9 +134,9 @@ package regmap_pkg;
 
   // reset value of the stored bits
   localparam logic [REGMAP_ID_N_REGS*32-1:0] REGMAP_ID_RESET = {
-      32'h00000EFF,  // [3]
-      32'h1020640C,  // [2]
-      32'h01070001,  // [1]
+      32'h00001FFF,  // [3]
+      32'h10207D0D,  // [2]
+      32'h01080001,  // [1]
       32'h52414441  // [0]
   };
   // bits a software write may set or clear (RW)
@@ -2106,14 +2108,537 @@ package regmap_pkg;
   };
 
   // -------------------------------------------------------------------------
-  // Block 8: debug — PLANNED (#19)
-  // SPEC 9 groups: Snapshot and debug control
-  // PLANNED. Snapshot capture, trigger configuration and debug readback.
+  // Block 8: debug — implemented
+  // SPEC 9 groups: Snapshot and debug control; Fault injection
+  // The SPEC 9 'Snapshot and debug control' group (issue #19), plus a per-block
+  // extension of the fault-injection window at 0x3000. The window is at 0x8000 exactly
+  // where reg_block_packet 'planned by #19' left it. Two register groups land here for
+  // a reason. Snapshot/debug is the primary group: DBG_SNAP_CTRL is the
+  // arm/trigger/status contract described in SPEC 9, DBG_SNAP_POINTER and
+  // DBG_SNAP_DEPTH configure the capture buffer, DBG_SNAP_STATUS reports capture-done
+  // and the write pointer. Fault injection here is a *scope extension* of the 0x3000
+  // window: 0x3000 owns the six shared fault types (STREAM_CORRUPT..PACKET_DROP) and
+  // their sticky/count paths; this window's DBG_FAULT_TARGET names WHICH BLOCK a fault
+  // is aimed at, and DBG_MEM_CTRL owns the abstract-memory fault path #24 will inherit.
+  // Splitting a target field off the 0x3000 window would break the invariant that every
+  // 0x3000 register's fields have the same six-bit assignment, which is what makes the
+  // 0x3000 count and the 0x3000 status a single mask. Clock: cfg_clk; the trigger pulse
+  // and the arm bit cross into the OBSERVED block's domain through issue #6 primitives
+  // (cdc_pulse for the trigger, cdc_sync2 for the arm), so a snapshot arm survives a
+  // reader that inspects it in a different domain than the block writes it in.
   // -------------------------------------------------------------------------
   localparam logic [REGMAP_ADDR_W-1:0] REGMAP_DEBUG_BASE = 16'h8000;
   localparam int unsigned REGMAP_DEBUG_SIZE = 4096;
-  localparam int unsigned REGMAP_DEBUG_N_REGS = 0;
-  // No registers in this build: every access to 0x8000..0x8FFF returns error=1.
+  localparam int unsigned REGMAP_DEBUG_N_REGS = 14;
+  localparam int unsigned REGMAP_DEBUG_INDEX = 8;  // fabric port index
+
+  // DBG_SNAP_CTRL @ 0x8000 (MIXED)
+  //   Snapshot capture arm and trigger. Two-step, same discipline as
+  //   FAULT_ENABLE/FAULT_INJECT at 0x3000: ARM is a persistent bit that names WHAT will
+  //   capture, TRIGGER is a one-cycle pulse that STARTS the capture. A pulse issued
+  //   while ARM is 0 does nothing at all - no capture, no busy, no status. That is the
+  //   single-stray-write defence, made once at 0x3000 and made again here for the same
+  //   reason. A pulse with ARM set enters CAPTURING; the block clears CAPTURING and
+  //   sets CAPTURE_DONE when its ring buffer has filled by DEPTH beats after the
+  //   trigger.
+  //   [0:0] ARM (RW)
+  //       Enable snapshot capture. Cleared, the trigger has no effect; setting it does
+  //       NOT start a capture.
+  //   [1:1] TRIGGER (RWP)
+  //       Writing 1 while ARM is set starts a capture at the next beat on the selected
+  //       source. A second trigger while CAPTURE_BUSY holds is refused and flagged in
+  //       DBG_SNAP_STATUS.OVERRUN. Always reads 0.
+  //   [2:2] STATUS_CLEAR (RWP)
+  //       Writing 1 clears the sticky CAPTURE_DONE and OVERRUN bits, and zeroes the
+  //       write pointer to prepare the next capture. Does not stop an in-flight
+  //       capture; a trigger issued while CAPTURE_BUSY is set is refused, exactly as it
+  //       is without this clear.
+  //   [3:3] ONE_SHOT (RW)
+  //       Capture semantics. 1: capture DEPTH beats and stop; further beats do not
+  //       overwrite (the ring becomes a linear buffer). 0: capture continuously into
+  //       the ring; a reader always sees the DEPTH most recent beats. Default one-shot
+  //       because a debugger snapshotting a fault is looking at the moment the fault
+  //       happened, not the moment the reader got around to reading the register.
+  localparam int unsigned REGMAP_DEBUG_DBG_SNAP_CTRL_INDEX = 0;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_DEBUG_DBG_SNAP_CTRL_ADDR = 16'h8000;
+  localparam int unsigned REGMAP_DEBUG_DBG_SNAP_CTRL_ARM_LSB = 0;
+  localparam int unsigned REGMAP_DEBUG_DBG_SNAP_CTRL_ARM_WIDTH = 1;
+  localparam logic [31:0] REGMAP_DEBUG_DBG_SNAP_CTRL_ARM_MASK = 32'h00000001;
+  localparam int unsigned REGMAP_DEBUG_DBG_SNAP_CTRL_TRIGGER_LSB = 1;
+  localparam int unsigned REGMAP_DEBUG_DBG_SNAP_CTRL_TRIGGER_WIDTH = 1;
+  localparam logic [31:0] REGMAP_DEBUG_DBG_SNAP_CTRL_TRIGGER_MASK = 32'h00000002;
+  localparam int unsigned REGMAP_DEBUG_DBG_SNAP_CTRL_STATUS_CLEAR_LSB = 2;
+  localparam int unsigned REGMAP_DEBUG_DBG_SNAP_CTRL_STATUS_CLEAR_WIDTH = 1;
+  localparam logic [31:0] REGMAP_DEBUG_DBG_SNAP_CTRL_STATUS_CLEAR_MASK = 32'h00000004;
+  localparam int unsigned REGMAP_DEBUG_DBG_SNAP_CTRL_ONE_SHOT_LSB = 3;
+  localparam int unsigned REGMAP_DEBUG_DBG_SNAP_CTRL_ONE_SHOT_WIDTH = 1;
+  localparam logic [31:0] REGMAP_DEBUG_DBG_SNAP_CTRL_ONE_SHOT_MASK = 32'h00000008;
+
+  // DBG_SNAP_SOURCE @ 0x8004 (MIXED)
+  //   What the snapshot samples. SOURCE_SEL names the observed interface (see fields
+  //   below); the wiring in benchmark_sim_top routes the corresponding beat and
+  //   metadata into the capture ring. This is a discovery register, deliberately:
+  //   adding a snapshot target is an RTL change, and reporting the elaborated set of
+  //   sources through N_SOURCES lets software refuse a value the build does not
+  //   implement rather than sampling nothing.
+  //   [3:0] SOURCE_SEL (RW)
+  //       Snapshot source index. 0: PFB output antenna 0 (stream beat + sof/eof/seq).
+  //       1: FFT output antenna 0. 2: alignment network output. 3: beamformer output.
+  //       4: power/CFAR input. 5: CFAR detection output. 6: packet fabric egress. 7:
+  //       memory request/response. Index >= N_SOURCES is clamped to zero and raises
+  //       DBG_SNAP_STATUS.SOURCE_INVALID.
+  //   [23:16] N_SOURCES (ROHW)
+  //       Elaborated source count. Reported by hardware so software can enumerate legal
+  //       SOURCE_SEL values without a build-time header.
+  localparam int unsigned REGMAP_DEBUG_DBG_SNAP_SOURCE_INDEX = 1;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_DEBUG_DBG_SNAP_SOURCE_ADDR = 16'h8004;
+  localparam int unsigned REGMAP_DEBUG_DBG_SNAP_SOURCE_SOURCE_SEL_LSB = 0;
+  localparam int unsigned REGMAP_DEBUG_DBG_SNAP_SOURCE_SOURCE_SEL_WIDTH = 4;
+  localparam logic [31:0] REGMAP_DEBUG_DBG_SNAP_SOURCE_SOURCE_SEL_MASK = 32'h0000000F;
+  localparam int unsigned REGMAP_DEBUG_DBG_SNAP_SOURCE_N_SOURCES_LSB = 16;
+  localparam int unsigned REGMAP_DEBUG_DBG_SNAP_SOURCE_N_SOURCES_WIDTH = 8;
+  localparam logic [31:0] REGMAP_DEBUG_DBG_SNAP_SOURCE_N_SOURCES_MASK = 32'h00FF0000;
+
+  // DBG_SNAP_DEPTH @ 0x8008 (MIXED)
+  //   Ring-buffer depth for the capture. Programmable so a short snapshot around a rare
+  //   fault does not waste memory bandwidth and a long snapshot around a slow drift can
+  //   look back further, without a re-elaboration. A depth of zero is clamped to one; a
+  //   depth above BUF_DEPTH is clamped to BUF_DEPTH.
+  //   [11:0] DEPTH (RW)
+  //       Beats to capture. Clamped to [1, BUF_DEPTH]. The default of 64 is enough to
+  //       see a whole frame of the pipeline's slowest interface (align output, ~= 32
+  //       beats/frame at BIN_PAR=2 medium) plus context on either side.
+  //   [27:16] BUF_DEPTH (ROHW)
+  //       Elaborated ring-buffer depth, the upper clamp on DEPTH.
+  localparam int unsigned REGMAP_DEBUG_DBG_SNAP_DEPTH_INDEX = 2;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_DEBUG_DBG_SNAP_DEPTH_ADDR = 16'h8008;
+  localparam int unsigned REGMAP_DEBUG_DBG_SNAP_DEPTH_DEPTH_LSB = 0;
+  localparam int unsigned REGMAP_DEBUG_DBG_SNAP_DEPTH_DEPTH_WIDTH = 12;
+  localparam logic [31:0] REGMAP_DEBUG_DBG_SNAP_DEPTH_DEPTH_MASK = 32'h00000FFF;
+  localparam int unsigned REGMAP_DEBUG_DBG_SNAP_DEPTH_BUF_DEPTH_LSB = 16;
+  localparam int unsigned REGMAP_DEBUG_DBG_SNAP_DEPTH_BUF_DEPTH_WIDTH = 12;
+  localparam logic [31:0] REGMAP_DEBUG_DBG_SNAP_DEPTH_BUF_DEPTH_MASK = 32'h0FFF0000;
+
+  // DBG_SNAP_STATUS @ 0x800C (MIXED)
+  //   Live state of the current snapshot. CAPTURING is 1 while beats are being written;
+  //   CAPTURE_DONE is a sticky bit set the cycle the last beat lands (cleared by
+  //   DBG_SNAP_CTRL.STATUS_CLEAR). WR_PTR is the ring index software reads from -
+  //   stable while CAPTURING is 0. The five bits together are the sequencing contract
+  //   SPEC 9 asks the register plane to make visible: nobody has to guess whether a
+  //   snapshot is ready.
+  //   [0:0] CAPTURING (ROHW)
+  //       A capture is in flight.
+  //   [1:1] CAPTURE_DONE (W1C)
+  //       Sticky: at least one capture has completed since the last STATUS_CLEAR.
+  //   [2:2] OVERRUN (W1C)
+  //       Sticky: a trigger was refused because CAPTURING was set.
+  //   [3:3] SOURCE_INVALID (W1C)
+  //       Sticky: DBG_SNAP_SOURCE.SOURCE_SEL was >= N_SOURCES when a capture started;
+  //       the capture ran against source 0 instead.
+  //   [27:16] WR_PTR (ROHW)
+  //       Live ring-buffer write pointer. Stable while CAPTURING is 0; a reader that
+  //       intends to walk the ring should observe CAPTURE_DONE first and CAPTURING
+  //       second.
+  localparam int unsigned REGMAP_DEBUG_DBG_SNAP_STATUS_INDEX = 3;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_DEBUG_DBG_SNAP_STATUS_ADDR = 16'h800C;
+  localparam int unsigned REGMAP_DEBUG_DBG_SNAP_STATUS_CAPTURING_LSB = 0;
+  localparam int unsigned REGMAP_DEBUG_DBG_SNAP_STATUS_CAPTURING_WIDTH = 1;
+  localparam logic [31:0] REGMAP_DEBUG_DBG_SNAP_STATUS_CAPTURING_MASK = 32'h00000001;
+  localparam int unsigned REGMAP_DEBUG_DBG_SNAP_STATUS_CAPTURE_DONE_LSB = 1;
+  localparam int unsigned REGMAP_DEBUG_DBG_SNAP_STATUS_CAPTURE_DONE_WIDTH = 1;
+  localparam logic [31:0] REGMAP_DEBUG_DBG_SNAP_STATUS_CAPTURE_DONE_MASK = 32'h00000002;
+  localparam int unsigned REGMAP_DEBUG_DBG_SNAP_STATUS_OVERRUN_LSB = 2;
+  localparam int unsigned REGMAP_DEBUG_DBG_SNAP_STATUS_OVERRUN_WIDTH = 1;
+  localparam logic [31:0] REGMAP_DEBUG_DBG_SNAP_STATUS_OVERRUN_MASK = 32'h00000004;
+  localparam int unsigned REGMAP_DEBUG_DBG_SNAP_STATUS_SOURCE_INVALID_LSB = 3;
+  localparam int unsigned REGMAP_DEBUG_DBG_SNAP_STATUS_SOURCE_INVALID_WIDTH = 1;
+  localparam logic [31:0] REGMAP_DEBUG_DBG_SNAP_STATUS_SOURCE_INVALID_MASK = 32'h00000008;
+  localparam int unsigned REGMAP_DEBUG_DBG_SNAP_STATUS_WR_PTR_LSB = 16;
+  localparam int unsigned REGMAP_DEBUG_DBG_SNAP_STATUS_WR_PTR_WIDTH = 12;
+  localparam logic [31:0] REGMAP_DEBUG_DBG_SNAP_STATUS_WR_PTR_MASK = 32'h0FFF0000;
+
+  // DBG_SNAP_POINTER @ 0x8010 (RW)
+  //   Read-back pointer. Writing a value seeds the next DBG_SNAP_DATA read at that ring
+  //   index; auto-increment is on by default so a whole capture is dumped by reading
+  //   DBG_SNAP_DATA repeatedly. The reader observes at most BUF_DEPTH beats; a request
+  //   beyond that wraps to zero. This is the one point software touches the ring - the
+  //   ring itself is in the block-level RAM and does not appear as a register.
+  //   [11:0] INDEX (RW)
+  //       Read index into the ring, 0..BUF_DEPTH-1. Values above BUF_DEPTH-1 are
+  //       clamped.
+  //   [31:31] AUTO_INC (RW)
+  //       When 1, INDEX advances by one after every accepted DBG_SNAP_DATA read. Off in
+  //       a debugger sweep that reads the same slot many times.
+  localparam int unsigned REGMAP_DEBUG_DBG_SNAP_POINTER_INDEX = 4;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_DEBUG_DBG_SNAP_POINTER_ADDR = 16'h8010;
+  localparam int unsigned REGMAP_DEBUG_DBG_SNAP_POINTER_INDEX_LSB = 0;
+  localparam int unsigned REGMAP_DEBUG_DBG_SNAP_POINTER_INDEX_WIDTH = 12;
+  localparam logic [31:0] REGMAP_DEBUG_DBG_SNAP_POINTER_INDEX_MASK = 32'h00000FFF;
+  localparam int unsigned REGMAP_DEBUG_DBG_SNAP_POINTER_AUTO_INC_LSB = 31;
+  localparam int unsigned REGMAP_DEBUG_DBG_SNAP_POINTER_AUTO_INC_WIDTH = 1;
+  localparam logic [31:0] REGMAP_DEBUG_DBG_SNAP_POINTER_AUTO_INC_MASK = 32'h80000000;
+
+  // DBG_SNAP_DATA @ 0x8014 (ROHW)
+  //   One 32-bit word from the ring at the current INDEX. Reads return the low 32 bits
+  //   of the captured beat, plus the four control bits (SOF, EOF, VALID, FAULT) if the
+  //   beat carried them. A wider beat is exposed word by word: the second word is
+  //   available at DBG_SNAP_DATA_HI. This is a READ-ONLY register; a write returns
+  //   error=1. Reading always succeeds - the ring exists as long as the block does -
+  //   but a read before any capture returns zero.
+  //   [31:0] VALUE (ROHW)
+  //       Ring[INDEX][31:0]: the low 32 bits of the observed beat. Metadata is
+  //       separately encoded in DBG_SNAP_DATA_META.
+  localparam int unsigned REGMAP_DEBUG_DBG_SNAP_DATA_INDEX = 5;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_DEBUG_DBG_SNAP_DATA_ADDR = 16'h8014;
+  localparam int unsigned REGMAP_DEBUG_DBG_SNAP_DATA_VALUE_LSB = 0;
+  localparam int unsigned REGMAP_DEBUG_DBG_SNAP_DATA_VALUE_WIDTH = 32;
+  localparam logic [31:0] REGMAP_DEBUG_DBG_SNAP_DATA_VALUE_MASK = 32'hFFFFFFFF;
+
+  // DBG_SNAP_DATA_HI @ 0x8018 (ROHW)
+  //   High half of the ring word. Read the pair together to reconstruct a 64-bit
+  //   observed beat; wider observed beats are truncated to 64 bits, which is enough for
+  //   every source SOURCE_SEL enumerates.
+  //   [31:0] VALUE (ROHW)
+  //       Ring[INDEX][63:32].
+  localparam int unsigned REGMAP_DEBUG_DBG_SNAP_DATA_HI_INDEX = 6;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_DEBUG_DBG_SNAP_DATA_HI_ADDR = 16'h8018;
+  localparam int unsigned REGMAP_DEBUG_DBG_SNAP_DATA_HI_VALUE_LSB = 0;
+  localparam int unsigned REGMAP_DEBUG_DBG_SNAP_DATA_HI_VALUE_WIDTH = 32;
+  localparam logic [31:0] REGMAP_DEBUG_DBG_SNAP_DATA_HI_VALUE_MASK = 32'hFFFFFFFF;
+
+  // DBG_SNAP_DATA_META @ 0x801C (ROHW)
+  //   Metadata for the beat at INDEX: the frame flags, the stream identity and the
+  //   sequence tag. Split off from DATA/DATA_HI so a fixed-width metadata field can
+  //   carry a variable-width data field. The metadata's bit layout is
+  //   CONFIGURATION-INDEPENDENT (12-bit index, 4-bit id, 16-bit seq, 4 flags), for the
+  //   same reason the packet header is: the ring dump has to decode without a
+  //   build-time header.
+  //   [15:0] SEQ (ROHW)
+  //       Sequence tag observed on the beat, when the source has one.
+  //   [19:16] ID (ROHW)
+  //       Stream identity, when applicable.
+  //   [24:24] SOF (ROHW)
+  //       Beat carried start_of_frame.
+  //   [25:25] EOF (ROHW)
+  //       Beat carried end_of_frame.
+  //   [26:26] VALID (ROHW)
+  //       Beat was actually accepted by the observed handshake. Cleared beats are idle
+  //       cycles the capture chose to record in continuous mode; in one-shot mode every
+  //       recorded beat has VALID set.
+  //   [27:27] FAULT (ROHW)
+  //       Beat coincided with a live fault-injection pulse from the 0x3000 window.
+  //       Correlates a captured beat with the fault that triggered its capture.
+  localparam int unsigned REGMAP_DEBUG_DBG_SNAP_DATA_META_INDEX = 7;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_DEBUG_DBG_SNAP_DATA_META_ADDR = 16'h801C;
+  localparam int unsigned REGMAP_DEBUG_DBG_SNAP_DATA_META_SEQ_LSB = 0;
+  localparam int unsigned REGMAP_DEBUG_DBG_SNAP_DATA_META_SEQ_WIDTH = 16;
+  localparam logic [31:0] REGMAP_DEBUG_DBG_SNAP_DATA_META_SEQ_MASK = 32'h0000FFFF;
+  localparam int unsigned REGMAP_DEBUG_DBG_SNAP_DATA_META_ID_LSB = 16;
+  localparam int unsigned REGMAP_DEBUG_DBG_SNAP_DATA_META_ID_WIDTH = 4;
+  localparam logic [31:0] REGMAP_DEBUG_DBG_SNAP_DATA_META_ID_MASK = 32'h000F0000;
+  localparam int unsigned REGMAP_DEBUG_DBG_SNAP_DATA_META_SOF_LSB = 24;
+  localparam int unsigned REGMAP_DEBUG_DBG_SNAP_DATA_META_SOF_WIDTH = 1;
+  localparam logic [31:0] REGMAP_DEBUG_DBG_SNAP_DATA_META_SOF_MASK = 32'h01000000;
+  localparam int unsigned REGMAP_DEBUG_DBG_SNAP_DATA_META_EOF_LSB = 25;
+  localparam int unsigned REGMAP_DEBUG_DBG_SNAP_DATA_META_EOF_WIDTH = 1;
+  localparam logic [31:0] REGMAP_DEBUG_DBG_SNAP_DATA_META_EOF_MASK = 32'h02000000;
+  localparam int unsigned REGMAP_DEBUG_DBG_SNAP_DATA_META_VALID_LSB = 26;
+  localparam int unsigned REGMAP_DEBUG_DBG_SNAP_DATA_META_VALID_WIDTH = 1;
+  localparam logic [31:0] REGMAP_DEBUG_DBG_SNAP_DATA_META_VALID_MASK = 32'h04000000;
+  localparam int unsigned REGMAP_DEBUG_DBG_SNAP_DATA_META_FAULT_LSB = 27;
+  localparam int unsigned REGMAP_DEBUG_DBG_SNAP_DATA_META_FAULT_WIDTH = 1;
+  localparam logic [31:0] REGMAP_DEBUG_DBG_SNAP_DATA_META_FAULT_MASK = 32'h08000000;
+
+  // DBG_FAULT_TARGET @ 0x8020 (RW)
+  //   Per-block fault-injection selection (SPEC 9 fault injection, issue #19). The
+  //   0x3000 window declares WHICH fault TYPE is armed and triggered; this register
+  //   declares WHICH BLOCK receives it. A pulse at 0x3000 with BLOCK_MASK=0 here is a
+  //   no-op - safe-disable-by-default, i.e. an all-zero write to either window cannot
+  //   inject a fault into any block. The mask is per bit, so one arm/trigger pair can
+  //   perturb several blocks at once; each block reports the pulse it received through
+  //   its own status path.
+  //   [0:0] PFB (RW)
+  //       Fault pulse reaches the PFB (issue #10 primitives).
+  //   [1:1] FFT (RW)
+  //       Fault pulse reaches the FFT.
+  //   [2:2] BEAMFORMER (RW)
+  //       Fault pulse reaches the beamformer.
+  //   [3:3] COVARIANCE (RW)
+  //       Fault pulse reaches the covariance/power stage.
+  //   [4:4] CFAR (RW)
+  //       Fault pulse reaches the CFAR detector.
+  //   [5:5] PACKET (RW)
+  //       Fault pulse reaches the packet fabric (also drives its own FI hooks at
+  //       0xB010).
+  //   [6:6] MEMORY (RW)
+  //       Fault pulse reaches the abstract memory model.
+  //   [7:7] HISTORY (RW)
+  //       Fault pulse reaches the history memory (via HISTORY_CTRL.FORCE_UNSAFE
+  //       analog).
+  localparam int unsigned REGMAP_DEBUG_DBG_FAULT_TARGET_INDEX = 8;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_DEBUG_DBG_FAULT_TARGET_ADDR = 16'h8020;
+  localparam int unsigned REGMAP_DEBUG_DBG_FAULT_TARGET_PFB_LSB = 0;
+  localparam int unsigned REGMAP_DEBUG_DBG_FAULT_TARGET_PFB_WIDTH = 1;
+  localparam logic [31:0] REGMAP_DEBUG_DBG_FAULT_TARGET_PFB_MASK = 32'h00000001;
+  localparam int unsigned REGMAP_DEBUG_DBG_FAULT_TARGET_FFT_LSB = 1;
+  localparam int unsigned REGMAP_DEBUG_DBG_FAULT_TARGET_FFT_WIDTH = 1;
+  localparam logic [31:0] REGMAP_DEBUG_DBG_FAULT_TARGET_FFT_MASK = 32'h00000002;
+  localparam int unsigned REGMAP_DEBUG_DBG_FAULT_TARGET_BEAMFORMER_LSB = 2;
+  localparam int unsigned REGMAP_DEBUG_DBG_FAULT_TARGET_BEAMFORMER_WIDTH = 1;
+  localparam logic [31:0] REGMAP_DEBUG_DBG_FAULT_TARGET_BEAMFORMER_MASK = 32'h00000004;
+  localparam int unsigned REGMAP_DEBUG_DBG_FAULT_TARGET_COVARIANCE_LSB = 3;
+  localparam int unsigned REGMAP_DEBUG_DBG_FAULT_TARGET_COVARIANCE_WIDTH = 1;
+  localparam logic [31:0] REGMAP_DEBUG_DBG_FAULT_TARGET_COVARIANCE_MASK = 32'h00000008;
+  localparam int unsigned REGMAP_DEBUG_DBG_FAULT_TARGET_CFAR_LSB = 4;
+  localparam int unsigned REGMAP_DEBUG_DBG_FAULT_TARGET_CFAR_WIDTH = 1;
+  localparam logic [31:0] REGMAP_DEBUG_DBG_FAULT_TARGET_CFAR_MASK = 32'h00000010;
+  localparam int unsigned REGMAP_DEBUG_DBG_FAULT_TARGET_PACKET_LSB = 5;
+  localparam int unsigned REGMAP_DEBUG_DBG_FAULT_TARGET_PACKET_WIDTH = 1;
+  localparam logic [31:0] REGMAP_DEBUG_DBG_FAULT_TARGET_PACKET_MASK = 32'h00000020;
+  localparam int unsigned REGMAP_DEBUG_DBG_FAULT_TARGET_MEMORY_LSB = 6;
+  localparam int unsigned REGMAP_DEBUG_DBG_FAULT_TARGET_MEMORY_WIDTH = 1;
+  localparam logic [31:0] REGMAP_DEBUG_DBG_FAULT_TARGET_MEMORY_MASK = 32'h00000040;
+  localparam int unsigned REGMAP_DEBUG_DBG_FAULT_TARGET_HISTORY_LSB = 7;
+  localparam int unsigned REGMAP_DEBUG_DBG_FAULT_TARGET_HISTORY_WIDTH = 1;
+  localparam logic [31:0] REGMAP_DEBUG_DBG_FAULT_TARGET_HISTORY_MASK = 32'h00000080;
+
+  // DBG_FAULT_REPORT @ 0x8024 (W1C)
+  //   Per-block fault-injection report. Bit b sticky-set the cycle a pulse from 0x3000
+  //   reached block b via DBG_FAULT_TARGET. Complements FAULT_STATUS at 0x3000 (which
+  //   records the fault TYPE) with the block dimension. Write 1 to clear; a hardware
+  //   set in the same cycle as a clear wins, same rule the CSR engine applies
+  //   elsewhere.
+  //   [0:0] PFB (W1C)
+  //       A fault was delivered to PFB.
+  //   [1:1] FFT (W1C)
+  //       A fault was delivered to FFT.
+  //   [2:2] BEAMFORMER (W1C)
+  //       A fault was delivered to the beamformer.
+  //   [3:3] COVARIANCE (W1C)
+  //       A fault was delivered to covariance/power.
+  //   [4:4] CFAR (W1C)
+  //       A fault was delivered to CFAR.
+  //   [5:5] PACKET (W1C)
+  //       A fault was delivered to the packet fabric.
+  //   [6:6] MEMORY (W1C)
+  //       A fault was delivered to the memory model.
+  //   [7:7] HISTORY (W1C)
+  //       A fault was delivered to the history memory.
+  localparam int unsigned REGMAP_DEBUG_DBG_FAULT_REPORT_INDEX = 9;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_DEBUG_DBG_FAULT_REPORT_ADDR = 16'h8024;
+  localparam int unsigned REGMAP_DEBUG_DBG_FAULT_REPORT_PFB_LSB = 0;
+  localparam int unsigned REGMAP_DEBUG_DBG_FAULT_REPORT_PFB_WIDTH = 1;
+  localparam logic [31:0] REGMAP_DEBUG_DBG_FAULT_REPORT_PFB_MASK = 32'h00000001;
+  localparam int unsigned REGMAP_DEBUG_DBG_FAULT_REPORT_FFT_LSB = 1;
+  localparam int unsigned REGMAP_DEBUG_DBG_FAULT_REPORT_FFT_WIDTH = 1;
+  localparam logic [31:0] REGMAP_DEBUG_DBG_FAULT_REPORT_FFT_MASK = 32'h00000002;
+  localparam int unsigned REGMAP_DEBUG_DBG_FAULT_REPORT_BEAMFORMER_LSB = 2;
+  localparam int unsigned REGMAP_DEBUG_DBG_FAULT_REPORT_BEAMFORMER_WIDTH = 1;
+  localparam logic [31:0] REGMAP_DEBUG_DBG_FAULT_REPORT_BEAMFORMER_MASK = 32'h00000004;
+  localparam int unsigned REGMAP_DEBUG_DBG_FAULT_REPORT_COVARIANCE_LSB = 3;
+  localparam int unsigned REGMAP_DEBUG_DBG_FAULT_REPORT_COVARIANCE_WIDTH = 1;
+  localparam logic [31:0] REGMAP_DEBUG_DBG_FAULT_REPORT_COVARIANCE_MASK = 32'h00000008;
+  localparam int unsigned REGMAP_DEBUG_DBG_FAULT_REPORT_CFAR_LSB = 4;
+  localparam int unsigned REGMAP_DEBUG_DBG_FAULT_REPORT_CFAR_WIDTH = 1;
+  localparam logic [31:0] REGMAP_DEBUG_DBG_FAULT_REPORT_CFAR_MASK = 32'h00000010;
+  localparam int unsigned REGMAP_DEBUG_DBG_FAULT_REPORT_PACKET_LSB = 5;
+  localparam int unsigned REGMAP_DEBUG_DBG_FAULT_REPORT_PACKET_WIDTH = 1;
+  localparam logic [31:0] REGMAP_DEBUG_DBG_FAULT_REPORT_PACKET_MASK = 32'h00000020;
+  localparam int unsigned REGMAP_DEBUG_DBG_FAULT_REPORT_MEMORY_LSB = 6;
+  localparam int unsigned REGMAP_DEBUG_DBG_FAULT_REPORT_MEMORY_WIDTH = 1;
+  localparam logic [31:0] REGMAP_DEBUG_DBG_FAULT_REPORT_MEMORY_MASK = 32'h00000040;
+  localparam int unsigned REGMAP_DEBUG_DBG_FAULT_REPORT_HISTORY_LSB = 7;
+  localparam int unsigned REGMAP_DEBUG_DBG_FAULT_REPORT_HISTORY_WIDTH = 1;
+  localparam logic [31:0] REGMAP_DEBUG_DBG_FAULT_REPORT_HISTORY_MASK = 32'h00000080;
+
+  // DBG_MEM_CTRL @ 0x8028 (MIXED)
+  //   Abstract memory-interface control (SPEC 4.3, SPEC 19 Phase 4). The register
+  //   plane's view of rtl/memory/mem_arbiter.sv - the exact seam issue #24 replaces
+  //   with HBM2e AXI. ENABLE gates the whole interface; RESET pulses a soft reset that
+  //   flushes any in-flight request and returns every credit; LATENCY sets the
+  //   deterministic read/write latency of the behavioral model, so a test can force the
+  //   same delay every seed sees. FAULT_MODE is the memory-side error-injection hook.
+  //   [0:0] ENABLE (RW)
+  //       Global enable for the abstract memory interface. Cleared, no request is
+  //       issued and any pending response drains.
+  //   [1:1] SOFT_RESET (RWP)
+  //       One-cycle pulse. Flushes the pending queue in the behavioral model and resets
+  //       its tag counter. Not the same as writing ENABLE=0: reset also clears the
+  //       sticky status bits.
+  //   [15:8] LATENCY (RW)
+  //       Deterministic latency in memory-side cycles, applied to every request. 0 is
+  //       illegal (a cycle-zero response would break the ready/valid decoupling in the
+  //       arbiter) and is treated as 1. Values up to 255 are legal; the calibration for
+  //       the SPEC 19 Phase 9 HBM2e attachment lives in a later issue.
+  //   [25:24] FAULT_MODE (RW)
+  //       0: no fault. 1: drop next request. 2: drop next response. 3: return response
+  //       with STATUS.ERR set. Applies to the NEXT transaction after the write, then
+  //       reverts to 0; the mode is not persistent so one trigger cannot silently
+  //       corrupt every subsequent transaction.
+  localparam int unsigned REGMAP_DEBUG_DBG_MEM_CTRL_INDEX = 10;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_DEBUG_DBG_MEM_CTRL_ADDR = 16'h8028;
+  localparam int unsigned REGMAP_DEBUG_DBG_MEM_CTRL_ENABLE_LSB = 0;
+  localparam int unsigned REGMAP_DEBUG_DBG_MEM_CTRL_ENABLE_WIDTH = 1;
+  localparam logic [31:0] REGMAP_DEBUG_DBG_MEM_CTRL_ENABLE_MASK = 32'h00000001;
+  localparam int unsigned REGMAP_DEBUG_DBG_MEM_CTRL_SOFT_RESET_LSB = 1;
+  localparam int unsigned REGMAP_DEBUG_DBG_MEM_CTRL_SOFT_RESET_WIDTH = 1;
+  localparam logic [31:0] REGMAP_DEBUG_DBG_MEM_CTRL_SOFT_RESET_MASK = 32'h00000002;
+  localparam int unsigned REGMAP_DEBUG_DBG_MEM_CTRL_LATENCY_LSB = 8;
+  localparam int unsigned REGMAP_DEBUG_DBG_MEM_CTRL_LATENCY_WIDTH = 8;
+  localparam logic [31:0] REGMAP_DEBUG_DBG_MEM_CTRL_LATENCY_MASK = 32'h0000FF00;
+  localparam int unsigned REGMAP_DEBUG_DBG_MEM_CTRL_FAULT_MODE_LSB = 24;
+  localparam int unsigned REGMAP_DEBUG_DBG_MEM_CTRL_FAULT_MODE_WIDTH = 2;
+  localparam logic [31:0] REGMAP_DEBUG_DBG_MEM_CTRL_FAULT_MODE_MASK = 32'h03000000;
+
+  // DBG_MEM_STATUS @ 0x802C (MIXED)
+  //   Live memory-interface state. INFLIGHT is the number of outstanding requests,
+  //   HW_MAX_INFLIGHT is the elaborated maximum (writes above it are refused),
+  //   OUTSTANDING_TAG is the tag of the oldest un-answered request. FAULT bits are
+  //   sticky reports of the abstract errors an HBM2e IP will eventually raise:
+  //   address-range error, protocol error, timeout.
+  //   [7:0] INFLIGHT (ROHW)
+  //       Requests issued and not yet answered.
+  //   [15:8] HW_MAX_INFLIGHT (ROHW)
+  //       Elaborated maximum outstanding count.
+  //   [23:16] OUTSTANDING_TAG (ROHW)
+  //       Tag of the oldest un-answered request. Meaningful only when INFLIGHT > 0.
+  //   [24:24] FAULT_RANGE (W1C)
+  //       Sticky: a request address exceeded the elaborated range.
+  //   [25:25] FAULT_PROTOCOL (W1C)
+  //       Sticky: a request violated the abstract protocol (see mem_req_rsp_if.sv).
+  //   [26:26] FAULT_TIMEOUT (W1C)
+  //       Sticky: a response was withheld past its deterministic latency plus the
+  //       elaborated timeout.
+  localparam int unsigned REGMAP_DEBUG_DBG_MEM_STATUS_INDEX = 11;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_DEBUG_DBG_MEM_STATUS_ADDR = 16'h802C;
+  localparam int unsigned REGMAP_DEBUG_DBG_MEM_STATUS_INFLIGHT_LSB = 0;
+  localparam int unsigned REGMAP_DEBUG_DBG_MEM_STATUS_INFLIGHT_WIDTH = 8;
+  localparam logic [31:0] REGMAP_DEBUG_DBG_MEM_STATUS_INFLIGHT_MASK = 32'h000000FF;
+  localparam int unsigned REGMAP_DEBUG_DBG_MEM_STATUS_HW_MAX_INFLIGHT_LSB = 8;
+  localparam int unsigned REGMAP_DEBUG_DBG_MEM_STATUS_HW_MAX_INFLIGHT_WIDTH = 8;
+  localparam logic [31:0] REGMAP_DEBUG_DBG_MEM_STATUS_HW_MAX_INFLIGHT_MASK = 32'h0000FF00;
+  localparam int unsigned REGMAP_DEBUG_DBG_MEM_STATUS_OUTSTANDING_TAG_LSB = 16;
+  localparam int unsigned REGMAP_DEBUG_DBG_MEM_STATUS_OUTSTANDING_TAG_WIDTH = 8;
+  localparam logic [31:0] REGMAP_DEBUG_DBG_MEM_STATUS_OUTSTANDING_TAG_MASK = 32'h00FF0000;
+  localparam int unsigned REGMAP_DEBUG_DBG_MEM_STATUS_FAULT_RANGE_LSB = 24;
+  localparam int unsigned REGMAP_DEBUG_DBG_MEM_STATUS_FAULT_RANGE_WIDTH = 1;
+  localparam logic [31:0] REGMAP_DEBUG_DBG_MEM_STATUS_FAULT_RANGE_MASK = 32'h01000000;
+  localparam int unsigned REGMAP_DEBUG_DBG_MEM_STATUS_FAULT_PROTOCOL_LSB = 25;
+  localparam int unsigned REGMAP_DEBUG_DBG_MEM_STATUS_FAULT_PROTOCOL_WIDTH = 1;
+  localparam logic [31:0] REGMAP_DEBUG_DBG_MEM_STATUS_FAULT_PROTOCOL_MASK = 32'h02000000;
+  localparam int unsigned REGMAP_DEBUG_DBG_MEM_STATUS_FAULT_TIMEOUT_LSB = 26;
+  localparam int unsigned REGMAP_DEBUG_DBG_MEM_STATUS_FAULT_TIMEOUT_WIDTH = 1;
+  localparam logic [31:0] REGMAP_DEBUG_DBG_MEM_STATUS_FAULT_TIMEOUT_MASK = 32'h04000000;
+
+  // DBG_MEM_REQ_COUNT @ 0x8030 (ROHW)
+  //   Requests issued through the abstract memory interface since the last
+  //   DBG_MEM_CTRL.SOFT_RESET or DBG_SNAP_CTRL.STATUS_CLEAR. Saturating - a wrapped
+  //   counter would say a busy interface was idle.
+  //   [31:0] VALUE (ROHW)
+  //       Saturating request count.
+  localparam int unsigned REGMAP_DEBUG_DBG_MEM_REQ_COUNT_INDEX = 12;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_DEBUG_DBG_MEM_REQ_COUNT_ADDR = 16'h8030;
+  localparam int unsigned REGMAP_DEBUG_DBG_MEM_REQ_COUNT_VALUE_LSB = 0;
+  localparam int unsigned REGMAP_DEBUG_DBG_MEM_REQ_COUNT_VALUE_WIDTH = 32;
+  localparam logic [31:0] REGMAP_DEBUG_DBG_MEM_REQ_COUNT_VALUE_MASK = 32'hFFFFFFFF;
+
+  // DBG_MEM_RSP_COUNT @ 0x8034 (ROHW)
+  //   Responses returned. Compared against DBG_MEM_REQ_COUNT: their difference is the
+  //   outstanding count only if no request has been dropped, so their agreement (minus
+  //   INFLIGHT) is what the test_dma_end_to_end proof observes.
+  //   [31:0] VALUE (ROHW)
+  //       Saturating response count.
+  localparam int unsigned REGMAP_DEBUG_DBG_MEM_RSP_COUNT_INDEX = 13;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_DEBUG_DBG_MEM_RSP_COUNT_ADDR = 16'h8034;
+  localparam int unsigned REGMAP_DEBUG_DBG_MEM_RSP_COUNT_VALUE_LSB = 0;
+  localparam int unsigned REGMAP_DEBUG_DBG_MEM_RSP_COUNT_VALUE_WIDTH = 32;
+  localparam logic [31:0] REGMAP_DEBUG_DBG_MEM_RSP_COUNT_VALUE_MASK = 32'hFFFFFFFF;
+
+  // reset value of the stored bits
+  localparam logic [REGMAP_DEBUG_N_REGS*32-1:0] REGMAP_DEBUG_RESET = {
+      32'h00000000,  // [13]
+      32'h00000000,  // [12]
+      32'h00000000,  // [11]
+      32'h00000801,  // [10]
+      32'h00000000,  // [9]
+      32'h00000000,  // [8]
+      32'h00000000,  // [7]
+      32'h00000000,  // [6]
+      32'h00000000,  // [5]
+      32'h80000000,  // [4]
+      32'h00000000,  // [3]
+      32'h00000040,  // [2]
+      32'h00000000,  // [1]
+      32'h00000008  // [0]
+  };
+  // bits a software write may set or clear (RW)
+  localparam logic [REGMAP_DEBUG_N_REGS*32-1:0] REGMAP_DEBUG_WMASK = {
+      32'h00000000,  // [13]
+      32'h00000000,  // [12]
+      32'h00000000,  // [11]
+      32'h0300FF01,  // [10]
+      32'h00000000,  // [9]
+      32'h000000FF,  // [8]
+      32'h00000000,  // [7]
+      32'h00000000,  // [6]
+      32'h00000000,  // [5]
+      32'h80000FFF,  // [4]
+      32'h00000000,  // [3]
+      32'h00000FFF,  // [2]
+      32'h0000000F,  // [1]
+      32'h00000009  // [0]
+  };
+  // bits cleared by writing 1, set by hardware (W1C)
+  localparam logic [REGMAP_DEBUG_N_REGS*32-1:0] REGMAP_DEBUG_W1CMASK = {
+      32'h00000000,  // [13]
+      32'h00000000,  // [12]
+      32'h07000000,  // [11]
+      32'h00000000,  // [10]
+      32'h000000FF,  // [9]
+      32'h00000000,  // [8]
+      32'h00000000,  // [7]
+      32'h00000000,  // [6]
+      32'h00000000,  // [5]
+      32'h00000000,  // [4]
+      32'h0000000E,  // [3]
+      32'h00000000,  // [2]
+      32'h00000000,  // [1]
+      32'h00000000  // [0]
+  };
+  // bits that pulse for one cycle and read 0 (RWP)
+  localparam logic [REGMAP_DEBUG_N_REGS*32-1:0] REGMAP_DEBUG_PULSEMASK = {
+      32'h00000000,  // [13]
+      32'h00000000,  // [12]
+      32'h00000000,  // [11]
+      32'h00000002,  // [10]
+      32'h00000000,  // [9]
+      32'h00000000,  // [8]
+      32'h00000000,  // [7]
+      32'h00000000,  // [6]
+      32'h00000000,  // [5]
+      32'h00000000,  // [4]
+      32'h00000000,  // [3]
+      32'h00000000,  // [2]
+      32'h00000000,  // [1]
+      32'h00000006  // [0]
+  };
+  // bits read from the hardware input, not from storage (ROHW)
+  localparam logic [REGMAP_DEBUG_N_REGS*32-1:0] REGMAP_DEBUG_HWMASK = {
+      32'hFFFFFFFF,  // [13]
+      32'hFFFFFFFF,  // [12]
+      32'h00FFFFFF,  // [11]
+      32'h00000000,  // [10]
+      32'h00000000,  // [9]
+      32'h00000000,  // [8]
+      32'h0F0FFFFF,  // [7]
+      32'hFFFFFFFF,  // [6]
+      32'hFFFFFFFF,  // [5]
+      32'h00000000,  // [4]
+      32'h0FFF0001,  // [3]
+      32'h0FFF0000,  // [2]
+      32'h00FF0000,  // [1]
+      32'h00000000  // [0]
+  };
 
   // -------------------------------------------------------------------------
   // Block 9: covar — implemented
@@ -2131,7 +2656,7 @@ package regmap_pkg;
   localparam logic [REGMAP_ADDR_W-1:0] REGMAP_COVAR_BASE = 16'h9000;
   localparam int unsigned REGMAP_COVAR_SIZE = 4096;
   localparam int unsigned REGMAP_COVAR_N_REGS = 7;
-  localparam int unsigned REGMAP_COVAR_INDEX = 8;  // fabric port index
+  localparam int unsigned REGMAP_COVAR_INDEX = 9;  // fabric port index
 
   // COVAR_CTRL @ 0x9000 (MIXED)
   //   Master controls. FLUSH and SAT_CLEAR are write-1-pulse and read back zero,
@@ -2371,7 +2896,7 @@ package regmap_pkg;
   localparam logic [REGMAP_ADDR_W-1:0] REGMAP_HISTORY_BASE = 16'hA000;
   localparam int unsigned REGMAP_HISTORY_SIZE = 4096;
   localparam int unsigned REGMAP_HISTORY_N_REGS = 13;
-  localparam int unsigned REGMAP_HISTORY_INDEX = 9;  // fabric port index
+  localparam int unsigned REGMAP_HISTORY_INDEX = 10;  // fabric port index
 
   // HISTORY_CTRL @ 0xA000 (MIXED)
   //   Master controls. The three pulse fields are events rather than modes and read
@@ -2749,7 +3274,7 @@ package regmap_pkg;
   localparam logic [REGMAP_ADDR_W-1:0] REGMAP_PACKET_BASE = 16'hB000;
   localparam int unsigned REGMAP_PACKET_SIZE = 4096;
   localparam int unsigned REGMAP_PACKET_N_REGS = 12;
-  localparam int unsigned REGMAP_PACKET_INDEX = 10;  // fabric port index
+  localparam int unsigned REGMAP_PACKET_INDEX = 11;  // fabric port index
 
   // PACKET_CTRL @ 0xB000 (MIXED)
   //   Master controls. TEL_CLEAR is write-1-pulse and reads back zero, because it is an
@@ -3110,6 +3635,324 @@ package regmap_pkg;
       32'hFFFFFFFF,  // [3]
       32'hFFFFFFFF,  // [2]
       32'hFFFFFFFF,  // [1]
+      32'h00000000  // [0]
+  };
+
+  // -------------------------------------------------------------------------
+  // Block 12: telemetry — implemented
+  // SPEC 9 groups: Overflow and saturation counts; Sequence errors
+  // The telemetry_clk-domain aggregate counters (SPEC 8, SPEC 9, issue #19). Everything
+  // in this window counts in telemetry_clk (SPEC 8: 200 MHz nominal, an intentionally
+  // different frequency from core_clk and cfg_clk so a shared crossing is exercised
+  // rather than aliased) and is read across a cdc_handshake into cfg_clk. What lives
+  // here that does NOT live in the counters window at 0x7000 is the AGGREGATE view:
+  // 0x7000 observes ONE interface (a per-block instantiation), whereas 0xC000 rolls up
+  // the whole design's fault/drop/rate counters into one place a health monitor can
+  // read without walking every block. The two are consistent by construction - each
+  // field here is the sum of its per-block source counted the same way - and the
+  // counter that is authoritative when they disagree is the per-block one, because the
+  // per-block one is what its own test compares against its independent tally. The
+  // 0xC000 view exists so a system-level monitor does not have to. CLOCK: telemetry_clk
+  // is used by the counters themselves; the register interface crosses to cfg_clk with
+  // a cdc_handshake bundling every counter shadow as one snapshot, and
+  // TELE_STATUS.SNAP_VALID is the flag that reports whether the crossing has landed
+  // since reset. The BUSY bit is the flow control: a read while BUSY is set returns the
+  // last-completed snapshot rather than a live counter, because a live counter halfway
+  // through the crossing is not coherent.
+  // -------------------------------------------------------------------------
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_TELEMETRY_BASE = 16'hC000;
+  localparam int unsigned REGMAP_TELEMETRY_SIZE = 4096;
+  localparam int unsigned REGMAP_TELEMETRY_N_REGS = 11;
+  localparam int unsigned REGMAP_TELEMETRY_INDEX = 12;  // fabric port index
+
+  // TELE_CTRL @ 0xC000 (MIXED)
+  //   Master controls for the telemetry_clk aggregator. ENABLE gates every counter here
+  //   (per-block counters at 0x7000 are unaffected). SNAPSHOT is a write-1-pulse that
+  //   initiates the cdc_handshake crossing; the crossing has finite depth so a second
+  //   SNAPSHOT while BUSY is refused and flagged in OVERRUN. CLEAR zeroes every count
+  //   and every sticky bit in one cycle across the crossing.
+  //   [0:0] ENABLE (RW)
+  //       Global enable for the telemetry_clk counters. Reset to 1 so a design without
+  //       software still measures.
+  //   [8:8] SNAPSHOT (RWP)
+  //       Latch every telemetry_clk counter into its shadow, then cross the shadow into
+  //       cfg_clk. Poll TELE_STATUS.BUSY for completion; a fresh SNAPSHOT while BUSY is
+  //       refused.
+  //   [9:9] CLEAR (RWP)
+  //       Zero every counter and every sticky bit. Crosses through a cdc_pulse so the
+  //       clear reaches the telemetry_clk side deterministically.
+  //   [10:10] STICKY_CLEAR (RWP)
+  //       Clear only the sticky HEALTH bits, leaving the counts intact. Used when a
+  //       fault has been logged and the monitor wants a fresh reading of the same run.
+  localparam int unsigned REGMAP_TELEMETRY_TELE_CTRL_INDEX = 0;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_TELEMETRY_TELE_CTRL_ADDR = 16'hC000;
+  localparam int unsigned REGMAP_TELEMETRY_TELE_CTRL_ENABLE_LSB = 0;
+  localparam int unsigned REGMAP_TELEMETRY_TELE_CTRL_ENABLE_WIDTH = 1;
+  localparam logic [31:0] REGMAP_TELEMETRY_TELE_CTRL_ENABLE_MASK = 32'h00000001;
+  localparam int unsigned REGMAP_TELEMETRY_TELE_CTRL_SNAPSHOT_LSB = 8;
+  localparam int unsigned REGMAP_TELEMETRY_TELE_CTRL_SNAPSHOT_WIDTH = 1;
+  localparam logic [31:0] REGMAP_TELEMETRY_TELE_CTRL_SNAPSHOT_MASK = 32'h00000100;
+  localparam int unsigned REGMAP_TELEMETRY_TELE_CTRL_CLEAR_LSB = 9;
+  localparam int unsigned REGMAP_TELEMETRY_TELE_CTRL_CLEAR_WIDTH = 1;
+  localparam logic [31:0] REGMAP_TELEMETRY_TELE_CTRL_CLEAR_MASK = 32'h00000200;
+  localparam int unsigned REGMAP_TELEMETRY_TELE_CTRL_STICKY_CLEAR_LSB = 10;
+  localparam int unsigned REGMAP_TELEMETRY_TELE_CTRL_STICKY_CLEAR_WIDTH = 1;
+  localparam logic [31:0] REGMAP_TELEMETRY_TELE_CTRL_STICKY_CLEAR_MASK = 32'h00000400;
+
+  // TELE_STATUS @ 0xC004 (MIXED)
+  //   Cross-domain state. SNAP_VALID is set the cycle a snapshot completes; BUSY is set
+  //   from the SNAPSHOT pulse to the completion. HEALTHY is the top-level roll-up of
+  //   the sticky HEALTH register: 1 iff no fault has been reported since the last
+  //   STICKY_CLEAR.
+  //   [0:0] SNAP_VALID (ROHW)
+  //       A snapshot has completed since reset or the last CLEAR. Reading a count while
+  //       this is 0 returns 0, which is not the same as 'no events'.
+  //   [1:1] BUSY (ROHW)
+  //       A cdc_handshake crossing is in flight. Refuses further SNAPSHOT pulses.
+  //   [2:2] OVERRUN (W1C)
+  //       Sticky: a SNAPSHOT was refused because BUSY was set.
+  //   [8:8] HEALTHY (ROHW)
+  //       1 iff every field of TELE_HEALTH is 0. A monitor that checks this bit sees
+  //       'all clear' without decoding the flags.
+  localparam int unsigned REGMAP_TELEMETRY_TELE_STATUS_INDEX = 1;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_TELEMETRY_TELE_STATUS_ADDR = 16'hC004;
+  localparam int unsigned REGMAP_TELEMETRY_TELE_STATUS_SNAP_VALID_LSB = 0;
+  localparam int unsigned REGMAP_TELEMETRY_TELE_STATUS_SNAP_VALID_WIDTH = 1;
+  localparam logic [31:0] REGMAP_TELEMETRY_TELE_STATUS_SNAP_VALID_MASK = 32'h00000001;
+  localparam int unsigned REGMAP_TELEMETRY_TELE_STATUS_BUSY_LSB = 1;
+  localparam int unsigned REGMAP_TELEMETRY_TELE_STATUS_BUSY_WIDTH = 1;
+  localparam logic [31:0] REGMAP_TELEMETRY_TELE_STATUS_BUSY_MASK = 32'h00000002;
+  localparam int unsigned REGMAP_TELEMETRY_TELE_STATUS_OVERRUN_LSB = 2;
+  localparam int unsigned REGMAP_TELEMETRY_TELE_STATUS_OVERRUN_WIDTH = 1;
+  localparam logic [31:0] REGMAP_TELEMETRY_TELE_STATUS_OVERRUN_MASK = 32'h00000004;
+  localparam int unsigned REGMAP_TELEMETRY_TELE_STATUS_HEALTHY_LSB = 8;
+  localparam int unsigned REGMAP_TELEMETRY_TELE_STATUS_HEALTHY_WIDTH = 1;
+  localparam logic [31:0] REGMAP_TELEMETRY_TELE_STATUS_HEALTHY_MASK = 32'h00000100;
+
+  // TELE_EVENT_RATE @ 0xC008 (ROHW)
+  //   Aggregate event count: CFAR detections plus packet-network deliveries.
+  //   Saturating. Reading this across two snapshots and dividing by the elapsed time is
+  //   the design's user-visible detection throughput.
+  //   [31:0] VALUE (ROHW)
+  //       Aggregate event count.
+  localparam int unsigned REGMAP_TELEMETRY_TELE_EVENT_RATE_INDEX = 2;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_TELEMETRY_TELE_EVENT_RATE_ADDR = 16'hC008;
+  localparam int unsigned REGMAP_TELEMETRY_TELE_EVENT_RATE_VALUE_LSB = 0;
+  localparam int unsigned REGMAP_TELEMETRY_TELE_EVENT_RATE_VALUE_WIDTH = 32;
+  localparam logic [31:0] REGMAP_TELEMETRY_TELE_EVENT_RATE_VALUE_MASK = 32'hFFFFFFFF;
+
+  // TELE_PACKET_DROP @ 0xC00C (ROHW)
+  //   Packets DROPPED anywhere in the fabric (SPEC 7.8, SPEC 9). Sums the packet
+  //   fabric's per-stage drop paths (which do not exist in correct operation, so every
+  //   count here is either a fault or a fault injected via the 0xB010 hook).
+  //   Saturating.
+  //   [31:0] VALUE (ROHW)
+  //       Aggregate drop count.
+  localparam int unsigned REGMAP_TELEMETRY_TELE_PACKET_DROP_INDEX = 3;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_TELEMETRY_TELE_PACKET_DROP_ADDR = 16'hC00C;
+  localparam int unsigned REGMAP_TELEMETRY_TELE_PACKET_DROP_VALUE_LSB = 0;
+  localparam int unsigned REGMAP_TELEMETRY_TELE_PACKET_DROP_VALUE_WIDTH = 32;
+  localparam logic [31:0] REGMAP_TELEMETRY_TELE_PACKET_DROP_VALUE_MASK = 32'hFFFFFFFF;
+
+  // TELE_FAULT_COUNT @ 0xC010 (ROHW)
+  //   Total fault-injection pulses observed across every block, summed. Mirrors
+  //   FAULT_COUNT at 0x300C for the injected fault-type dimension, but crossed into
+  //   telemetry_clk so a health monitor can read it in the domain it lives in.
+  //   Saturating.
+  //   [31:0] VALUE (ROHW)
+  //       Aggregate fault count.
+  localparam int unsigned REGMAP_TELEMETRY_TELE_FAULT_COUNT_INDEX = 4;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_TELEMETRY_TELE_FAULT_COUNT_ADDR = 16'hC010;
+  localparam int unsigned REGMAP_TELEMETRY_TELE_FAULT_COUNT_VALUE_LSB = 0;
+  localparam int unsigned REGMAP_TELEMETRY_TELE_FAULT_COUNT_VALUE_WIDTH = 32;
+  localparam logic [31:0] REGMAP_TELEMETRY_TELE_FAULT_COUNT_VALUE_MASK = 32'hFFFFFFFF;
+
+  // TELE_CDC_ERROR @ 0xC014 (ROHW)
+  //   SPEC 9 CDC errors summed across every crossing that reports one. Saturating; zero
+  //   in correct operation.
+  //   [31:0] VALUE (ROHW)
+  //       Aggregate CDC-error count.
+  localparam int unsigned REGMAP_TELEMETRY_TELE_CDC_ERROR_INDEX = 5;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_TELEMETRY_TELE_CDC_ERROR_ADDR = 16'hC014;
+  localparam int unsigned REGMAP_TELEMETRY_TELE_CDC_ERROR_VALUE_LSB = 0;
+  localparam int unsigned REGMAP_TELEMETRY_TELE_CDC_ERROR_VALUE_WIDTH = 32;
+  localparam logic [31:0] REGMAP_TELEMETRY_TELE_CDC_ERROR_VALUE_MASK = 32'hFFFFFFFF;
+
+  // TELE_OVERFLOW @ 0xC018 (ROHW)
+  //   Aggregate FIFO overflow count across every observed FIFO. Zero in correct
+  //   operation - overflow is a defect, not a traffic condition - so a non-zero value
+  //   here is a design issue. Saturating.
+  //   [31:0] VALUE (ROHW)
+  //       Aggregate overflow count.
+  localparam int unsigned REGMAP_TELEMETRY_TELE_OVERFLOW_INDEX = 6;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_TELEMETRY_TELE_OVERFLOW_ADDR = 16'hC018;
+  localparam int unsigned REGMAP_TELEMETRY_TELE_OVERFLOW_VALUE_LSB = 0;
+  localparam int unsigned REGMAP_TELEMETRY_TELE_OVERFLOW_VALUE_WIDTH = 32;
+  localparam logic [31:0] REGMAP_TELEMETRY_TELE_OVERFLOW_VALUE_MASK = 32'hFFFFFFFF;
+
+  // TELE_SATURATE @ 0xC01C (ROHW)
+  //   Aggregate fixed-point saturation count across every observed datapath. Non-zero
+  //   is legal on loud input; a health monitor watches the RATE of change, not the
+  //   absolute value. Saturating.
+  //   [31:0] VALUE (ROHW)
+  //       Aggregate saturation count.
+  localparam int unsigned REGMAP_TELEMETRY_TELE_SATURATE_INDEX = 7;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_TELEMETRY_TELE_SATURATE_ADDR = 16'hC01C;
+  localparam int unsigned REGMAP_TELEMETRY_TELE_SATURATE_VALUE_LSB = 0;
+  localparam int unsigned REGMAP_TELEMETRY_TELE_SATURATE_VALUE_WIDTH = 32;
+  localparam logic [31:0] REGMAP_TELEMETRY_TELE_SATURATE_VALUE_MASK = 32'hFFFFFFFF;
+
+  // TELE_SEQ_ERRORS @ 0xC020 (ROHW)
+  //   Sequence-fault events summed across every stream. GAP + DUP + REORDER +
+  //   UNTRACKED; the per-fault-kind counts are at 0x7000 per block. Non-zero here means
+  //   at least one stream broke its SPEC 5 sequence invariant. Saturating.
+  //   [31:0] VALUE (ROHW)
+  //       Aggregate sequence-error count.
+  localparam int unsigned REGMAP_TELEMETRY_TELE_SEQ_ERRORS_INDEX = 8;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_TELEMETRY_TELE_SEQ_ERRORS_ADDR = 16'hC020;
+  localparam int unsigned REGMAP_TELEMETRY_TELE_SEQ_ERRORS_VALUE_LSB = 0;
+  localparam int unsigned REGMAP_TELEMETRY_TELE_SEQ_ERRORS_VALUE_WIDTH = 32;
+  localparam logic [31:0] REGMAP_TELEMETRY_TELE_SEQ_ERRORS_VALUE_MASK = 32'hFFFFFFFF;
+
+  // TELE_HEALTH @ 0xC024 (W1C)
+  //   Sticky health flags across every block, one bit per fault category. Every bit
+  //   here is a W1C summary of a corresponding sticky bit in the per-block window. The
+  //   cheapest 'is anything wrong' check reads TELE_STATUS.HEALTHY.
+  //   [0:0] PACKET_DROP (W1C)
+  //       A packet was dropped somewhere.
+  //   [1:1] CDC_ERROR (W1C)
+  //       A CDC error was reported by any crossing.
+  //   [2:2] OVERFLOW (W1C)
+  //       A FIFO overflow was reported.
+  //   [3:3] SATURATION (W1C)
+  //       A datapath saturated at least once.
+  //   [4:4] SEQ_ERROR (W1C)
+  //       A sequence fault was reported.
+  //   [5:5] FAULT_INJECTED (W1C)
+  //       A fault was injected. This is the one flag whose set is EXPECTED under test -
+  //       a monitor watching TELE_STATUS.HEALTHY must clear it after an injection.
+  //   [6:6] MEM_ERROR (W1C)
+  //       The abstract memory interface reported an error (range, protocol or timeout).
+  //   [7:7] CFAR_FAULT (W1C)
+  //       The CFAR detector reported a fault.
+  localparam int unsigned REGMAP_TELEMETRY_TELE_HEALTH_INDEX = 9;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_TELEMETRY_TELE_HEALTH_ADDR = 16'hC024;
+  localparam int unsigned REGMAP_TELEMETRY_TELE_HEALTH_PACKET_DROP_LSB = 0;
+  localparam int unsigned REGMAP_TELEMETRY_TELE_HEALTH_PACKET_DROP_WIDTH = 1;
+  localparam logic [31:0] REGMAP_TELEMETRY_TELE_HEALTH_PACKET_DROP_MASK = 32'h00000001;
+  localparam int unsigned REGMAP_TELEMETRY_TELE_HEALTH_CDC_ERROR_LSB = 1;
+  localparam int unsigned REGMAP_TELEMETRY_TELE_HEALTH_CDC_ERROR_WIDTH = 1;
+  localparam logic [31:0] REGMAP_TELEMETRY_TELE_HEALTH_CDC_ERROR_MASK = 32'h00000002;
+  localparam int unsigned REGMAP_TELEMETRY_TELE_HEALTH_OVERFLOW_LSB = 2;
+  localparam int unsigned REGMAP_TELEMETRY_TELE_HEALTH_OVERFLOW_WIDTH = 1;
+  localparam logic [31:0] REGMAP_TELEMETRY_TELE_HEALTH_OVERFLOW_MASK = 32'h00000004;
+  localparam int unsigned REGMAP_TELEMETRY_TELE_HEALTH_SATURATION_LSB = 3;
+  localparam int unsigned REGMAP_TELEMETRY_TELE_HEALTH_SATURATION_WIDTH = 1;
+  localparam logic [31:0] REGMAP_TELEMETRY_TELE_HEALTH_SATURATION_MASK = 32'h00000008;
+  localparam int unsigned REGMAP_TELEMETRY_TELE_HEALTH_SEQ_ERROR_LSB = 4;
+  localparam int unsigned REGMAP_TELEMETRY_TELE_HEALTH_SEQ_ERROR_WIDTH = 1;
+  localparam logic [31:0] REGMAP_TELEMETRY_TELE_HEALTH_SEQ_ERROR_MASK = 32'h00000010;
+  localparam int unsigned REGMAP_TELEMETRY_TELE_HEALTH_FAULT_INJECTED_LSB = 5;
+  localparam int unsigned REGMAP_TELEMETRY_TELE_HEALTH_FAULT_INJECTED_WIDTH = 1;
+  localparam logic [31:0] REGMAP_TELEMETRY_TELE_HEALTH_FAULT_INJECTED_MASK = 32'h00000020;
+  localparam int unsigned REGMAP_TELEMETRY_TELE_HEALTH_MEM_ERROR_LSB = 6;
+  localparam int unsigned REGMAP_TELEMETRY_TELE_HEALTH_MEM_ERROR_WIDTH = 1;
+  localparam logic [31:0] REGMAP_TELEMETRY_TELE_HEALTH_MEM_ERROR_MASK = 32'h00000040;
+  localparam int unsigned REGMAP_TELEMETRY_TELE_HEALTH_CFAR_FAULT_LSB = 7;
+  localparam int unsigned REGMAP_TELEMETRY_TELE_HEALTH_CFAR_FAULT_WIDTH = 1;
+  localparam logic [31:0] REGMAP_TELEMETRY_TELE_HEALTH_CFAR_FAULT_MASK = 32'h00000080;
+
+  // TELE_GEOMETRY @ 0xC028 (ROHW)
+  //   Elaborated telemetry_clk geometry. RATIO_NUM/RATIO_DEN report the telemetry_clk
+  //   to cfg_clk period ratio as an integer fraction, so a reader can compute an event
+  //   rate in per-second units without a compile-time constant. SNAPSHOT_LATENCY is the
+  //   observed cdc_handshake completion latency, in cfg_clk cycles.
+  //   [11:0] RATIO_NUM (ROHW)
+  //       Numerator of the telemetry_clk period ratio.
+  //   [23:12] RATIO_DEN (ROHW)
+  //       Denominator of the telemetry_clk period ratio.
+  //   [31:24] SNAPSHOT_LATENCY (ROHW)
+  //       Observed handshake latency in cfg_clk cycles at the last completed SNAPSHOT.
+  localparam int unsigned REGMAP_TELEMETRY_TELE_GEOMETRY_INDEX = 10;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_TELEMETRY_TELE_GEOMETRY_ADDR = 16'hC028;
+  localparam int unsigned REGMAP_TELEMETRY_TELE_GEOMETRY_RATIO_NUM_LSB = 0;
+  localparam int unsigned REGMAP_TELEMETRY_TELE_GEOMETRY_RATIO_NUM_WIDTH = 12;
+  localparam logic [31:0] REGMAP_TELEMETRY_TELE_GEOMETRY_RATIO_NUM_MASK = 32'h00000FFF;
+  localparam int unsigned REGMAP_TELEMETRY_TELE_GEOMETRY_RATIO_DEN_LSB = 12;
+  localparam int unsigned REGMAP_TELEMETRY_TELE_GEOMETRY_RATIO_DEN_WIDTH = 12;
+  localparam logic [31:0] REGMAP_TELEMETRY_TELE_GEOMETRY_RATIO_DEN_MASK = 32'h00FFF000;
+  localparam int unsigned REGMAP_TELEMETRY_TELE_GEOMETRY_SNAPSHOT_LATENCY_LSB = 24;
+  localparam int unsigned REGMAP_TELEMETRY_TELE_GEOMETRY_SNAPSHOT_LATENCY_WIDTH = 8;
+  localparam logic [31:0] REGMAP_TELEMETRY_TELE_GEOMETRY_SNAPSHOT_LATENCY_MASK = 32'hFF000000;
+
+  // reset value of the stored bits
+  localparam logic [REGMAP_TELEMETRY_N_REGS*32-1:0] REGMAP_TELEMETRY_RESET = {
+      32'h00000000,  // [10]
+      32'h00000000,  // [9]
+      32'h00000000,  // [8]
+      32'h00000000,  // [7]
+      32'h00000000,  // [6]
+      32'h00000000,  // [5]
+      32'h00000000,  // [4]
+      32'h00000000,  // [3]
+      32'h00000000,  // [2]
+      32'h00000000,  // [1]
+      32'h00000001  // [0]
+  };
+  // bits a software write may set or clear (RW)
+  localparam logic [REGMAP_TELEMETRY_N_REGS*32-1:0] REGMAP_TELEMETRY_WMASK = {
+      32'h00000000,  // [10]
+      32'h00000000,  // [9]
+      32'h00000000,  // [8]
+      32'h00000000,  // [7]
+      32'h00000000,  // [6]
+      32'h00000000,  // [5]
+      32'h00000000,  // [4]
+      32'h00000000,  // [3]
+      32'h00000000,  // [2]
+      32'h00000000,  // [1]
+      32'h00000001  // [0]
+  };
+  // bits cleared by writing 1, set by hardware (W1C)
+  localparam logic [REGMAP_TELEMETRY_N_REGS*32-1:0] REGMAP_TELEMETRY_W1CMASK = {
+      32'h00000000,  // [10]
+      32'h000000FF,  // [9]
+      32'h00000000,  // [8]
+      32'h00000000,  // [7]
+      32'h00000000,  // [6]
+      32'h00000000,  // [5]
+      32'h00000000,  // [4]
+      32'h00000000,  // [3]
+      32'h00000000,  // [2]
+      32'h00000004,  // [1]
+      32'h00000000  // [0]
+  };
+  // bits that pulse for one cycle and read 0 (RWP)
+  localparam logic [REGMAP_TELEMETRY_N_REGS*32-1:0] REGMAP_TELEMETRY_PULSEMASK = {
+      32'h00000000,  // [10]
+      32'h00000000,  // [9]
+      32'h00000000,  // [8]
+      32'h00000000,  // [7]
+      32'h00000000,  // [6]
+      32'h00000000,  // [5]
+      32'h00000000,  // [4]
+      32'h00000000,  // [3]
+      32'h00000000,  // [2]
+      32'h00000000,  // [1]
+      32'h00000700  // [0]
+  };
+  // bits read from the hardware input, not from storage (ROHW)
+  localparam logic [REGMAP_TELEMETRY_N_REGS*32-1:0] REGMAP_TELEMETRY_HWMASK = {
+      32'hFFFFFFFF,  // [10]
+      32'h00000000,  // [9]
+      32'hFFFFFFFF,  // [8]
+      32'hFFFFFFFF,  // [7]
+      32'hFFFFFFFF,  // [6]
+      32'hFFFFFFFF,  // [5]
+      32'hFFFFFFFF,  // [4]
+      32'hFFFFFFFF,  // [3]
+      32'hFFFFFFFF,  // [2]
+      32'h00000103,  // [1]
       32'h00000000  // [0]
   };
 

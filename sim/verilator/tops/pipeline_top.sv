@@ -6,12 +6,20 @@
 // The DUT is rtl/top/benchmark_sim_top.sv (module `benchmark_pipeline_top`);
 // see that file for the pipeline diagram, clock domains and geometry.
 //
+// Issue #19 revision: exposes the abstract memory readback port
+// (dma_mem_*), the DMA-path statistics, and forwards the mem_req_t /
+// mem_rsp_t packed structs. test_pipeline_dma drives dma_mem_* to READ back
+// what the internal tap wrote, proving end-to-end DMA integrity for the
+// CFAR->packet->memory hop that lives inside benchmark_pipeline_top.
+//
 // Simulation only. Never synthesized.
 // -----------------------------------------------------------------------------
 
 `default_nettype none
 
-module pipeline_top (
+module pipeline_top
+  import mem_pkg::*;
+(
     // ---- clocks and resets -------------------------------------------------
     input  wire         core_clk,
     input  wire         core_rst_n,
@@ -76,6 +84,7 @@ module pipeline_top (
     output wire         m_valid,
     input  wire         m_ready,
     output wire [63:0]  m_event_data,
+    output wire [255:0] m_event_full,
     output wire         m_sof,
     output wire         m_eof,
     output wire [15:0]  m_seq,
@@ -107,7 +116,22 @@ module pipeline_top (
 
     output wire [31:0]  stat_cfar_det_count,
     output wire [31:0]  stat_cfar_sup_count,
-    output wire [31:0]  stat_cfar_frame_count
+    output wire [31:0]  stat_cfar_frame_count,
+
+    // ---- DMA readback + statistics (issue #19 revision) ------------------
+    input  wire         dma_mem_req_valid,
+    output wire         dma_mem_req_ready,
+    input  mem_req_t    dma_mem_req,
+    output wire         dma_mem_rsp_valid,
+    input  wire         dma_mem_rsp_ready,
+    output mem_rsp_t    dma_mem_rsp,
+    output wire [31:0]  stat_dma_events_captured,
+    output wire [31:0]  stat_dma_events_delivered,
+    output wire [31:0]  stat_dma_pkt_ing_packets,
+    output wire [31:0]  stat_dma_pkt_egr_packets,
+    output wire [31:0]  stat_dma_mem_req_count,
+    output wire [31:0]  stat_dma_mem_rsp_count,
+    output wire [31:0]  stat_dma_write_addr_next
 );
 
   benchmark_pipeline_top u_dut (
@@ -165,6 +189,7 @@ module pipeline_top (
       .m_valid                   (m_valid),
       .m_ready                   (m_ready),
       .m_event_data              (m_event_data),
+      .m_event_full              (m_event_full),
       .m_sof                     (m_sof),
       .m_eof                     (m_eof),
       .m_seq                     (m_seq),
@@ -190,7 +215,21 @@ module pipeline_top (
       .stat_bf_sat_any           (stat_bf_sat_any),
       .stat_cfar_det_count       (stat_cfar_det_count),
       .stat_cfar_sup_count       (stat_cfar_sup_count),
-      .stat_cfar_frame_count     (stat_cfar_frame_count)
+      .stat_cfar_frame_count     (stat_cfar_frame_count),
+
+      .dma_mem_req_valid         (dma_mem_req_valid),
+      .dma_mem_req_ready         (dma_mem_req_ready),
+      .dma_mem_req               (dma_mem_req),
+      .dma_mem_rsp_valid         (dma_mem_rsp_valid),
+      .dma_mem_rsp_ready         (dma_mem_rsp_ready),
+      .dma_mem_rsp               (dma_mem_rsp),
+      .stat_dma_events_captured  (stat_dma_events_captured),
+      .stat_dma_events_delivered (stat_dma_events_delivered),
+      .stat_dma_pkt_ing_packets  (stat_dma_pkt_ing_packets),
+      .stat_dma_pkt_egr_packets  (stat_dma_pkt_egr_packets),
+      .stat_dma_mem_req_count    (stat_dma_mem_req_count),
+      .stat_dma_mem_rsp_count    (stat_dma_mem_rsp_count),
+      .stat_dma_write_addr_next  (stat_dma_write_addr_next)
   );
 
 endmodule : pipeline_top

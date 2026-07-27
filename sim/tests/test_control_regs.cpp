@@ -822,9 +822,11 @@ int harness::sim_test_main(const SimArgs& args) {
         {regmap::COEFF_BASE + 0x100u, false, true, 0xF, "coeff window, no register"},
         // The CFAR window became implemented with issue #14, so what is illegal
         // there is now an address past its last register rather than the window
-        // itself. The debug window is the last one still planned.
+        // itself. The debug window became implemented with issue #19; a write
+        // past its last register is now the check.
         {regmap::CFAR_BASE + 0x100u, true, false, 0xF, "cfar window, no register"},
-        {regmap::DEBUG_BASE, false, true, 0xF, "planned debug window"},
+        {regmap::DEBUG_BASE + 0x100u, false, true, 0xF,
+         "debug window, no register"},
         // The counters window is implemented as of issue #8, so what is illegal
         // there is an address past its last register, not the window itself.
         {regmap::COUNTERS_BASE + 0x400u, false, true, 0xF,
@@ -850,6 +852,10 @@ int harness::sim_test_main(const SimArgs& args) {
          "history window, no register"},
         {regmap::PACKET_BASE + 0x100u, false, true, 0xF,
          "packet window, no register"},
+        // Telemetry window landed with issue #19; an address past its last
+        // register is now illegal there.
+        {regmap::TELEMETRY_BASE + 0x100u, false, true, 0xF,
+         "telemetry window, no register"},
         // Inside an implemented window, past the block's last register.
         {regmap::ID_BASE + 0x100u, false, true, 0xF, "id window, no register"},
         {regmap::SCRATCH_BASE + 0x0F0u, true, false, 0xF, "scratch window, no register"},
