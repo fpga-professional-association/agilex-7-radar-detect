@@ -996,25 +996,128 @@ attaches a second fabric to a deliberately dead block, so the watchdog escape is
 The register map itself — every block, register and field — is documented in
 [`docs/regmap.md`](docs/regmap.md), generated from `control/regmap.json`.
 
-### 3.8 Tops (`rtl/top/`)
+### 3.8 Tops (`rtl/top/`, issue #17)
 
-TODO — populated by issues #3, #17, #20, #24.
+`rtl/top/benchmark_core.sv` is **the design**. The SPEC §4 tops are wrappers
+around it and add no processing: `benchmark_sim_top` adds the SPEC §5 loopback
+the harness proves itself with and the observation taps a scoreboard binds to,
+`benchmark_fabric_top` will add the Quartus boundary (issue #20), and
+`benchmark_device_top` will add the vendor interfaces (issue #24). Nothing
+vendor-specific appears in or below `benchmark_core`.
+
+| Path | Parameters | Issue | Function |
+|---|---|---|---|
+| `rtl/top/benchmark_core.sv` | the SPEC §11 geometry plus `BIN_PAR`, `BEAM_PAR`, `ALIGN_GROUPS`, `NET_SEL`, the kernel construction knobs and the SPEC §5 field widths | #17 | The assembled SPEC §3 pipeline: sources, polyphase, transform, corner turn, alignment, beamforming, power and covariance, detection, and the SPEC §9 register plane wired to every one of them. Owns every crossing between `core_clk`, `history_clk` and `cfg_clk`. |
+| `rtl/top/adc_source.sv` | `N_ANT`, `LANES`, `FFT_SIZE`, stream geometry | #17 | The SPEC §3 synthetic ADC sources: five programmable stimulus modes per antenna, framed to `FFT_SIZE`, with a per-antenna phase gradient. Design RTL and not a testbench, because `benchmark_fabric_top` has no pins to receive samples on. |
+| `rtl/top/cfg_bundle_cdc.sv` | `WIDTH`, `SYNC_STAGES`, `RESET_VALUE`, `REFRESH_W` | #17 | A quasi-static configuration or status BUNDLE across a clock boundary, as one `cdc_handshake` payload. Republished periodically so a destination that resets independently reconverges. |
+| `rtl/top/history_rd_mux.sv` | `N_PORTS`, `REQ_DEPTH`, `ID_DEPTH` | #17 | The alignment network's `BIN_PAR` request ports onto the corner turn's one read port. See §3.8a. |
+| `rtl/top/bin_serializer.sv` | `N_BEAMS`, `BEAM_PAR`, `BIN_PAR` | #17 | The beamformer's beam-major beat re-nested into one beat per frequency bin — the shape both the covariance engine and the detector want. |
+| `rtl/top/power_stage.sv` | `N_BEAMS`, `PIPE_STAGES`, integration geometry | #17 | `I² + Q²` per beam, the SPEC §7.6 time integration of it, and the re-framing of the result as the detector's input stream. |
+| `rtl/top/cfar_bank.sv` | `N_BEAMS`, `MAX_GUARD`, `MAX_REF` | #17 | One `cfar_core` per beam and the round-robin merge of their event streams into the one SPEC §5 stream the packet fabric will consume. |
+| `rtl/control/reg_block_pipeline.sv` | `IDX_W`, geometry (checks only) | #17 | The SPEC §9 window at `0xC000`: the sources' and the alignment network's controls, and the integration-level telemetry and latency echo. |
+
+#### 3.8a One read port, `BIN_PAR` requesters (NORMATIVE)
+
+`align_net` declares `BIN_PAR` history request masters and §3.4a describes them
+as "BIN_PAR independent history read ports". `history_core` exposes exactly
+**one**. The reconciliation is `history_rd_mux`, and the two readings that look
+cheaper are both wrong:
+
+* **`BIN_PAR` `history_core` instances** would hold `BIN_PAR` copies of the same
+  history. The corner turn is already the design's largest memory consumer.
+* **A wider read port** cannot help. §3.4's recorded headroom is headroom on bins
+  that fall on DISTINCT memory lanes, and `lane(b) = b / M`, so at the medium
+  geometry bins 0 and 1 are both in lane 0 — the same bank of every antenna, and
+  a `history_bank` is a simple dual port with one read port. **A group is
+  `BIN_PAR` CONSECUTIVE bins**, so the headroom the alignment network would need
+  is exactly the headroom the banking cannot offer.
+
+What is left is one read port serving `BIN_PAR` requesters at **one bin per
+cycle**, which is the rate §3.4 states the port serves. Three consequences, all
+measured:
+
+1. the alignment network emits one beat every `BIN_PAR` cycles, so its
+   `stat_issue_stall_count` is nonzero by construction;
+2. `PIPE_ALIGN_MULTI` — cycles in which the routing fabric delivered more than
+   one lane at once — is **zero in the pipeline and is expected to be**.
+   Responses return strictly one per cycle. The fabric's simultaneity is
+   exercised where the ports really are independent, in `test_align`;
+3. the whole back end runs at one bin per cycle, which at `BIN_PAR = 2`,
+   `BEAM_PAR = N_BEAMS` is exactly the rate the beamformer, the power stage and
+   the detectors sustain. The pipeline is rate-matched end to end and nothing is
+   throttled by anything but the memory and the detector's per-frame flush.
+
+#### 3.8b The frame straddle (MEASURED — a finding, not a defect)
+
+The corner turn resolves a **relative** frame offset at the instant each request
+is accepted (§3.4). The alignment network issues a group's `BIN_PAR` requests in
+one cycle, but the multiplexer forwards them on CONSECUTIVE cycles. If a frame
+completes in the one cycle between them, the two requests resolve to two
+different absolute frames, the second response's `frame_id` disagrees with the
+entry's, and the network does what SPEC §7.4 built it to do: counts an ORPHAN,
+refuses to write it over a live beat, and reports the lane MISSING when the entry
+times out. The beat is emitted with the absent lane zeroed and
+`ALGN_USER_MISSING` set — repaired, flagged and counted, never silent.
+
+Measured rate at the medium geometry: about one group per frame completion,
+under 2% of beats, and **zero** whenever the source is quiesced (which is why
+every metamorphic and invariance pass sweeps a stopped history). Removing it
+needs an absolute-frame request mode on the read port, which changes issue #15's
+and #16's contracts; it is recorded in DECISIONS.md as work for issue #20.
+
+#### 3.8c Strobes travel inside their bundle (NORMATIVE)
+
+A one-cycle strobe and the levels it acts on must not cross a clock boundary
+independently. `HISTORY_CTRL.DEPTH_APPLY` acts on `HISTORY_DEPTH`; a `cdc_pulse`
+is two synchroniser stages and a `cdc_handshake` is a four-phase round trip, so
+the strobe always arrives first and latches the value that was there *before* the
+write. The observed symptom was a history that applied its reset depth of 1
+instead of the 16 software had just written, and then answered every read out of
+range.
+
+Every configuration strobe is therefore a **toggle bit inside the configuration
+bundle**, edge-detected on the destination side. The strobe and its operands are
+one payload of one handshake and cannot be reordered.
 
 ## 4. Clock domains
 
 Logical domains defined by SPEC §8 (`core_clk`, `history_clk`, `packet_clk`,
 `memory_clk`, `cfg_clk`, `telemetry_clk`) with their benchmark constraint targets.
 
-As of issue #15 two of them carry real design logic:
+As of issue #17 three of them carry real design logic:
 
 | Domain | Constraint | What is in it |
 |---|---|---|
 | `core_clk` | 450 MHz | the whole processing datapath: PFB, FFT, beamformer, covariance, CFAR, and the WRITE side of the history (frame sequencers, rotation policy, the SPEC §9 history window) |
 | `history_clk` | 400 MHz | the READ side of the history: request decode, the registered read fanout, the banks' read ports, the response stream and its three counters |
-| `cfg_clk` | 100 MHz | coefficient and weight programming (issues #10, #12) |
+| `cfg_clk` | 100 MHz | the whole SPEC 9 register plane (issue #17), including coefficient and weight programming (issues #10, #12) |
+
+`cfg_clk` carries the whole SPEC §9 register plane as of issue #17: every window
+`control/regmap.json` declares is instantiated inside `benchmark_core` and wired
+to the block it configures. ARCHITECTURE §6.2 is normative that the plane is
+`cfg_clk` end to end and that the crossings belong to the issue #6 primitives;
+`reg_block_history`'s own header describes its clock as `core_clk`, which
+predates the integration and is superseded — a register block clocked by
+`core_clk` would take `blk_sel`, `index` and `write_data` from a `cfg_clk` fabric
+across an unsynchronised boundary that the CDC inventory could not even see,
+because a fabric is not a tagged primitive.
 
 The remaining domains are constrained in `quartus/constraints/clocks.sdc` and are populated
-by later issues (`packet_clk` by #18, `memory_clk` by #24, `telemetry_clk` by #19).
+by later issues (`packet_clk` by #18's fabric once #19 binds it, `memory_clk` by #24).
+
+**`telemetry_clk` is deliberately empty, and issue #17 records why.** Every
+counter in the design lives in the domain that measures it, and each group of
+them crosses into `cfg_clk` as ONE `cdc_handshake` payload — so a multi-register
+read is a coherent snapshot of a consistent instant, which is what SPEC §9's
+counter groups need. A `telemetry_clk` would insert a SECOND crossing between the
+counter and the register plane and buy nothing at Phase 3: the counters would be
+one further publication stale, the snapshot-coherence argument would have to be
+made twice, and the plane they are read through would still be `cfg_clk`. The
+domain earns its place when there is a telemetry AGGREGATOR to put in it — a
+block that walks counters, timestamps them and emits records — and that block is
+issue #19's. Constraining an empty domain now would also mean
+`quartus/constraints/clocks.sdc` describing a clock with no register on it, which
+SPEC §24 would rightly call an invalid constraint.
 
 The 450:400 ratio is 9:8, and `sim/tests/test_history.cpp` sweeps exactly that ratio and its
 inverse alongside the shared table's gross ratios — a pointer crossing is least likely to be
@@ -1437,5 +1540,50 @@ and are suppressed, so a finite burst yields `TAPS-1` fewer output beats with th
 still in flight. That is the ordinary drain behaviour of a filter whose latency is measured
 in samples; the output *sequence* is identical to the tree's.
 
-TODO — remaining blocks populated by the implementing issues; consolidated by issue #17 and
-issue #20.
+### The assembled pipeline (issue #17, medium configuration)
+
+`N_ANT = 4`, `SAMPLES_PER_CYCLE = 2`, `FFT_SIZE = 256`, `PFB_TAPS = 8`,
+`N_BEAMS = 4`, `HISTORY_FRAMES = 16`, `BIN_PAR = 2`, `BEAM_PAR = 4`,
+`ALIGN_GROUPS = 4`, `NET_SEL = ALGN_NET_CLOS`.
+
+Every number below is **read out of the design** rather than recomputed for the
+table: `benchmark_core` exports its own elaborated latency on `obs_lat_*` and
+through `PIPE_LAT_FRONT` / `PIPE_LAT_BACK`, and the tests print what they read.
+
+| Stage | Domain | Latency | Sustained rate | Set by |
+|---|---|---|---|---|
+| `adc_source` | core | 1 cycle | `LANES` samples/cycle/antenna | the output register |
+| `pfb_bank` | core | 9 cycles + 0 beats | 1 beat/cycle | `MULT_PIPE = 4`, tree over 8 taps |
+| `streaming_fft` | core | 159 beats | 1 beat/cycle | `REORDER = 0`, absorbed by the corner turn |
+| `history_core` write | core | — | never stalls (SPEC 7.3) | `s_ready` tied high |
+| `history_core` read | history | 6 cycles | **1 bin/cycle** | the banking (§3.8a) |
+| `history_rd_mux` | history | 0 (combinational grant) | 1 request/cycle | one read port, `BIN_PAR` requesters |
+| `align_net` | history | 4 cycles | 1 beat / `BIN_PAR` cycles | the multiplexed read port |
+| `stream_cdc` | history→core | ≥ 2 + `SYNC_STAGES` | 1 beat/cycle | async FIFO, `DEPTH = 16` |
+| `beamformer` | core | 9 cycles | 1 beat/cycle in, 1 out (`BEAM_MUX = 1`) | `ADD_REG_EVERY = 1` over 4 antennas |
+| `bin_serializer` | core | 0 (a holding register) | `BIN_PAR` out per beat in | pure re-nesting |
+| `power_stage` | core | 3 cycles | 1 bin/cycle | `power_calc` `PIPE_STAGES = 2` + the output buffer |
+| `cfar_bank` | core | `D` advances + 4 + buffer | 1 bin/cycle within a frame | `D = MAX_GUARD + MAX_REF = 18` |
+
+**End-to-end throughput is one frequency bin per cycle**, set by the corner
+turn's read port and matched by everything after it. Against an ingest of
+`LANES = 2` bins per cycle per antenna, the read side is deliberately half the
+write side: the history absorbs the difference and `HISTORY_OVERWRITE` counts the
+frames the back end did not read. That decoupling is what a corner-turn memory is
+for, and it is the reason nothing in this pipeline back-pressures the converters.
+
+**Measured on live traffic** (`test_pipeline_stress`, seed 1, 3 000 004 core
+cycles over seven clock ratios): 12 491 264 source beats, 720 640 alignment beats,
+1 441 280 power beats, 85 525 detection events, 24 271 history overwrites, 8
+sequence-number wraps, no assertion failure. The alignment network sustained
+0.48 beats per core cycle, which is one bin per cycle at `BIN_PAR = 2` — the
+rate the table predicts.
+
+The per-frame cost of the detector is `D + 5` dead cycles at every frame
+boundary, which at 256 bins and `D = 18` is 9% of the frame period. That is the
+largest single throughput claim in the pipeline and it is a measured consequence
+of the window depth rather than of the integration; the optimisation that removes
+it is a second window bank in `cfar_core` and is a SPEC §18 decision.
+
+TODO — the packet fabric's contribution is populated by issue #19; the full-scale
+figures by issue #20.

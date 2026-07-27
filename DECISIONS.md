@@ -4186,3 +4186,457 @@ permutation of four elements on a four-port slice is not the sixteen-element one
 routes, and the cost of a fixed renaming of point-to-point wires is placement rather than logic.
 The 16-port wiring is the one term here that only a full-fabric compile can settle, and it is the
 term SPEC §7.8's "routing pressure" is really about.
+
+## 2026-07-26 — Medium pipeline integration: one read port, strobes inside their bundle, and three carried-over fixes  (issue #17)
+
+**Context.** SPEC §19 Phase 3 connects the verified kernels into
+`PFB -> FFT -> history -> alignment -> beamformer -> power -> CFAR` at the medium
+configuration and requires continuous frames, random backpressure, configuration
+changes, a long stress test and a coverage report. The blocks were verified
+individually by issues #10–#16; what this issue produces is the design that
+composes them (`rtl/top/benchmark_core.sv`), the seams no single block owns, and
+the regression that checks the composition rather than the parts.
+
+Every decision below was forced by something measured. Nothing here is a
+preference.
+
+---
+
+### Decision 1 — the pipeline is `benchmark_core`, and the tops are wrappers
+
+`rtl/top/benchmark_core.sv` holds the whole SPEC §3 datapath, the SPEC §9
+register plane and every clock crossing. `benchmark_sim_top` adds the SPEC §5
+loopback the harness proves itself with and the observation taps a scoreboard
+binds to; `benchmark_fabric_top` (issue #20) and `benchmark_device_top` (#24) add
+their own boundaries and nothing else.
+
+*Rejected: putting the pipeline in `benchmark_sim_top` and re-instantiating it in
+the fabric top.* Two tops with the same content is two places for the content to
+diverge, and the divergence would appear as "the Quartus build fails a test the
+simulation passes", which is the most expensive failure this project can have.
+The wrapper arrangement makes "the simulated design and the synthesised design
+are the same design" a structural fact.
+
+*Rejected: exposing a C++ sample-injection port.* SPEC §3 puts synthetic ADC
+sources inside the design, because `benchmark_fabric_top` has no pins to receive
+samples on. A simulation-only injection port would make the two builds different
+designs. The harness therefore PROGRAMS a stimulus and PREDICTS what it must have
+produced, and checks that prediction against the `obs_adc_*` tap before it trusts
+anything downstream — which is the first pass of every pipeline test.
+
+---
+
+### Decision 2 — one history read port, `BIN_PAR` requesters (`history_rd_mux`)
+
+`align_net` declares `BIN_PAR` history request masters. `history_core` exposes
+one. Reconciling them is `rtl/top/history_rd_mux.sv`, and the two cheaper
+readings are both wrong:
+
+*Rejected: `BIN_PAR` `history_core` instances.* Each is a complete
+`N_ANT × LANES` bank array holding a complete copy of the history, so `BIN_PAR`
+of them store the same samples `BIN_PAR` times. The corner turn is already the
+design's largest memory consumer (issue #15's full-scale projection).
+
+*Rejected: widening the read port into the headroom §3.4 recorded.* **The
+headroom is not the headroom the alignment network needs, and the arithmetic
+says so.** §3.4's spare bandwidth is on bins that fall on DISTINCT memory lanes,
+and `lane(b) = b / M`; a group is `BIN_PAR` CONSECUTIVE bins, so at the medium
+geometry bins 0 and 1 are both in lane 0 — the same bank of every antenna, and a
+`history_bank` is a simple dual port with one read port. No amount of widening
+serves two consecutive bins in one cycle.
+
+What is left is one port at **one bin per cycle**, which is the rate
+ARCHITECTURE §3.4 states it serves. Three consequences, all recorded rather than
+absorbed:
+
+1. `align_net` emits one beat every `BIN_PAR` cycles, so `stat_issue_stall_count`
+   is nonzero by construction and is not a defect;
+2. `PIPE_ALIGN_MULTI` is **zero and is expected to be**: responses return one per
+   cycle, so the routing fabric cannot deliver two lanes at once however it is
+   built. `test_align` fails a run in which this is zero and is right to — its
+   DUT has genuinely independent ports. The pipeline test REPORTS the number
+   instead, with the argument above, so the claim is falsifiable rather than
+   waived;
+3. the whole back end is rate-matched at one bin per cycle. That is not a
+   coincidence: `BIN_PAR = 2` with `BEAM_PAR = N_BEAMS` makes the beamformer
+   consume one beat every two cycles and the serializer produce one bin per
+   cycle, which is exactly what the memory delivers.
+
+The multiplexer needs **per-port request queues**, not a bare arbiter.
+`align_net` issues all `BIN_PAR` requests of a group in one cycle or none of them
+(`ports_free = &rd_req_ready`), so a round robin that can grant one port per
+cycle would never present all the readys at once and the network would deadlock
+at time zero.
+
+---
+
+### Decision 3 — a grant that has been offered is LOCKED
+
+Both round-robin arbiters this issue added — the read multiplexer's and the CFAR
+bank's event merge — were written first as bare combinational round robins, and
+both were wrong in the same way. While the consumer's `ready` is low, another
+requester becoming valid can land earlier in the rotation, the arbiter re-picks,
+and the payload on the wire changes mid-transfer.
+
+`stream_protocol_checker`'s `a_payload_stable` caught the merge within one frame
+of live traffic. It is a real defect and not a checker artefact: a consumer that
+sampled the first offer and the second acceptance would get two different events
+with one handshake. The read multiplexer's version is worse and quieter —
+`history_core` samples `rd_req_bin` on the cycle it asserts ready, so a changed
+address reads a bin nobody asked for and the identity FIFO's contract silently
+stops holding.
+
+Both now hold the grant from the cycle it is offered until it is accepted. One
+register and one mux each; no deadlock, because the granted source's `valid`
+stays high until its own beat is taken, which is the same SPEC §5 rule one level
+up.
+
+---
+
+### Decision 4 — every configuration strobe travels INSIDE its bundle
+
+**Measured defect.** `HISTORY_CTRL.DEPTH_APPLY` crossed on a `cdc_pulse` while
+`HISTORY_DEPTH` crossed in the configuration bundle on a `cdc_handshake`. A pulse
+is two synchroniser stages; a handshake is a four-phase round trip. The strobe
+therefore ALWAYS arrived first and latched the depth that was there before the
+write: the history applied its reset depth of **1** instead of the 16 software
+had just written, `readable = depth - 2` went to zero, and every subsequent read
+was answered out of range with `HIST_FLAG_OUT_OF_RANGE`. The symptom appeared a
+mile downstream, as an alignment network reporting that every beat it assembled
+was flagged.
+
+Every cfg→datapath strobe is now a **toggle bit in the configuration bundle**,
+edge-detected on the destination side. The strobe and its operands are one
+payload of one handshake and cannot be reordered, by construction rather than by
+timing. Ten `cdc_pulse` instances became ten bits and two edge detectors.
+
+*Rejected: making the pulse wait for the bundle.* That is a handshake between two
+crossings, which is a third crossing with its own failure mode, to buy what one
+bit in an existing payload buys for nothing.
+
+---
+
+### Decision 5 — configuration bundles are REPUBLISHED, not just change-driven
+
+`cfg_bundle_cdc` was first written as a pure change detector: publish when the
+source differs from the last value sent. That is wrong the first time the two
+domains reset independently. A datapath reset — SPEC §9's per-block soft reset,
+or a test restarting the pipeline without losing its programming — returns the
+destination register to its reset value while the source still believes the
+destination holds the programmed bundle, and the two then disagree **forever**.
+The failure looks like a configuration that was never written rather than one
+that was lost.
+
+The bundle is now republished unconditionally every `2**REFRESH_W` source cycles.
+At the SPEC §8 `cfg_clk` of 100 MHz and the default width that is once every 2.6
+microseconds — far below any rate at which configuration changes matter — and the
+cost is a counter and a handshake that would otherwise be idle. Convergence after
+a destination reset is bounded and stated rather than assumed.
+
+---
+
+### Decision 6 — the alignment network's default timeout is wrong for this topology
+
+`algn_default_timeout` is `GROUPS * (read_latency + net_latency) + 16`, derived
+on issue #16's assumption of `BIN_PAR` independent read ports. With one
+multiplexed port a group's requests queue behind every other open group's, so the
+worst wait is `GROUPS * BIN_PAR` forwarded requests plus a round trip. At the
+medium geometry the default is 44 cycles against a worst case near 90, and a live
+run reported 36 missing-sample timeouts and 36 orphaned responses in twenty-four
+sweeps — the detector firing on this design's own arbitration rather than on a
+lost sample.
+
+`benchmark_core` overrides it with that arithmetic and a **factor of two**. The
+factor was measured, not chosen: at a factor of eight a straddled entry (decision
+7) occupies one of `GROUPS` for over a thousand cycles, and a run delivered a
+QUARTER of the sweeps a run at a factor of two did. A generous timeout costs
+head-of-line blocking; a tight one costs false reports. Two is comfortably above
+the worst legitimate wait and comfortably below the point where the cure costs
+more than the disease.
+
+The override is in `benchmark_core` and not in `align_pkg` because it is a
+property of how this top wires the block, not of the block.
+
+---
+
+### Decision 7 — the frame straddle: a measured finding, bounded rather than hidden
+
+The corner turn resolves a **relative** frame offset ("frames back from the
+newest complete frame") at the instant each request is accepted. The alignment
+network issues a group's `BIN_PAR` requests in one cycle; the multiplexer
+forwards them on CONSECUTIVE cycles. If a frame completes in the one cycle
+between them, the two requests resolve to two different ABSOLUTE frames, the
+second response's `frame_id` disagrees with the entry's, and the network does
+exactly what SPEC §7.4 built it to do — counts an ORPHAN, refuses to write it
+over a live beat, and reports the lane MISSING when the entry times out. The beat
+is emitted with the absent lane zeroed and `ALGN_USER_MISSING` set.
+
+**This is the detector working.** Measured rate at the medium geometry: about one
+group per frame completion, under 2% of beats, and **exactly zero whenever the
+source is quiesced** — which is why every metamorphic and invariance pass sweeps a
+stopped history, and why those passes are byte-exact.
+
+The regression therefore BOUNDS it rather than forbidding it: duplicates must be
+zero (no legal upstream can produce one), and missing/orphan/timeout must stay
+under two per completed frame. Removing it entirely needs an ABSOLUTE-frame
+request mode on the read port — the requester would resolve the frame once per
+sweep and ask for it by number — which changes issue #15's read contract and
+issue #16's request port. **Recommended to issue #20**, which owns the full-scale
+freeze and will want it for a reason of its own: at `FFT_SIZE = 1024` a sweep is
+four times longer and the straddle rate scales with it.
+
+---
+
+### Decision 8 — the three carried-over fixes, and what each one is worth
+
+Issue #16's review named two defects and issue #10's named a third. All three
+landed here, each with a test.
+
+**(a) `align_collect`: the verdict and the counter increment are now in different
+cycles.** The measured worst path ran from the routing fabric's output register
+into `u_cnt_dup`'s adder — eleven levels of logic covering the identity
+comparison, the duplicate decision, the population count across lanes and the
+saturating counter's own add, in one combinational cone. 241 MHz, which limited
+the block in BOTH architectures because the cone is in logic they share.
+
+One register stage now sits between the verdict and the counters. It is
+legitimate for one specific reason: **every signal crossing it is telemetry**. The
+entry-write path — which must stay same-cycle, because a response has to land in
+its entry on the cycle it arrives — is `l_write`/`wr_here` and does not pass
+through. And the counts are UNCHANGED, not merely close: `cfg_counter_clear` and
+`cfg_sticky_clear` are delayed by the SAME one cycle, so the interleaving of
+events and clears is preserved exactly. A clear that used to discard an event
+still discards it. Verified by `test_align`'s counter comparisons and by
+`check_counters` in the pipeline suite, which compares every counter against the
+harness's independent tally after millions of beats.
+
+**(b) `align_net`: `cfg_enable` is a registered fanout, not one net.** The omega
+build's worst path was `en_q` into a stage-2 switch register: 0.581 ns of cell
+delay against **5.469 ns of routing**. A 9:1 routing-to-logic ratio is not a logic
+path, it is one register driving most of the block — the SPEC §23 "avoid one
+chip-wide clock enable" case, and the peak long-haul interconnect demand of 137%
+is the router's view of the same fact.
+
+There is now one local copy per lane and per request port, `(* preserve *)
+(* dont_merge *)` so synthesis cannot rebuild the net it replaces. `cfg_enable`
+is quasi-static, so a one-cycle-delayed local copy is semantically identical, and
+every copy has the SAME delay — there is no cycle in which one part of the block
+believes it is enabled and another does not. `align_collect` carries its own copy
+and is fed the RAW enable, so it sees exactly one register stage rather than two.
+Verified by `test_align` and by every pipeline pass, which enable and disable the
+block at frame boundaries thousands of times in the stress run.
+
+**(c) `stream_elastic_buffer`: the storage claim is now ENFORCED.** The header
+claimed distributed registers "by construction", with no attribute, on the
+argument that DEPTH is small and the read is a mux. Issue #10's SPEC §18 sweep
+measured that claim wrong: the eight-lane polyphase bank's output buffer — a
+280-bit payload at depth 11 — came back as **7 M20K + 2 MLAB**, because 3 Kb of
+storage is past the threshold at which Quartus stops taking the hint from the
+shape of the code. Issue #12 found the same seven blocks at the beamformer.
+
+`RAM_STYLE` now selects a LITERAL `ramstyle` attribute in one named generate
+branch — the same device, and for the same reason, as `history_bank`. The default
+is `"regs"` and not `"auto"`, because the module's cost claim is part of its
+contract: an instance placed to break a ready/valid feedback path on a short
+pipeline must not silently become a hard-block access. An instance that genuinely
+wants memory now has to say so at the instantiation, where a reviewer can see it.
+Behaviour is identical for every value — the read stays combinational from
+`mem[rd_ptr_q]`, so the 1-cycle latency and the occupancy contract do not move.
+
+---
+
+### Decision 9 — the register plane is `cfg_clk` end to end, including the history window
+
+`reg_block_history`'s own header describes its clock as `core_clk`.
+ARCHITECTURE §6.2 says the plane is `cfg_clk` throughout and the crossings belong
+to the issue #6 primitives. **The architecture document wins**, and the reason is
+not taste: a register block clocked by `core_clk` would take `blk_sel`, `index`
+and `write_data` from a `cfg_clk` fabric across an unsynchronised boundary that
+the SPEC §8 inventory could not even see, because `reg_fabric` is not a tagged
+primitive. The block is unchanged; only the clock it is given is.
+
+Everything a block needs then crosses as a bundle (decision 4), and everything it
+reports crosses back the same way — which additionally makes a multi-register
+read a COHERENT SNAPSHOT, the property SPEC §9's counter groups need and the one
+a per-signal crossing cannot provide.
+
+---
+
+### Decision 10 — `telemetry_clk` is deliberately empty
+
+SPEC §8 lists six domains; this design populates three. Every counter lives in
+the domain that measures it and crosses to `cfg_clk` in one payload. A
+`telemetry_clk` would insert a SECOND crossing between the counter and the
+register plane and buy nothing at Phase 3: the counters would be one further
+publication stale, the coherence argument would have to be made twice, and the
+plane they are read through would still be `cfg_clk`.
+
+The domain earns its place when there is a telemetry AGGREGATOR to put in it — a
+block that walks counters, timestamps them and emits records — and that block is
+issue #19's. Constraining an empty domain now would also mean
+`quartus/constraints/clocks.sdc` describing a clock with no register on it, which
+SPEC §24 would rightly call an invalid constraint.
+
+---
+
+### Decision 11 — the synthetic sources are design RTL, and what they generate
+
+SPEC §3's first box. Five modes (zero, impulse, constant, tone, LFSR), one
+programmable Q1.15 gain applied per component, and a per-antenna phase gradient.
+
+**The tone comes from the FFT's own committed twiddle table**, decimated at
+elaboration. Using the transform's table rather than a second generated one is
+what makes the tone exact rather than approximately exact: the generator and the
+transform quantise the same unit circle the same way, so a tone at step `k`
+produces a spectral line at one bin and the rest of the spectrum is the table's
+own quantisation floor. Measured: a tone at bin 64 gives 1 073 676 289 on the
+steered beam and **0** in the strongest other bin.
+
+**`cfg_ant_step` is what makes the beamformer's job real.** A source that gave
+every antenna the same samples would let a broken alignment network pass every
+beamforming test. With the per-antenna step at `FFT_SIZE / N_ANT` the weight
+matrix is a DFT over the array: beam `b` sums coherently for one wavefront and to
+EXACTLY ZERO for every other, which is a check with no threshold in it.
+
+The LFSR seed is mixed with the antenna index by the golden-ratio constant, for
+the same reason: one shared seed would give every antenna the same samples.
+
+*Rejected: a channel model.* No noise, no multipath, no Doppler. A CFAR detection
+test wants an injected target on a controlled floor, and "controlled floor" here
+means the LFSR mode at a programmed gain, whose statistics the test computes
+rather than assumes. Gaussian noise would need a Box-Muller or a CLT sum in the
+datapath to buy a floor the test would have to characterise anyway.
+
+---
+
+### Decision 12 — `BEAM_MUX = 1` is a checked restriction, not an assumption
+
+`bin_serializer` reads one bin's whole beam vector from ONE beamformer beat. With
+`BEAM_PAR < N_BEAMS` a bin's beams are spread over `BEAM_MUX` consecutive beats
+and that is not available in any single beat; serialising a multiplexed stream
+needs a `BEAM_MUX × BIN_PAR × BEAM_PAR` reorder buffer with its own framing
+argument.
+
+It is not built, because at every SPEC §11 size through `large` the beamformer is
+elaborated with `BEAM_PAR = N_BEAMS`. The restriction is therefore an
+ELABORATION CHECK rather than a limitation — and it is a check rather than a
+comment because the full-scale freeze (issue #20) is where `BEAM_PAR` is chosen
+against measured DSP counts, which is exactly where a silent assumption would be
+discovered by a wrong answer.
+
+---
+
+### Decision 13 — the regression checks each stage against its OWN observed input
+
+The pipeline suite compares every stage's output against the C++ model applied to
+that stage's **observed input**, and then checks the chain end to end on top of
+that.
+
+*Rejected: comparing only the detection events.* Against an eight-stage pipeline
+that reports "the answer is wrong" and nothing else, which is a week of
+bisecting. With per-stage comparison a failure names the stage; the end-to-end
+pass still runs, because a set of individually correct stages wired together in
+the wrong order would pass every per-stage check.
+
+*Rejected: comparing by position.* Every comparison is keyed by IDENTITY — the
+antenna and frame index for the front end, the response's own absolute `frame_id`
+for the corner turn, the bin index inside a beat for the alignment network,
+`stream_id` and `seq` for the back end. The alignment beats are observed in
+`history_clk` and the beamformer beats in `core_clk` with an async FIFO between
+them, so the two monitors are never at the same point in the stream; comparing by
+index assumes the crossing is empty and produces a mismatch on the first beat
+that says nothing about the arithmetic. This was written the wrong way first and
+the symptom was exactly that.
+
+Three test-methodology findings, recorded because each one cost a debugging pass:
+
+* **the alignment tap must be sampled on `history_clk`.** It was sampled on
+  `core_clk` first; at a non-unit clock ratio that sees each transfer an
+  arbitrary number of times or not at all, which looks exactly like a lost beat.
+* **frame 0 is not comparable.** The polyphase delay line is a datapath array and
+  is deliberately not reset (SPEC §23), so after a reset it holds whatever ran
+  before it while the model starts empty. The two agree from frame 1, where both
+  hold the tail of frame 0.
+* **a metamorphic property needs its precondition.** SPEC §13.2 says "scaling an
+  UNSATURATED input scales the output". The scaling pass first used a full-scale
+  tone, which on four antennas sums to four times full scale in the beamformer
+  and saturates; two saturated results have a ratio of one however the input was
+  scaled, and the pass reported 1.000000. At an eighth of full scale it reports
+  4.0000.
+
+---
+
+### Decision 14 — bank programming needs a restart, and why that is not a workaround
+
+A bank swap takes effect at a start-of-frame beat and not before, a write aimed
+at the ACTIVE bank is refused, and both stores power up as zeros. Those three
+rules together mean there is no way to have the very first frame filtered by a
+programmed set in one pass: bank 0 is active at reset and cannot be written, and
+bank 1 cannot become active until a frame boundary has gone by — which is one
+frame filtered by zeros.
+
+The tests therefore load bank 1, run briefly to retire the swap, load bank 0 with
+the same values, and reset. Coefficient STORAGE survives a reset by design (only
+the control state resets), which is what makes the last step work rather than
+undo the first three. The cost is one extra warm-up per pass; the benefit is that
+frame 0 of the captured run is a frame the model can predict exactly.
+
+Two register defaults changed to make this sound:
+
+* **`PIPE_CTRL.SRC_RUN` and `ALIGN_RUN` now reset to 0.** A pipeline that started
+  streaming before its coefficients, its weights and its threshold were
+  programmed would spend its first frames filtering with a bank of zeros and
+  detecting against an unprogrammed threshold, and would leave the transform's
+  delay feedbacks holding samples nobody can account for. The block ENABLES still
+  reset set, so the datapath is alive and nothing is optimised away; the TAPS
+  reset closed so that what flows through them is what software asked for.
+
+---
+
+### Decision 15 — two integration defects the composition found in verified blocks
+
+Both were invisible to the per-block suites and are worth recording as evidence
+that integration testing earns its place.
+
+**`hw_w_wr_busy` tied off.** `WEIGHT_STATUS.WR_BUSY` is the weight plane's flow
+control: a write crosses `cfg_clk` to `core_clk` on a four-phase handshake, and a
+second `WEIGHT_DATA` write issued while the first is in flight is DROPPED by the
+bank. The first integration tied the status bit to zero, so software was told the
+plane was always free — a bank load wrote its first weight and silently lost every
+one after it. The symptom was a beamformer whose matrix was one weight and
+fifteen zeros, which looks exactly like a beam that does not steer, and it was
+found by the "the tone must appear in the RIGHT beam" pass rather than by any
+register-plane check.
+
+**A bank load is not finished when its last write returns.** The last transfer is
+still crossing; anything the caller does next — request a swap, reset the design —
+happens on top of it. The symptom was one bank whose last few entries were
+whatever was there before. The loaders now wait for `WR_BUSY` to clear before
+returning, so "the bank is loaded" is true when the call returns.
+
+**`fft_core` at `SAMPLES_PER_CYCLE = 1`.** Four merge-level flag sites are
+declared for a merge that does not exist at one lane, and nothing read them. No
+build reached that path until this issue elaborated the pipeline at the SPEC §11
+`tiny` size; `make lint` now covers it. Named sinks, no functional change.
+
+---
+
+### Measured results (medium configuration, seed 1)
+
+| | |
+|---|---|
+| `make lint` | 16 tops, zero unwaived warnings |
+| `make sim-tiny` | PASS, seeds 1 2 3 |
+| `make sim-medium` | PASS, seeds 1 2 3, 6 min 21 s |
+| `make sim-stress` | PASS, 3 000 004 core cycles, 2 min 57 s at 3M |
+| CDC inventory | 127 crossings, 0 unknown |
+| source beats (stress) | 12 491 264 |
+| alignment beats (stress) | 720 640 |
+| detection events (stress) | 85 525 |
+| history overwrites (stress) | 24 271 |
+| sequence-number wraps (stress) | 8 |
+| impulse response | flat, every bin identical |
+| tone at bin 64 | 1 073 676 289 on the steered beam, 0 elsewhere |
+| beam orthogonality | all four steered beams see the identical integer |
+| scaling | half amplitude gives a power ratio of 4.0000 |
+

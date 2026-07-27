@@ -21,15 +21,15 @@ package regmap_pkg;
   localparam int unsigned REGMAP_STRB_W = 4;
   localparam int unsigned REGMAP_WINDOW_BYTES = 4096;
   localparam int unsigned REGMAP_WINDOW_W = 12;
-  localparam int unsigned REGMAP_N_BLOCKS = 12;
-  localparam int unsigned REGMAP_N_BLOCKS_IMPL = 11;
-  localparam int unsigned REGMAP_N_REGS_TOTAL = 100;
-  localparam logic [31:0] REGMAP_BLOCK_MASK = 32'h00000EFF;
+  localparam int unsigned REGMAP_N_BLOCKS = 13;
+  localparam int unsigned REGMAP_N_BLOCKS_IMPL = 12;
+  localparam int unsigned REGMAP_N_REGS_TOTAL = 123;
+  localparam logic [31:0] REGMAP_BLOCK_MASK = 32'h00001EFF;
 
   // ---- implemented block windows, in fabric port order ----
   // The fabric decodes one master port onto these windows; index i here is index i
   // on every per-block port array of rtl/control/reg_fabric.sv.
-  localparam logic [REGMAP_N_BLOCKS_IMPL*REGMAP_ADDR_W-1:0] REGMAP_IMPL_BASE = {16'hB000, 16'hA000, 16'h9000, 16'h7000, 16'h6000, 16'h5000, 16'h4000, 16'h3000, 16'h2000, 16'h1000, 16'h0000};
+  localparam logic [REGMAP_N_BLOCKS_IMPL*REGMAP_ADDR_W-1:0] REGMAP_IMPL_BASE = {16'hC000, 16'hB000, 16'hA000, 16'h9000, 16'h7000, 16'h6000, 16'h5000, 16'h4000, 16'h3000, 16'h2000, 16'h1000, 16'h0000};
   //   [0] id            base 0x0000  4 registers
   //   [1] build_params  base 0x1000  12 registers
   //   [2] ctrl          base 0x2000  4 registers
@@ -41,6 +41,7 @@ package regmap_pkg;
   //   [8] covar         base 0x9000  7 registers
   //   [9] history       base 0xA000  13 registers
   //   [10] packet        base 0xB000  12 registers
+  //   [11] pipeline      base 0xC000  23 registers
 
   // -------------------------------------------------------------------------
   // Block 0: id — implemented
@@ -132,9 +133,9 @@ package regmap_pkg;
 
   // reset value of the stored bits
   localparam logic [REGMAP_ID_N_REGS*32-1:0] REGMAP_ID_RESET = {
-      32'h00000EFF,  // [3]
-      32'h1020640C,  // [2]
-      32'h01070001,  // [1]
+      32'h00001EFF,  // [3]
+      32'h10207B0D,  // [2]
+      32'h01090001,  // [1]
       32'h52414441  // [0]
   };
   // bits a software write may set or clear (RW)
@@ -3110,6 +3111,572 @@ package regmap_pkg;
       32'hFFFFFFFF,  // [3]
       32'hFFFFFFFF,  // [2]
       32'hFFFFFFFF,  // [1]
+      32'h00000000  // [0]
+  };
+
+  // -------------------------------------------------------------------------
+  // Block 12: pipeline — implemented
+  // SPEC 9 groups: Per-block enable and reset; Stream counters; Stall counters; Frame counts
+  // The SPEC 19 Phase 3 integration window (rtl/top/benchmark_core.sv, issue #17). It
+  // exists because two blocks in the assembled pipeline have no window of their own and
+  // both need one: the SPEC 3 synthetic ADC sources, which are design RTL rather than a
+  // testbench because benchmark_fabric_top has no pins to receive samples on, and the
+  // SPEC 7.4 alignment network, whose issue deliberately left its configuration on
+  // ports for the integration to bind. The window also carries the integration-level
+  // telemetry that belongs to no single block - the read-port multiplexer's arbitration
+  // counters, the delivered-event count, and the elaborated geometry and per-stage
+  // latency, so that the latency and throughput table in a pull request is a readback
+  // out of the design rather than a claim about it. CLOCK DOMAINS: every register here
+  // is in cfg_clk. The source and event counters are produced in core_clk and the
+  // alignment counters in history_clk; each group crosses back through one
+  // rtl/top/cfg_bundle_cdc.sv handshake carrying the whole group at once, so the
+  // counters within a group are always a consistent snapshot of each other and are at
+  // most one crossing stale. The window is at 0xC000 and not at 0x8000: that window is
+  // reserved for the snapshot and debug group, which issue #19 owns, and taking it here
+  // would force that issue to move.
+  // -------------------------------------------------------------------------
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_PIPELINE_BASE = 16'hC000;
+  localparam int unsigned REGMAP_PIPELINE_SIZE = 4096;
+  localparam int unsigned REGMAP_PIPELINE_N_REGS = 23;
+  localparam int unsigned REGMAP_PIPELINE_INDEX = 11;  // fabric port index
+
+  // PIPE_CTRL @ 0xC000 (MIXED)
+  //   Master controls for the two integration-level blocks that have no window of their
+  //   own: the SPEC 3 synthetic ADC sources (rtl/top/adc_source.sv) and the SPEC 7.4
+  //   alignment network (rtl/align/align_net.sv). Every field here is in cfg_clk and
+  //   reaches its consumer through rtl/top/cfg_bundle_cdc.sv, which crosses the whole
+  //   word as ONE handshake payload rather than as independently synchronised bits
+  //   (SPEC 8).
+  //   [0:0] SRC_ENABLE (RW)
+  //       Enable the synthetic ADC sources. Resets set: a build with no software
+  //       present must still produce traffic, or the Quartus benchmark optimises the
+  //       datapath away.
+  //   [1:1] SRC_RUN (RW)
+  //       Sweep gate for the sources. Clearing it stops them AT A FRAME BOUNDARY, never
+  //       mid-frame: a truncated frame is a permanent bin shift in the history rather
+  //       than a missing beat. RESETS TO ZERO, unlike SRC_ENABLE: a pipeline that
+  //       started streaming before its coefficient bank, its beam weights and its
+  //       detector threshold were programmed would spend its first frames filtering
+  //       with a bank of zeros and detecting against an unprogrammed threshold, and
+  //       would leave the transform's delay feedbacks holding samples nobody can
+  //       account for. The block enable resets set so the datapath is alive and nothing
+  //       is optimised away; the TAP resets closed so that what flows through it is
+  //       what software asked for.
+  //   [2:2] ALIGN_ENABLE (RW)
+  //       Enable the alignment network. Distinct from ALIGN_RUN and not interchangeable
+  //       with it: clearing ENABLE also stops the block accepting history responses, so
+  //       a block disabled with work in flight strands its own reassembly entries.
+  //   [3:3] ALIGN_RUN (RW)
+  //       Sweep gate for the alignment network. Stops at the next frame boundary.
+  //       Resets to zero for the same reason SRC_RUN does, and for one more of its own:
+  //       a sweep issued against a corner turn with no complete frame is answered
+  //       out-of-range on every response, which is correct behaviour that costs a
+  //       sticky fault bit and a counter nobody asked for.
+  //   [4:4] ALIGN_PARTIAL (RW)
+  //       Keep whatever arrived of an incomplete group instead of zeroing the absent
+  //       lanes. A diagnosis mode; the beat is emitted and flagged either way.
+  //   [5:5] ALIGN_FORCE_UNSAFE (RW)
+  //       SPEC 9 tag-collision injection in the alignment network. Edge armed; not a
+  //       production mode.
+  //   [8:8] COUNTER_CLEAR (RWP)
+  //       Zero every counter in this window.
+  //   [9:9] STATUS_CLEAR (RWP)
+  //       Clear the alignment network's sticky fault vector.
+  //   [10:10] SRC_RESEED (RWP)
+  //       Load PIPE_SRC_SEED into every source's LFSR. A zero seed is substituted with
+  //       one, because zero is the LFSR's absorbing state and the register plane has no
+  //       way to refuse a write.
+  localparam int unsigned REGMAP_PIPELINE_PIPE_CTRL_INDEX = 0;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_PIPELINE_PIPE_CTRL_ADDR = 16'hC000;
+  localparam int unsigned REGMAP_PIPELINE_PIPE_CTRL_SRC_ENABLE_LSB = 0;
+  localparam int unsigned REGMAP_PIPELINE_PIPE_CTRL_SRC_ENABLE_WIDTH = 1;
+  localparam logic [31:0] REGMAP_PIPELINE_PIPE_CTRL_SRC_ENABLE_MASK = 32'h00000001;
+  localparam int unsigned REGMAP_PIPELINE_PIPE_CTRL_SRC_RUN_LSB = 1;
+  localparam int unsigned REGMAP_PIPELINE_PIPE_CTRL_SRC_RUN_WIDTH = 1;
+  localparam logic [31:0] REGMAP_PIPELINE_PIPE_CTRL_SRC_RUN_MASK = 32'h00000002;
+  localparam int unsigned REGMAP_PIPELINE_PIPE_CTRL_ALIGN_ENABLE_LSB = 2;
+  localparam int unsigned REGMAP_PIPELINE_PIPE_CTRL_ALIGN_ENABLE_WIDTH = 1;
+  localparam logic [31:0] REGMAP_PIPELINE_PIPE_CTRL_ALIGN_ENABLE_MASK = 32'h00000004;
+  localparam int unsigned REGMAP_PIPELINE_PIPE_CTRL_ALIGN_RUN_LSB = 3;
+  localparam int unsigned REGMAP_PIPELINE_PIPE_CTRL_ALIGN_RUN_WIDTH = 1;
+  localparam logic [31:0] REGMAP_PIPELINE_PIPE_CTRL_ALIGN_RUN_MASK = 32'h00000008;
+  localparam int unsigned REGMAP_PIPELINE_PIPE_CTRL_ALIGN_PARTIAL_LSB = 4;
+  localparam int unsigned REGMAP_PIPELINE_PIPE_CTRL_ALIGN_PARTIAL_WIDTH = 1;
+  localparam logic [31:0] REGMAP_PIPELINE_PIPE_CTRL_ALIGN_PARTIAL_MASK = 32'h00000010;
+  localparam int unsigned REGMAP_PIPELINE_PIPE_CTRL_ALIGN_FORCE_UNSAFE_LSB = 5;
+  localparam int unsigned REGMAP_PIPELINE_PIPE_CTRL_ALIGN_FORCE_UNSAFE_WIDTH = 1;
+  localparam logic [31:0] REGMAP_PIPELINE_PIPE_CTRL_ALIGN_FORCE_UNSAFE_MASK = 32'h00000020;
+  localparam int unsigned REGMAP_PIPELINE_PIPE_CTRL_COUNTER_CLEAR_LSB = 8;
+  localparam int unsigned REGMAP_PIPELINE_PIPE_CTRL_COUNTER_CLEAR_WIDTH = 1;
+  localparam logic [31:0] REGMAP_PIPELINE_PIPE_CTRL_COUNTER_CLEAR_MASK = 32'h00000100;
+  localparam int unsigned REGMAP_PIPELINE_PIPE_CTRL_STATUS_CLEAR_LSB = 9;
+  localparam int unsigned REGMAP_PIPELINE_PIPE_CTRL_STATUS_CLEAR_WIDTH = 1;
+  localparam logic [31:0] REGMAP_PIPELINE_PIPE_CTRL_STATUS_CLEAR_MASK = 32'h00000200;
+  localparam int unsigned REGMAP_PIPELINE_PIPE_CTRL_SRC_RESEED_LSB = 10;
+  localparam int unsigned REGMAP_PIPELINE_PIPE_CTRL_SRC_RESEED_WIDTH = 1;
+  localparam logic [31:0] REGMAP_PIPELINE_PIPE_CTRL_SRC_RESEED_MASK = 32'h00000400;
+
+  // PIPE_SRC_MODE @ 0xC004 (RW)
+  //   Stimulus selector for every antenna source. One mode for all of them: the
+  //   antennas differ by their PHASE (PIPE_SRC_TONE.ANT_STEP), not by their kind of
+  //   signal, because a beamformer's input is one wavefront seen from several
+  //   positions.
+  //   [2:0] MODE (RW)
+  //       0 ZERO, 1 IMPULSE, 2 CONST, 3 TONE, 4 LFSR. Resets to LFSR so an unprogrammed
+  //       build exercises the whole datapath with reproducible pseudo-random traffic.
+  localparam int unsigned REGMAP_PIPELINE_PIPE_SRC_MODE_INDEX = 1;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_PIPELINE_PIPE_SRC_MODE_ADDR = 16'hC004;
+  localparam int unsigned REGMAP_PIPELINE_PIPE_SRC_MODE_MODE_LSB = 0;
+  localparam int unsigned REGMAP_PIPELINE_PIPE_SRC_MODE_MODE_WIDTH = 3;
+  localparam logic [31:0] REGMAP_PIPELINE_PIPE_SRC_MODE_MODE_MASK = 32'h00000007;
+
+  // PIPE_SRC_GAIN @ 0xC008 (RW)
+  //   Amplitude applied to every generated sample, as a Q1.15 scale on each component
+  //   independently (NOT a complex multiply - a complex gain would rotate the tone and
+  //   correlate the two halves of the random mode).
+  //   [15:0] GAIN (RW)
+  //       Q1.15 scale. 0x7FFF is unity to within one LSB; Q1.15 cannot represent 1.0
+  //       (NUMERICS.md).
+  //   [31:16] GAIN_IM (RW)
+  //       Carried for symmetry with every other complex register word and deliberately
+  //       unused by the source. See rtl/top/adc_source.sv.
+  localparam int unsigned REGMAP_PIPELINE_PIPE_SRC_GAIN_INDEX = 2;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_PIPELINE_PIPE_SRC_GAIN_ADDR = 16'hC008;
+  localparam int unsigned REGMAP_PIPELINE_PIPE_SRC_GAIN_GAIN_LSB = 0;
+  localparam int unsigned REGMAP_PIPELINE_PIPE_SRC_GAIN_GAIN_WIDTH = 16;
+  localparam logic [31:0] REGMAP_PIPELINE_PIPE_SRC_GAIN_GAIN_MASK = 32'h0000FFFF;
+  localparam int unsigned REGMAP_PIPELINE_PIPE_SRC_GAIN_GAIN_IM_LSB = 16;
+  localparam int unsigned REGMAP_PIPELINE_PIPE_SRC_GAIN_GAIN_IM_WIDTH = 16;
+  localparam logic [31:0] REGMAP_PIPELINE_PIPE_SRC_GAIN_GAIN_IM_MASK = 32'hFFFF0000;
+
+  // PIPE_SRC_TONE @ 0xC00C (RW)
+  //   Tone geometry, in units of FFT bins. Used only in TONE mode. A stimulus at step k
+  //   produces a spectral line at bin (FFT_SIZE - k) mod FFT_SIZE, not at k: the
+  //   generator's table and the transform's kernel are the same exp(-j2*pi*e/N), so the
+  //   correlation peaks at the conjugate index.
+  //   [15:0] TONE_STEP (RW)
+  //       Phase increment per sample, in bins.
+  //   [31:16] ANT_STEP (RW)
+  //       Additional phase per antenna index, in bins. This is the plane-wave arrival
+  //       angle: it is what makes the beamformer's job real, because a source giving
+  //       every antenna the same samples would let a broken alignment network pass
+  //       every beamforming test.
+  localparam int unsigned REGMAP_PIPELINE_PIPE_SRC_TONE_INDEX = 3;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_PIPELINE_PIPE_SRC_TONE_ADDR = 16'hC00C;
+  localparam int unsigned REGMAP_PIPELINE_PIPE_SRC_TONE_TONE_STEP_LSB = 0;
+  localparam int unsigned REGMAP_PIPELINE_PIPE_SRC_TONE_TONE_STEP_WIDTH = 16;
+  localparam logic [31:0] REGMAP_PIPELINE_PIPE_SRC_TONE_TONE_STEP_MASK = 32'h0000FFFF;
+  localparam int unsigned REGMAP_PIPELINE_PIPE_SRC_TONE_ANT_STEP_LSB = 16;
+  localparam int unsigned REGMAP_PIPELINE_PIPE_SRC_TONE_ANT_STEP_WIDTH = 16;
+  localparam logic [31:0] REGMAP_PIPELINE_PIPE_SRC_TONE_ANT_STEP_MASK = 32'hFFFF0000;
+
+  // PIPE_SRC_SEED @ 0xC010 (RW)
+  //   Seed loaded into every source's 32-bit Galois LFSR by PIPE_CTRL.SRC_RESEED. Every
+  //   antenna starts from the same seed and they diverge only through their own
+  //   advance, which keeps a run reproducible from one number.
+  //   [31:0] SEED (RW)
+  //       LFSR seed.
+  localparam int unsigned REGMAP_PIPELINE_PIPE_SRC_SEED_INDEX = 4;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_PIPELINE_PIPE_SRC_SEED_ADDR = 16'hC010;
+  localparam int unsigned REGMAP_PIPELINE_PIPE_SRC_SEED_SEED_LSB = 0;
+  localparam int unsigned REGMAP_PIPELINE_PIPE_SRC_SEED_SEED_WIDTH = 32;
+  localparam logic [31:0] REGMAP_PIPELINE_PIPE_SRC_SEED_SEED_MASK = 32'hFFFFFFFF;
+
+  // PIPE_ALIGN_CFG @ 0xC014 (RW)
+  //   Alignment-network sweep parameters. FRAME_OFF is latched at the start of every
+  //   sweep, so a frame is always assembled from ONE history offset even if software
+  //   changes it mid-frame.
+  //   [15:0] FRAME_OFF (RW)
+  //       Frames back from the newest complete frame. 0 is the newest. Out of range is
+  //       reported by the history rather than truncated here.
+  //   [23:16] LANE_STALL (RW)
+  //       Per-lane stall mask for the reassembly buffer. A test hook; zero in normal
+  //       operation.
+  localparam int unsigned REGMAP_PIPELINE_PIPE_ALIGN_CFG_INDEX = 5;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_PIPELINE_PIPE_ALIGN_CFG_ADDR = 16'hC014;
+  localparam int unsigned REGMAP_PIPELINE_PIPE_ALIGN_CFG_FRAME_OFF_LSB = 0;
+  localparam int unsigned REGMAP_PIPELINE_PIPE_ALIGN_CFG_FRAME_OFF_WIDTH = 16;
+  localparam logic [31:0] REGMAP_PIPELINE_PIPE_ALIGN_CFG_FRAME_OFF_MASK = 32'h0000FFFF;
+  localparam int unsigned REGMAP_PIPELINE_PIPE_ALIGN_CFG_LANE_STALL_LSB = 16;
+  localparam int unsigned REGMAP_PIPELINE_PIPE_ALIGN_CFG_LANE_STALL_WIDTH = 8;
+  localparam logic [31:0] REGMAP_PIPELINE_PIPE_ALIGN_CFG_LANE_STALL_MASK = 32'h00FF0000;
+
+  // PIPE_SRC_BEATS @ 0xC018 (ROHW)
+  //   Beats delivered by the synthetic sources, summed over antennas.
+  //   [31:0] VALUE (ROHW)
+  //       Saturating count. Beats delivered by the synthetic sources, summed over
+  //       antennas.
+  localparam int unsigned REGMAP_PIPELINE_PIPE_SRC_BEATS_INDEX = 6;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_PIPELINE_PIPE_SRC_BEATS_ADDR = 16'hC018;
+  localparam int unsigned REGMAP_PIPELINE_PIPE_SRC_BEATS_VALUE_LSB = 0;
+  localparam int unsigned REGMAP_PIPELINE_PIPE_SRC_BEATS_VALUE_WIDTH = 32;
+  localparam logic [31:0] REGMAP_PIPELINE_PIPE_SRC_BEATS_VALUE_MASK = 32'hFFFFFFFF;
+
+  // PIPE_SRC_FRAMES @ 0xC01C (ROHW)
+  //   Frames completed by the synthetic sources, summed over antennas.
+  //   [31:0] VALUE (ROHW)
+  //       Saturating count. Frames completed by the synthetic sources, summed over
+  //       antennas.
+  localparam int unsigned REGMAP_PIPELINE_PIPE_SRC_FRAMES_INDEX = 7;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_PIPELINE_PIPE_SRC_FRAMES_ADDR = 16'hC01C;
+  localparam int unsigned REGMAP_PIPELINE_PIPE_SRC_FRAMES_VALUE_LSB = 0;
+  localparam int unsigned REGMAP_PIPELINE_PIPE_SRC_FRAMES_VALUE_WIDTH = 32;
+  localparam logic [31:0] REGMAP_PIPELINE_PIPE_SRC_FRAMES_VALUE_MASK = 32'hFFFFFFFF;
+
+  // PIPE_SRC_STALLS @ 0xC020 (ROHW)
+  //   Cycles in which a source wanted to deliver a beat and could not.
+  //   [31:0] VALUE (ROHW)
+  //       Saturating count. Cycles in which a source wanted to deliver a beat and could
+  //       not.
+  localparam int unsigned REGMAP_PIPELINE_PIPE_SRC_STALLS_INDEX = 8;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_PIPELINE_PIPE_SRC_STALLS_ADDR = 16'hC020;
+  localparam int unsigned REGMAP_PIPELINE_PIPE_SRC_STALLS_VALUE_LSB = 0;
+  localparam int unsigned REGMAP_PIPELINE_PIPE_SRC_STALLS_VALUE_WIDTH = 32;
+  localparam logic [31:0] REGMAP_PIPELINE_PIPE_SRC_STALLS_VALUE_MASK = 32'hFFFFFFFF;
+
+  // PIPE_ALIGN_BEATS @ 0xC024 (ROHW)
+  //   Beamformer input beats emitted by the alignment network.
+  //   [31:0] VALUE (ROHW)
+  //       Saturating count. Beamformer input beats emitted by the alignment network.
+  localparam int unsigned REGMAP_PIPELINE_PIPE_ALIGN_BEATS_INDEX = 9;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_PIPELINE_PIPE_ALIGN_BEATS_ADDR = 16'hC024;
+  localparam int unsigned REGMAP_PIPELINE_PIPE_ALIGN_BEATS_VALUE_LSB = 0;
+  localparam int unsigned REGMAP_PIPELINE_PIPE_ALIGN_BEATS_VALUE_WIDTH = 32;
+  localparam logic [31:0] REGMAP_PIPELINE_PIPE_ALIGN_BEATS_VALUE_MASK = 32'hFFFFFFFF;
+
+  // PIPE_ALIGN_STALLS @ 0xC028 (ROHW)
+  //   Cycles the alignment scheduler could not issue a group.
+  //   [31:0] VALUE (ROHW)
+  //       Saturating count. Cycles the alignment scheduler could not issue a group.
+  localparam int unsigned REGMAP_PIPELINE_PIPE_ALIGN_STALLS_INDEX = 10;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_PIPELINE_PIPE_ALIGN_STALLS_ADDR = 16'hC028;
+  localparam int unsigned REGMAP_PIPELINE_PIPE_ALIGN_STALLS_VALUE_LSB = 0;
+  localparam int unsigned REGMAP_PIPELINE_PIPE_ALIGN_STALLS_VALUE_WIDTH = 32;
+  localparam logic [31:0] REGMAP_PIPELINE_PIPE_ALIGN_STALLS_VALUE_MASK = 32'hFFFFFFFF;
+
+  // PIPE_ALIGN_MISSING @ 0xC02C (ROHW)
+  //   Lanes that never delivered a response and were resolved by timeout.
+  //   [31:0] VALUE (ROHW)
+  //       Saturating count. Lanes that never delivered a response and were resolved by
+  //       timeout.
+  localparam int unsigned REGMAP_PIPELINE_PIPE_ALIGN_MISSING_INDEX = 11;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_PIPELINE_PIPE_ALIGN_MISSING_ADDR = 16'hC02C;
+  localparam int unsigned REGMAP_PIPELINE_PIPE_ALIGN_MISSING_VALUE_LSB = 0;
+  localparam int unsigned REGMAP_PIPELINE_PIPE_ALIGN_MISSING_VALUE_WIDTH = 32;
+  localparam logic [31:0] REGMAP_PIPELINE_PIPE_ALIGN_MISSING_VALUE_MASK = 32'hFFFFFFFF;
+
+  // PIPE_ALIGN_DUP @ 0xC030 (ROHW)
+  //   Responses that arrived for a lane already filled.
+  //   [31:0] VALUE (ROHW)
+  //       Saturating count. Responses that arrived for a lane already filled.
+  localparam int unsigned REGMAP_PIPELINE_PIPE_ALIGN_DUP_INDEX = 12;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_PIPELINE_PIPE_ALIGN_DUP_ADDR = 16'hC030;
+  localparam int unsigned REGMAP_PIPELINE_PIPE_ALIGN_DUP_VALUE_LSB = 0;
+  localparam int unsigned REGMAP_PIPELINE_PIPE_ALIGN_DUP_VALUE_WIDTH = 32;
+  localparam logic [31:0] REGMAP_PIPELINE_PIPE_ALIGN_DUP_VALUE_MASK = 32'hFFFFFFFF;
+
+  // PIPE_ALIGN_ORPHAN @ 0xC034 (ROHW)
+  //   Responses whose identity matched no open reassembly entry.
+  //   [31:0] VALUE (ROHW)
+  //       Saturating count. Responses whose identity matched no open reassembly entry.
+  localparam int unsigned REGMAP_PIPELINE_PIPE_ALIGN_ORPHAN_INDEX = 13;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_PIPELINE_PIPE_ALIGN_ORPHAN_ADDR = 16'hC034;
+  localparam int unsigned REGMAP_PIPELINE_PIPE_ALIGN_ORPHAN_VALUE_LSB = 0;
+  localparam int unsigned REGMAP_PIPELINE_PIPE_ALIGN_ORPHAN_VALUE_WIDTH = 32;
+  localparam logic [31:0] REGMAP_PIPELINE_PIPE_ALIGN_ORPHAN_VALUE_MASK = 32'hFFFFFFFF;
+
+  // PIPE_ALIGN_TIMEOUT @ 0xC038 (ROHW)
+  //   Reassembly entries resolved by the missing-sample timeout.
+  //   [31:0] VALUE (ROHW)
+  //       Saturating count. Reassembly entries resolved by the missing-sample timeout.
+  localparam int unsigned REGMAP_PIPELINE_PIPE_ALIGN_TIMEOUT_INDEX = 14;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_PIPELINE_PIPE_ALIGN_TIMEOUT_ADDR = 16'hC038;
+  localparam int unsigned REGMAP_PIPELINE_PIPE_ALIGN_TIMEOUT_VALUE_LSB = 0;
+  localparam int unsigned REGMAP_PIPELINE_PIPE_ALIGN_TIMEOUT_VALUE_WIDTH = 32;
+  localparam logic [31:0] REGMAP_PIPELINE_PIPE_ALIGN_TIMEOUT_VALUE_MASK = 32'hFFFFFFFF;
+
+  // PIPE_ALIGN_MULTI @ 0xC03C (ROHW)
+  //   Cycles the routing network delivered more than one lane at once. THE throughput
+  //   statement SPEC 7.4's architecture comparison rests on: a run in which this stayed
+  //   at zero never asked the network to do anything a bundle of wires could not do.
+  //   [31:0] VALUE (ROHW)
+  //       Saturating count. Cycles the routing network delivered more than one lane at
+  //       once. THE throughput statement SPEC 7.4's architecture comparison rests on: a
+  //       run in which this stayed at zero never asked the network to do anything a
+  //       bundle of wires could not do.
+  localparam int unsigned REGMAP_PIPELINE_PIPE_ALIGN_MULTI_INDEX = 15;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_PIPELINE_PIPE_ALIGN_MULTI_ADDR = 16'hC03C;
+  localparam int unsigned REGMAP_PIPELINE_PIPE_ALIGN_MULTI_VALUE_LSB = 0;
+  localparam int unsigned REGMAP_PIPELINE_PIPE_ALIGN_MULTI_VALUE_WIDTH = 32;
+  localparam logic [31:0] REGMAP_PIPELINE_PIPE_ALIGN_MULTI_VALUE_MASK = 32'hFFFFFFFF;
+
+  // PIPE_ALIGN_STATUS @ 0xC040 (MIXED)
+  //   Alignment-network sticky faults and its elaborated architecture, reported by
+  //   hardware so a pull request's architecture claim is a readback rather than a
+  //   comment.
+  //   [3:0] FAULT (W1C)
+  //       Sticky, LSB first: MISSING, DUPLICATE, ORPHAN, HIST. The same four bits, in
+  //       the same order, as the SPEC 5 `user` field of an output beat.
+  //   [15:8] NET_SEL (ROHW)
+  //       0 direct crossbar, 1 multistage omega. The measured default is 1
+  //       (DECISIONS.md, issue #16).
+  //   [23:16] NET_LATENCY (ROHW)
+  //       Routing-fabric latency in cycles.
+  //   [31:24] BLOCK_LATENCY (ROHW)
+  //       Whole-block latency in cycles.
+  localparam int unsigned REGMAP_PIPELINE_PIPE_ALIGN_STATUS_INDEX = 16;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_PIPELINE_PIPE_ALIGN_STATUS_ADDR = 16'hC040;
+  localparam int unsigned REGMAP_PIPELINE_PIPE_ALIGN_STATUS_FAULT_LSB = 0;
+  localparam int unsigned REGMAP_PIPELINE_PIPE_ALIGN_STATUS_FAULT_WIDTH = 4;
+  localparam logic [31:0] REGMAP_PIPELINE_PIPE_ALIGN_STATUS_FAULT_MASK = 32'h0000000F;
+  localparam int unsigned REGMAP_PIPELINE_PIPE_ALIGN_STATUS_NET_SEL_LSB = 8;
+  localparam int unsigned REGMAP_PIPELINE_PIPE_ALIGN_STATUS_NET_SEL_WIDTH = 8;
+  localparam logic [31:0] REGMAP_PIPELINE_PIPE_ALIGN_STATUS_NET_SEL_MASK = 32'h0000FF00;
+  localparam int unsigned REGMAP_PIPELINE_PIPE_ALIGN_STATUS_NET_LATENCY_LSB = 16;
+  localparam int unsigned REGMAP_PIPELINE_PIPE_ALIGN_STATUS_NET_LATENCY_WIDTH = 8;
+  localparam logic [31:0] REGMAP_PIPELINE_PIPE_ALIGN_STATUS_NET_LATENCY_MASK = 32'h00FF0000;
+  localparam int unsigned REGMAP_PIPELINE_PIPE_ALIGN_STATUS_BLOCK_LATENCY_LSB = 24;
+  localparam int unsigned REGMAP_PIPELINE_PIPE_ALIGN_STATUS_BLOCK_LATENCY_WIDTH = 8;
+  localparam logic [31:0] REGMAP_PIPELINE_PIPE_ALIGN_STATUS_BLOCK_LATENCY_MASK = 32'hFF000000;
+
+  // PIPE_RDMUX_GRANTS @ 0xC044 (ROHW)
+  //   Requests forwarded from the alignment network to the history read port.
+  //   [31:0] VALUE (ROHW)
+  //       Saturating count. Requests forwarded from the alignment network to the
+  //       history read port.
+  localparam int unsigned REGMAP_PIPELINE_PIPE_RDMUX_GRANTS_INDEX = 17;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_PIPELINE_PIPE_RDMUX_GRANTS_ADDR = 16'hC044;
+  localparam int unsigned REGMAP_PIPELINE_PIPE_RDMUX_GRANTS_VALUE_LSB = 0;
+  localparam int unsigned REGMAP_PIPELINE_PIPE_RDMUX_GRANTS_VALUE_WIDTH = 32;
+  localparam logic [31:0] REGMAP_PIPELINE_PIPE_RDMUX_GRANTS_VALUE_MASK = 32'hFFFFFFFF;
+
+  // PIPE_RDMUX_STALLS @ 0xC048 (ROHW)
+  //   Cycles a pending alignment request was not granted the read port.
+  //   [31:0] VALUE (ROHW)
+  //       Saturating count. Cycles a pending alignment request was not granted the read
+  //       port.
+  localparam int unsigned REGMAP_PIPELINE_PIPE_RDMUX_STALLS_INDEX = 18;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_PIPELINE_PIPE_RDMUX_STALLS_ADDR = 16'hC048;
+  localparam int unsigned REGMAP_PIPELINE_PIPE_RDMUX_STALLS_VALUE_LSB = 0;
+  localparam int unsigned REGMAP_PIPELINE_PIPE_RDMUX_STALLS_VALUE_WIDTH = 32;
+  localparam logic [31:0] REGMAP_PIPELINE_PIPE_RDMUX_STALLS_VALUE_MASK = 32'hFFFFFFFF;
+
+  // PIPE_EVENTS @ 0xC04C (ROHW)
+  //   Detection events delivered out of the CFAR bank.
+  //   [31:0] VALUE (ROHW)
+  //       Saturating count. Detection events delivered out of the CFAR bank.
+  localparam int unsigned REGMAP_PIPELINE_PIPE_EVENTS_INDEX = 19;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_PIPELINE_PIPE_EVENTS_ADDR = 16'hC04C;
+  localparam int unsigned REGMAP_PIPELINE_PIPE_EVENTS_VALUE_LSB = 0;
+  localparam int unsigned REGMAP_PIPELINE_PIPE_EVENTS_VALUE_WIDTH = 32;
+  localparam logic [31:0] REGMAP_PIPELINE_PIPE_EVENTS_VALUE_MASK = 32'hFFFFFFFF;
+
+  // PIPE_GEOMETRY @ 0xC050 (ROHW)
+  //   The elaborated integration geometry, reported by hardware. SPEC 7.5 requires any
+  //   time multiplexing to be visible in reported throughput; these are the
+  //   integration-level counterparts of the beamformer's own WEIGHT_PARALLELISM word.
+  //   [7:0] BIN_PAR (ROHW)
+  //       Bins per alignment beat, and the number of request ports the network drives.
+  //   [15:8] ALIGN_GROUPS (ROHW)
+  //       Reassembly entries in the alignment network.
+  //   [23:16] LANES (ROHW)
+  //       Samples per cycle per antenna at the front end.
+  //   [31:24] RD_PORTS (ROHW)
+  //       History read ports actually present. One: the corner turn's banking cannot
+  //       serve BIN_PAR CONSECUTIVE bins in parallel because consecutive bins share a
+  //       memory lane, so the network's request ports are multiplexed onto it
+  //       (rtl/top/history_rd_mux.sv).
+  localparam int unsigned REGMAP_PIPELINE_PIPE_GEOMETRY_INDEX = 20;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_PIPELINE_PIPE_GEOMETRY_ADDR = 16'hC050;
+  localparam int unsigned REGMAP_PIPELINE_PIPE_GEOMETRY_BIN_PAR_LSB = 0;
+  localparam int unsigned REGMAP_PIPELINE_PIPE_GEOMETRY_BIN_PAR_WIDTH = 8;
+  localparam logic [31:0] REGMAP_PIPELINE_PIPE_GEOMETRY_BIN_PAR_MASK = 32'h000000FF;
+  localparam int unsigned REGMAP_PIPELINE_PIPE_GEOMETRY_ALIGN_GROUPS_LSB = 8;
+  localparam int unsigned REGMAP_PIPELINE_PIPE_GEOMETRY_ALIGN_GROUPS_WIDTH = 8;
+  localparam logic [31:0] REGMAP_PIPELINE_PIPE_GEOMETRY_ALIGN_GROUPS_MASK = 32'h0000FF00;
+  localparam int unsigned REGMAP_PIPELINE_PIPE_GEOMETRY_LANES_LSB = 16;
+  localparam int unsigned REGMAP_PIPELINE_PIPE_GEOMETRY_LANES_WIDTH = 8;
+  localparam logic [31:0] REGMAP_PIPELINE_PIPE_GEOMETRY_LANES_MASK = 32'h00FF0000;
+  localparam int unsigned REGMAP_PIPELINE_PIPE_GEOMETRY_RD_PORTS_LSB = 24;
+  localparam int unsigned REGMAP_PIPELINE_PIPE_GEOMETRY_RD_PORTS_WIDTH = 8;
+  localparam logic [31:0] REGMAP_PIPELINE_PIPE_GEOMETRY_RD_PORTS_MASK = 32'hFF000000;
+
+  // PIPE_LAT_FRONT @ 0xC054 (ROHW)
+  //   Front-end latency, reported by hardware from the same package functions the RTL
+  //   elaborates from. Beat-measured and cycle-measured contributions are separate
+  //   fields because the units are not interchangeable (ARCHITECTURE.md 8).
+  //   [7:0] PFB_CYCLES (ROHW)
+  //       Polyphase bank, in cycles.
+  //   [15:8] PFB_BEATS (ROHW)
+  //       Polyphase bank, in beats. Zero for the TREE accumulation style, TAPS-1 for
+  //       SYSTOLIC.
+  //   [31:16] FFT_BEATS (ROHW)
+  //       Streaming FFT, in beats.
+  localparam int unsigned REGMAP_PIPELINE_PIPE_LAT_FRONT_INDEX = 21;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_PIPELINE_PIPE_LAT_FRONT_ADDR = 16'hC054;
+  localparam int unsigned REGMAP_PIPELINE_PIPE_LAT_FRONT_PFB_CYCLES_LSB = 0;
+  localparam int unsigned REGMAP_PIPELINE_PIPE_LAT_FRONT_PFB_CYCLES_WIDTH = 8;
+  localparam logic [31:0] REGMAP_PIPELINE_PIPE_LAT_FRONT_PFB_CYCLES_MASK = 32'h000000FF;
+  localparam int unsigned REGMAP_PIPELINE_PIPE_LAT_FRONT_PFB_BEATS_LSB = 8;
+  localparam int unsigned REGMAP_PIPELINE_PIPE_LAT_FRONT_PFB_BEATS_WIDTH = 8;
+  localparam logic [31:0] REGMAP_PIPELINE_PIPE_LAT_FRONT_PFB_BEATS_MASK = 32'h0000FF00;
+  localparam int unsigned REGMAP_PIPELINE_PIPE_LAT_FRONT_FFT_BEATS_LSB = 16;
+  localparam int unsigned REGMAP_PIPELINE_PIPE_LAT_FRONT_FFT_BEATS_WIDTH = 16;
+  localparam logic [31:0] REGMAP_PIPELINE_PIPE_LAT_FRONT_FFT_BEATS_MASK = 32'hFFFF0000;
+
+  // PIPE_LAT_BACK @ 0xC058 (ROHW)
+  //   Back-end latency, in cycles, reported by hardware.
+  //   [7:0] HISTORY (ROHW)
+  //       History read path, request to response.
+  //   [15:8] ALIGN (ROHW)
+  //       Alignment network, response to beamformer beat.
+  //   [23:16] BEAMFORMER (ROHW)
+  //       Beamforming matrix.
+  //   [31:24] POWER (ROHW)
+  //       Power stage, sample to power beat.
+  localparam int unsigned REGMAP_PIPELINE_PIPE_LAT_BACK_INDEX = 22;
+  localparam logic [REGMAP_ADDR_W-1:0] REGMAP_PIPELINE_PIPE_LAT_BACK_ADDR = 16'hC058;
+  localparam int unsigned REGMAP_PIPELINE_PIPE_LAT_BACK_HISTORY_LSB = 0;
+  localparam int unsigned REGMAP_PIPELINE_PIPE_LAT_BACK_HISTORY_WIDTH = 8;
+  localparam logic [31:0] REGMAP_PIPELINE_PIPE_LAT_BACK_HISTORY_MASK = 32'h000000FF;
+  localparam int unsigned REGMAP_PIPELINE_PIPE_LAT_BACK_ALIGN_LSB = 8;
+  localparam int unsigned REGMAP_PIPELINE_PIPE_LAT_BACK_ALIGN_WIDTH = 8;
+  localparam logic [31:0] REGMAP_PIPELINE_PIPE_LAT_BACK_ALIGN_MASK = 32'h0000FF00;
+  localparam int unsigned REGMAP_PIPELINE_PIPE_LAT_BACK_BEAMFORMER_LSB = 16;
+  localparam int unsigned REGMAP_PIPELINE_PIPE_LAT_BACK_BEAMFORMER_WIDTH = 8;
+  localparam logic [31:0] REGMAP_PIPELINE_PIPE_LAT_BACK_BEAMFORMER_MASK = 32'h00FF0000;
+  localparam int unsigned REGMAP_PIPELINE_PIPE_LAT_BACK_POWER_LSB = 24;
+  localparam int unsigned REGMAP_PIPELINE_PIPE_LAT_BACK_POWER_WIDTH = 8;
+  localparam logic [31:0] REGMAP_PIPELINE_PIPE_LAT_BACK_POWER_MASK = 32'hFF000000;
+
+  // reset value of the stored bits
+  localparam logic [REGMAP_PIPELINE_N_REGS*32-1:0] REGMAP_PIPELINE_RESET = {
+      32'h00000000,  // [22]
+      32'h00000000,  // [21]
+      32'h00000000,  // [20]
+      32'h00000000,  // [19]
+      32'h00000000,  // [18]
+      32'h00000000,  // [17]
+      32'h00000000,  // [16]
+      32'h00000000,  // [15]
+      32'h00000000,  // [14]
+      32'h00000000,  // [13]
+      32'h00000000,  // [12]
+      32'h00000000,  // [11]
+      32'h00000000,  // [10]
+      32'h00000000,  // [9]
+      32'h00000000,  // [8]
+      32'h00000000,  // [7]
+      32'h00000000,  // [6]
+      32'h00000000,  // [5]
+      32'h12345678,  // [4]
+      32'h00000001,  // [3]
+      32'h00007FFF,  // [2]
+      32'h00000004,  // [1]
+      32'h00000005  // [0]
+  };
+  // bits a software write may set or clear (RW)
+  localparam logic [REGMAP_PIPELINE_N_REGS*32-1:0] REGMAP_PIPELINE_WMASK = {
+      32'h00000000,  // [22]
+      32'h00000000,  // [21]
+      32'h00000000,  // [20]
+      32'h00000000,  // [19]
+      32'h00000000,  // [18]
+      32'h00000000,  // [17]
+      32'h00000000,  // [16]
+      32'h00000000,  // [15]
+      32'h00000000,  // [14]
+      32'h00000000,  // [13]
+      32'h00000000,  // [12]
+      32'h00000000,  // [11]
+      32'h00000000,  // [10]
+      32'h00000000,  // [9]
+      32'h00000000,  // [8]
+      32'h00000000,  // [7]
+      32'h00000000,  // [6]
+      32'h00FFFFFF,  // [5]
+      32'hFFFFFFFF,  // [4]
+      32'hFFFFFFFF,  // [3]
+      32'hFFFFFFFF,  // [2]
+      32'h00000007,  // [1]
+      32'h0000003F  // [0]
+  };
+  // bits cleared by writing 1, set by hardware (W1C)
+  localparam logic [REGMAP_PIPELINE_N_REGS*32-1:0] REGMAP_PIPELINE_W1CMASK = {
+      32'h00000000,  // [22]
+      32'h00000000,  // [21]
+      32'h00000000,  // [20]
+      32'h00000000,  // [19]
+      32'h00000000,  // [18]
+      32'h00000000,  // [17]
+      32'h0000000F,  // [16]
+      32'h00000000,  // [15]
+      32'h00000000,  // [14]
+      32'h00000000,  // [13]
+      32'h00000000,  // [12]
+      32'h00000000,  // [11]
+      32'h00000000,  // [10]
+      32'h00000000,  // [9]
+      32'h00000000,  // [8]
+      32'h00000000,  // [7]
+      32'h00000000,  // [6]
+      32'h00000000,  // [5]
+      32'h00000000,  // [4]
+      32'h00000000,  // [3]
+      32'h00000000,  // [2]
+      32'h00000000,  // [1]
+      32'h00000000  // [0]
+  };
+  // bits that pulse for one cycle and read 0 (RWP)
+  localparam logic [REGMAP_PIPELINE_N_REGS*32-1:0] REGMAP_PIPELINE_PULSEMASK = {
+      32'h00000000,  // [22]
+      32'h00000000,  // [21]
+      32'h00000000,  // [20]
+      32'h00000000,  // [19]
+      32'h00000000,  // [18]
+      32'h00000000,  // [17]
+      32'h00000000,  // [16]
+      32'h00000000,  // [15]
+      32'h00000000,  // [14]
+      32'h00000000,  // [13]
+      32'h00000000,  // [12]
+      32'h00000000,  // [11]
+      32'h00000000,  // [10]
+      32'h00000000,  // [9]
+      32'h00000000,  // [8]
+      32'h00000000,  // [7]
+      32'h00000000,  // [6]
+      32'h00000000,  // [5]
+      32'h00000000,  // [4]
+      32'h00000000,  // [3]
+      32'h00000000,  // [2]
+      32'h00000000,  // [1]
+      32'h00000700  // [0]
+  };
+  // bits read from the hardware input, not from storage (ROHW)
+  localparam logic [REGMAP_PIPELINE_N_REGS*32-1:0] REGMAP_PIPELINE_HWMASK = {
+      32'hFFFFFFFF,  // [22]
+      32'hFFFFFFFF,  // [21]
+      32'hFFFFFFFF,  // [20]
+      32'hFFFFFFFF,  // [19]
+      32'hFFFFFFFF,  // [18]
+      32'hFFFFFFFF,  // [17]
+      32'hFFFFFF00,  // [16]
+      32'hFFFFFFFF,  // [15]
+      32'hFFFFFFFF,  // [14]
+      32'hFFFFFFFF,  // [13]
+      32'hFFFFFFFF,  // [12]
+      32'hFFFFFFFF,  // [11]
+      32'hFFFFFFFF,  // [10]
+      32'hFFFFFFFF,  // [9]
+      32'hFFFFFFFF,  // [8]
+      32'hFFFFFFFF,  // [7]
+      32'hFFFFFFFF,  // [6]
+      32'h00000000,  // [5]
+      32'h00000000,  // [4]
+      32'h00000000,  // [3]
+      32'h00000000,  // [2]
+      32'h00000000,  // [1]
       32'h00000000  // [0]
   };
 

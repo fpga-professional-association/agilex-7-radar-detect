@@ -47,6 +47,10 @@
 #   TEST           Test stem under sim/tests/.                default: test_stream_loopback
 #   PYTHON         Python interpreter for scripts/.           default: python3
 #   RESULTS_DIR    Run-summary output directory.              default: results/simulation
+#   PIPE_CONFIG    Size config for the pipeline suite.        default: medium
+#   RANDOM_PASSES  Randomized passes per seed (SPEC 13.3).    default: 4
+#   STRESS_CYCLES  Core cycles for the SPEC 13.4 stress run.  default: 6000000
+#   COVERAGE_DIR   Merged coverage output.        default: results/simulation/coverage
 #
 # A clean checkout plus these variables is sufficient to run every target
 # (SPEC.md 16).
@@ -63,6 +67,10 @@
 # quartus-* targets (issue #3) and the SPEC 18 calibration sweeps
 # `calibrate-cmult` (issue #9) and `calibrate-fft` (#11).
 #
+# Issue #17 implemented the four remaining SPEC 16 simulation entry points --
+# `sim-medium`, `sim-random`, `sim-stress` and `sim-coverage` -- against the
+# assembled SPEC 3 pipeline in rtl/top/benchmark_core.sv.
+#
 # Everything else is still a scaffold stub from issue #1. Stubs fail loudly:
 # they print `TODO(issue #N)` and the stub command exits 1. GNU make then
 # reports its own exit status 2, which is make's documented status for a failed
@@ -71,9 +79,9 @@
 # and the issue that implements each one.
 #
 # The four SPEC 12.1 build modes are all driven by scripts/build_verilator.py.
-# `lint` and `sim-tiny` use the lint and fast modes; the coverage and debug modes
-# are invoked directly (see sim/verilator/README.md) until sim-coverage lands in
-# issue #17.
+# `lint` and `sim-tiny` use the lint and fast modes and `sim-coverage` the
+# coverage mode; the debug mode is invoked directly for a failing seed (see
+# sim/verilator/README.md).
 
 SHELL := /bin/sh
 
@@ -194,6 +202,9 @@ CDC_INVENTORY_BF_JSON ?= $(RESULTS_DIR)/cdc_inventory_beamformer.json
 # declared rather than merely present.
 CDC_INVENTORY_HISTORY_JSON ?= $(RESULTS_DIR)/cdc_inventory_history.json
 CDC_INVENTORY_ALIGN_JSON ?= $(RESULTS_DIR)/cdc_inventory_align.json
+# The assembled pipeline (issue #17). The only top with three clock domains,
+# and therefore the one whose inventory is the DESIGN's rather than a block's.
+CDC_INVENTORY_PIPE_JSON  ?= $(RESULTS_DIR)/cdc_inventory_pipeline.json
 # And the packet network gets its own (issue #18). SPEC 8 gives the fabric its
 # own clock domain (`packet_clk`), so the question the inventory answers here is
 # the one that matters before issue #19 wires the domains together: the fabric as
@@ -506,6 +517,45 @@ PACKET_BIN_DIR = sim/verilator/build/fast_tiny_$(PACKET_TOP)
 # byte-identical beat sequence, a SPEC 9 tag collision, a response from the
 # wrong absolute frame, and a measured throughput and blocking rate for each
 # architecture.
+# --- the SPEC 19 Phase 3 pipeline (issue #17) ------------------------------
+# The pipeline suite runs against `benchmark_sim_top` — the SPEC 4.1 top, which
+# as of issue #17 contains the assembled SPEC 3 datapath — at the MEDIUM
+# configuration, so its build directory is `fast_medium` and not `fast_tiny`.
+# Every other build in this file is a per-block top at `tiny`.
+#
+# PIPE_TESTS is the medium regression: the directed end-to-end pass, the
+# bank-swap pass and the SPEC 13.2 property set. `sim-random` and `sim-stress`
+# add the two long-running members, which are separate SPEC 16 entry points
+# because their run times are minutes rather than seconds.
+PIPE_TOP      := benchmark_sim_top
+PIPE_FILES    := sim/verilator/files.f
+PIPE_CONFIG   ?= medium
+PIPE_TESTS    := test_pipeline_continuous test_pipeline_runtime_update \
+                 test_pipeline_metamorphic
+PIPE_RANDOM   := test_pipeline_random
+PIPE_STRESS   := test_pipeline_stress
+PIPE_BIN_DIR   = sim/verilator/build/fast_$(PIPE_CONFIG)
+PIPE_COV_DIR   = sim/verilator/build/coverage_$(PIPE_CONFIG)
+
+# Randomized passes per seed (SPEC 13.3). Overridable: `make sim-random
+# RANDOM_PASSES=16` widens the sweep without a rebuild.
+RANDOM_PASSES ?= 4
+
+# Core cycles for the SPEC 13.4 stress pass, spread over the seven clock ratios
+# in sim/verilator/harness/clock_ratios.h.
+#
+# MEASURED: this model runs at about 17 000 core cycles per second in the fast
+# build, so six million cycles is roughly six minutes of wall clock — well
+# inside SPEC 16's expectation of a target that can be run routinely, and far
+# inside the 30-minute budget the issue sets. It is also comfortably past the
+# point where the 16-bit sequence numbers wrap (about 260 000 cycles per phase),
+# which is SPEC 13.4's counter-wrap requirement; a run at three million wrapped
+# eight times.
+STRESS_CYCLES ?= 6000000
+
+# Coverage output (SPEC 12.1 coverage build). Generated, never committed.
+COVERAGE_DIR  ?= $(RESULTS_DIR)/coverage
+
 ALIGN_TOP     := align_top
 ALIGN_FILES   := sim/verilator/files_align.f
 ALIGN_TEST    := test_align
@@ -547,7 +597,10 @@ FFT_CHECK_RECIPE = $(SIM_DISPATCH)
 FFT_TWIDDLE_CHECK_RECIPE =
 CDC_INVENTORY_RECIPE = $(SIM_DISPATCH)
 COEFF_CHECK_RECIPE   = $(SIM_DISPATCH)
-SIM_STUB_17      = $(SIM_DISPATCH)
+SIM_MEDIUM_RECIPE   = $(SIM_DISPATCH)
+SIM_RANDOM_RECIPE   = $(SIM_DISPATCH)
+SIM_STRESS_RECIPE   = $(SIM_DISPATCH)
+SIM_COVERAGE_RECIPE = $(SIM_DISPATCH)
 SIM_STUB_20      = $(SIM_DISPATCH)
 
 else
@@ -777,6 +830,168 @@ define SIM_TINY_RECIPE
 	  printf '\n[sim-tiny] PASS for every seed: %s\n' '$(SEEDS)'
 endef
 
+
+# `sim-medium` (SPEC 16, SPEC 19 Phase 3): the medium-configuration integration
+# regression.
+#
+# Builds `benchmark_sim_top` at CONFIG=medium once per test and runs each test
+# once per seed in SEEDS. The three tests are:
+#
+#   test_pipeline_continuous      Continuous frames through the whole SPEC 3
+#                                 pipeline, with EVERY STAGE checked bit-exactly
+#                                 against the C++ model applied to that stage's
+#                                 own observed input — so a failure names the
+#                                 stage rather than the pipeline. Plus the
+#                                 directed cases: an impulse chain-through whose
+#                                 spectrum must be flat, a tone that must land in
+#                                 the bin and the beam both the design and the
+#                                 model name, an injected target that must be
+#                                 DETECTED with the detector's own event fields
+#                                 reproducing its decision, the SPEC 9 counters
+#                                 against an independent tally, and SPEC 13.2's
+#                                 backpressure invariance.
+#   test_pipeline_runtime_update  A coefficient-bank swap and a beam-weight swap
+#                                 applied while the pipeline runs, with every
+#                                 frame required to match ONE coefficient set and
+#                                 every beat ONE weight matrix — the frame
+#                                 boundary rule, checked end to end rather than
+#                                 at the bank.
+#   test_pipeline_metamorphic     The SPEC 13.2 property set applied to the
+#                                 assembled pipeline: zero in / zero out, the
+#                                 impulse response, scaling, delay invariance,
+#                                 antenna/weight permutation equivalence and
+#                                 reset repeatability.
+#
+# Then `test_pipeline_random` over the same seeds, which is the SPEC 13.3
+# randomized regression at four passes per seed. It is included here as well as
+# in `sim-random` because SPEC 19's Phase 3 gate asks for random backpressure and
+# configuration changes in the medium regression itself; `sim-random` is the same
+# test with a wider sweep.
+define SIM_MEDIUM_RECIPE
+	$(REGMAP_CHECK_RECIPE)
+	@printf '[sim-medium] config=%s seeds=%s\n' '$(PIPE_CONFIG)' '$(SEEDS)'
+	@for t in $(PIPE_TESTS) $(PIPE_RANDOM); do \
+	    $(BUILD_VERILATOR) --mode fast --config $(PIPE_CONFIG) --jobs $(JOBS) \
+	        --top $(PIPE_TOP) --files $(PIPE_FILES) --test $$t || exit 1; \
+	  done
+	@rc=0; for s in $(SEEDS); do \
+	    for t in $(PIPE_TESTS); do \
+	      printf '\n[sim-medium] ===== seed %s : %s =====\n' "$$s" "$$t"; \
+	      ./$(PIPE_BIN_DIR)/V$(PIPE_TOP)_$$t +seed=$$s +results=$(RESULTS_DIR) || rc=1; \
+	    done; \
+	    printf '\n[sim-medium] ===== seed %s : %s =====\n' "$$s" '$(PIPE_RANDOM)'; \
+	    ./$(PIPE_BIN_DIR)/V$(PIPE_TOP)_$(PIPE_RANDOM) +seed=$$s \
+	        +passes=$(RANDOM_PASSES) +results=$(RESULTS_DIR) || rc=1; \
+	  done; \
+	  if [ $$rc -ne 0 ]; then \
+	    printf '\n[sim-medium] FAILED (seeds: %s)\n' '$(SEEDS)' 1>&2; exit 1; \
+	  fi; \
+	  printf '\n[sim-medium] PASS for every seed: %s\n' '$(SEEDS)'
+endef
+
+# `sim-random` (SPEC 16, SPEC 13.3): the randomized regression on its own, with a
+# wider sweep than the medium gate runs.
+#
+# Every draw comes from a named substream of the master seed, and the banner
+# prints the replay command, so a failing pass is reproduced by one line. SEEDS
+# and RANDOM_PASSES are the two knobs; neither needs a rebuild.
+define SIM_RANDOM_RECIPE
+	@printf '[sim-random] config=%s seeds=%s passes=%s\n' \
+	    '$(PIPE_CONFIG)' '$(SEEDS)' '$(RANDOM_PASSES)'
+	$(BUILD_VERILATOR) --mode fast --config $(PIPE_CONFIG) --jobs $(JOBS) \
+	    --top $(PIPE_TOP) --files $(PIPE_FILES) --test $(PIPE_RANDOM)
+	@rc=0; for s in $(SEEDS); do \
+	    printf '\n[sim-random] ===== seed %s =====\n' "$$s"; \
+	    ./$(PIPE_BIN_DIR)/V$(PIPE_TOP)_$(PIPE_RANDOM) +seed=$$s \
+	        +passes=$(RANDOM_PASSES) +results=$(RESULTS_DIR) || rc=1; \
+	  done; \
+	  if [ $$rc -ne 0 ]; then \
+	    printf '\n[sim-random] FAILED (seeds: %s)\n' '$(SEEDS)' 1>&2; exit 1; \
+	  fi; \
+	  printf '\n[sim-random] PASS for every seed: %s\n' '$(SEEDS)'
+endef
+
+# `sim-stress` (SPEC 16, SPEC 13.4): the long stress pass.
+#
+# One seed, STRESS_CYCLES core cycles, split across the seven clock ratios in
+# harness/clock_ratios.h so that "independently randomized clock phases" is a
+# property of the run rather than of the seed. Sustained near-full throughput
+# (the sources never stall), random stalls on the event consumer, a coefficient
+# and a weight bank swap every few tens of thousands of cycles, and no waveform:
+# the fast build has no tracing compiled in at all, so "no waveform on a passing
+# run" is structural rather than conditional.
+#
+# SEED rather than SEEDS: this is one long run, not a sweep. A failing seed is
+# replayed with the line the test prints.
+define SIM_STRESS_RECIPE
+	@printf '[sim-stress] config=%s seed=%s cycles=%s\n' \
+	    '$(PIPE_CONFIG)' '$(SEED)' '$(STRESS_CYCLES)'
+	$(BUILD_VERILATOR) --mode fast --config $(PIPE_CONFIG) --jobs $(JOBS) \
+	    --top $(PIPE_TOP) --files $(PIPE_FILES) --test $(PIPE_STRESS)
+	./$(PIPE_BIN_DIR)/V$(PIPE_TOP)_$(PIPE_STRESS) +seed=$(SEED) \
+	    +cycles=$(STRESS_CYCLES) +results=$(RESULTS_DIR)
+	@printf '\n[sim-stress] PASS seed=%s cycles=%s\n' '$(SEED)' '$(STRESS_CYCLES)'
+endef
+
+# `sim-coverage` (SPEC 16, SPEC 12.1): the coverage build over the medium
+# regression, merged and summarized.
+#
+# The coverage build is a separate elaboration (`--mode coverage`), so it has its
+# own directory and its own binaries; it is 2-3x slower than the fast build,
+# which is why SPEC 12.1 asks for the two to be different builds rather than one
+# build with a flag.
+#
+# Each run writes `$(RESULTS_DIR)/coverage_seed<N>.dat`; `verilator_coverage`
+# merges them into one point set and annotates the sources. The summary is
+# computed from the merged file rather than from a tool that prints one, because
+# verilator_coverage has no summary mode: a merged .dat has one `C` record per
+# coverage point with its hit count, so the percentage is a count of records
+# whose count is nonzero. That is line, branch, toggle and user coverage
+# together, which is what `--coverage` collects.
+#
+# Nothing under $(COVERAGE_DIR) is committed (PLAN.md standing rule 3).
+define SIM_COVERAGE_RECIPE
+	@printf '[sim-coverage] config=%s seeds=%s -> %s\n' \
+	    '$(PIPE_CONFIG)' '$(SEEDS)' '$(COVERAGE_DIR)'
+	@rm -rf $(COVERAGE_DIR)
+	@mkdir -p $(COVERAGE_DIR)
+	@rm -f $(RESULTS_DIR)/coverage_seed*.dat
+	@for t in $(PIPE_TESTS) $(PIPE_RANDOM); do \
+	    $(BUILD_VERILATOR) --mode coverage --config $(PIPE_CONFIG) --jobs $(JOBS) \
+	        --top $(PIPE_TOP) --files $(PIPE_FILES) --test $$t || exit 1; \
+	  done
+	@rc=0; for s in $(SEEDS); do \
+	    for t in $(PIPE_TESTS); do \
+	      printf '\n[sim-coverage] ===== seed %s : %s =====\n' "$$s" "$$t"; \
+	      ./$(PIPE_COV_DIR)/V$(PIPE_TOP)_$$t +seed=$$s +results=$(RESULTS_DIR) \
+	          +coverage=$(COVERAGE_DIR)/$$t\_seed$$s.dat || rc=1; \
+	    done; \
+	    printf '\n[sim-coverage] ===== seed %s : %s =====\n' "$$s" '$(PIPE_RANDOM)'; \
+	    ./$(PIPE_COV_DIR)/V$(PIPE_TOP)_$(PIPE_RANDOM) +seed=$$s \
+	        +passes=$(RANDOM_PASSES) +results=$(RESULTS_DIR) \
+	        +coverage=$(COVERAGE_DIR)/$(PIPE_RANDOM)_seed$$s.dat || rc=1; \
+	  done; \
+	  if [ $$rc -ne 0 ]; then \
+	    printf '\n[sim-coverage] FAILED: a coverage run did not pass\n' 1>&2; \
+	    exit 1; \
+	  fi
+	@printf '\n[sim-coverage] merging\n'
+	verilator_coverage --write $(COVERAGE_DIR)/coverage.dat \
+	    $(COVERAGE_DIR)/*_seed*.dat
+	verilator_coverage --annotate $(COVERAGE_DIR)/annotated --annotate-min 1 \
+	    $(COVERAGE_DIR)/coverage.dat > $(COVERAGE_DIR)/annotate.log 2>&1 || true
+	@awk '/^C/ { total++; n = $$NF + 0; if (n > 0) hit++ } \
+	      END { if (total == 0) { print "[sim-coverage] no coverage points found"; exit 1 } \
+	            printf "[sim-coverage] %d of %d points covered (%.1f%%)\n", \
+	                   hit, total, 100.0 * hit / total; \
+	            printf "points_total %d\npoints_hit %d\npercent %.2f\n", \
+	                   total, hit, 100.0 * hit / total > "$(COVERAGE_DIR)/summary.txt" }' \
+	    $(COVERAGE_DIR)/coverage.dat
+	@printf '[sim-coverage] merged report: %s\n' '$(COVERAGE_DIR)/coverage.dat'
+	@printf '[sim-coverage] summary:       %s\n' '$(COVERAGE_DIR)/summary.txt'
+	@printf '[sim-coverage] annotated:     %s\n' '$(COVERAGE_DIR)/annotated'
+endef
+
 # `numerics-check` (issue #4): the SPEC 6 / 12.4 fixed-point equivalence proof.
 # Two steps, both of which must pass before sim-tiny runs anything else:
 #
@@ -950,6 +1165,13 @@ define CDC_INVENTORY_RECIPE
 	    --top $(PACKET_TOP) --files $(PACKET_FILES) --test $(firstword $(PACKET_TESTS)) --quiet
 	$(PYTHON) scripts/cdc_inventory.py --top $(PACKET_TOP) --files $(PACKET_FILES) \
 	    --out $(CDC_INVENTORY_PACKET_JSON) --print --strict --allow-empty
+	@printf '[cdc-inventory] SPEC 8 crossing report for top=%s -> %s\n' \
+	    '$(PIPE_TOP)' '$(CDC_INVENTORY_PIPE_JSON)'
+	$(BUILD_VERILATOR) --mode lint --config $(PIPE_CONFIG) --jobs $(JOBS) \
+	    --top $(PIPE_TOP) --files $(PIPE_FILES) \
+	    --test $(firstword $(PIPE_TESTS)) --quiet
+	$(PYTHON) scripts/cdc_inventory.py --top $(PIPE_TOP) --files $(PIPE_FILES) \
+	    --out $(CDC_INVENTORY_PIPE_JSON) --print --strict
 endef
 
 # Remaining simulation entry points. The Verilator flow itself exists as of
@@ -1061,10 +1283,10 @@ help:
 	@printf '%-18s %-9s %s\n' 'fft-check'        'wsl'     'SPEC 7.2/12.4 FFT twiddles + vectors + C++ model (sub-target of sim-tiny)'
 	@printf '%-18s %-9s %s\n' 'cdc-inventory'    'wsl'     'SPEC 8 CDC crossing report (sub-target of sim-tiny)'
 	@printf '%-18s %-9s %s\n' 'sim-tiny'         'wsl'     'numerics + regmap + inventory + fast builds + every test'
-	@printf '%-18s %-9s %s\n' 'sim-medium'       'wsl'     'TODO(issue #17) medium-config regression'
-	@printf '%-18s %-9s %s\n' 'sim-random'       'wsl'     'TODO(issue #17) randomized regression'
-	@printf '%-18s %-9s %s\n' 'sim-stress'       'wsl'     'TODO(issue #17) long stress test'
-	@printf '%-18s %-9s %s\n' 'sim-coverage'     'wsl'     'TODO(issue #17) coverage build and report'
+	@printf '%-18s %-9s %s\n' 'sim-medium'       'wsl'     'SPEC 19 Phase 3 medium-config pipeline regression'
+	@printf '%-18s %-9s %s\n' 'sim-random'       'wsl'     'SPEC 13.3 randomized regression (SEEDS, RANDOM_PASSES)'
+	@printf '%-18s %-9s %s\n' 'sim-stress'       'wsl'     'SPEC 13.4 long stress (SEED, STRESS_CYCLES)'
+	@printf '%-18s %-9s %s\n' 'sim-coverage'     'wsl'     'SPEC 12.1 coverage build, merged report and summary'
 	@printf '%-18s %-9s %s\n' 'sim-full-smoke'   'wsl'     'TODO(issue #20) full-scale smoke test'
 	@printf '\n'
 	@printf '%-18s %-9s %s\n' 'quartus-map'      'windows' 'Analysis and Synthesis (quartus_syn)'
@@ -1176,16 +1398,16 @@ sim-tiny:
 	$(SIM_TINY_RECIPE)
 
 sim-medium:
-	$(SIM_STUB_17)
+	$(SIM_MEDIUM_RECIPE)
 
 sim-random:
-	$(SIM_STUB_17)
+	$(SIM_RANDOM_RECIPE)
 
 sim-stress:
-	$(SIM_STUB_17)
+	$(SIM_STRESS_RECIPE)
 
 sim-coverage:
-	$(SIM_STUB_17)
+	$(SIM_COVERAGE_RECIPE)
 
 sim-full-smoke:
 	$(SIM_STUB_20)

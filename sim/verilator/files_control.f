@@ -68,6 +68,7 @@ rtl/control/reg_block_cfar.sv
 // this build tests the register plane, not the kernel.
 rtl/control/reg_block_history.sv
 rtl/control/reg_block_packet.sv
+rtl/control/reg_block_pipeline.sv
 rtl/control/reg_fabric.sv
 
 // ---- deliberately dead block (simulation only) -------------------------

@@ -216,6 +216,40 @@ def derive_stream_params(params: dict) -> dict:
         "TELEM_TRACKED_IDS": 2,
         "TELEM_PROBE_W": 8,
         "TELEM_PROBE_INCR_W": 4,
+        # ---- SPEC 19 Phase 3 pipeline geometry (issue #17) ----------------
+        #
+        # The integration parameters rtl/top/benchmark_core.sv is elaborated
+        # with, derived here rather than written into config/*.json for the
+        # reason the stream layout above is: they are a function of the SPEC 11
+        # sizes, and a second hand-maintained copy of a derivation is a place for
+        # the two to disagree. They reach the SystemVerilog top and the C++ tests
+        # through the same generated pair, so the harness cannot model a geometry
+        # the design was not built with.
+        #
+        # PIPE_BIN_PAR: bins per alignment beat, the width of the routing
+        # network, and the number of request ports it drives. Tracks the front
+        # end's lane count, floored at 2 because align_pkg's geometry predicate
+        # requires at least two lanes (a one-lane network is a wire and the SPEC
+        # 7.4 architecture comparison would be vacuous).
+        "PIPE_BIN_PAR": max(2, int(params["SAMPLES_PER_CYCLE"])),
+        # Reassembly entries. A power of two that divides FFT_SIZE / BIN_PAR at
+        # every SPEC 11 size, and deep enough that the request/response round
+        # trip is covered rather than exposed as dead cycles.
+        "PIPE_ALIGN_GROUPS": 4,
+        # Beams computed per cycle. Equal to N_BEAMS, so BEAM_MUX is 1: the bin
+        # serializer reads one bin's whole beam vector from one beat and states
+        # that requirement as an elaboration check. Issue #20 revisits this
+        # against measured DSP counts.
+        "PIPE_BEAM_PAR": int(params["N_BEAMS"]),
+        # The SPEC 7.4 architecture: 1 = multistage omega, the measured default
+        # (DECISIONS.md, issue #16). 0 rebuilds the direct crossbar.
+        "PIPE_NET_SEL": 1,
+        # Entries in the history_clk -> core_clk stream crossing.
+        "PIPE_CDC_DEPTH": 16,
+        # Power-calc register stages; 2 is the shape that maps to one DSP.
+        "PIPE_POWER_PIPE": 2,
+        # Detection events are 176 bits plus the SPEC 5 metadata.
+        "PIPE_EVENT_DATA_W": 176,
     }
 
 

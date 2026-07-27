@@ -45,7 +45,7 @@
   ],
   "regmap_version": {
     "major": 1,
-    "minor": 7,
+    "minor": 9,
     "patch": 0,
     "description": "Bump on any change to this file. major: incompatible layout change; minor: registers or fields added; patch: documentation only."
   },
@@ -58,7 +58,9 @@
       "base": "0x0000",
       "size": "0x1000",
       "implemented": true,
-      "spec_groups": ["Global identification"],
+      "spec_groups": [
+        "Global identification"
+      ],
       "description": "Fixed identification of the control plane itself. Every field is a constant folded in at elaboration, so a live design can be identified without any prior knowledge of what was built.",
       "registers": [
         {
@@ -66,7 +68,14 @@
           "offset": "0x000",
           "description": "Constant marker. Reading 0x52414441 ('RADA') at block base proves a control plane is present and the address decode is alive.",
           "fields": [
-            {"name": "MAGIC", "lsb": 0, "width": 32, "access": "RO", "reset": "0x52414441", "description": "ASCII 'RADA'."}
+            {
+              "name": "MAGIC",
+              "lsb": 0,
+              "width": 32,
+              "access": "RO",
+              "reset": "0x52414441",
+              "description": "ASCII 'RADA'."
+            }
           ]
         },
         {
@@ -74,10 +83,38 @@
           "offset": "0x004",
           "description": "Register-map version, from regmap_version in the source of truth. Static build data, deliberately not a git describe: the same source tree must produce the same register contents on any machine, and a VCS-derived value would make the generated artefacts depend on checkout state.",
           "fields": [
-            {"name": "MAJOR", "lsb": 24, "width": 8, "access": "RO", "reset": "$VERSION_MAJOR", "description": "Incompatible layout change."},
-            {"name": "MINOR", "lsb": 16, "width": 8, "access": "RO", "reset": "$VERSION_MINOR", "description": "Registers or fields added."},
-            {"name": "PATCH", "lsb": 8, "width": 8, "access": "RO", "reset": "$VERSION_PATCH", "description": "Documentation-only change."},
-            {"name": "SCHEMA", "lsb": 0, "width": 8, "access": "RO", "reset": "0x01", "description": "Source-of-truth schema version."}
+            {
+              "name": "MAJOR",
+              "lsb": 24,
+              "width": 8,
+              "access": "RO",
+              "reset": "$VERSION_MAJOR",
+              "description": "Incompatible layout change."
+            },
+            {
+              "name": "MINOR",
+              "lsb": 16,
+              "width": 8,
+              "access": "RO",
+              "reset": "$VERSION_MINOR",
+              "description": "Registers or fields added."
+            },
+            {
+              "name": "PATCH",
+              "lsb": 8,
+              "width": 8,
+              "access": "RO",
+              "reset": "$VERSION_PATCH",
+              "description": "Documentation-only change."
+            },
+            {
+              "name": "SCHEMA",
+              "lsb": 0,
+              "width": 8,
+              "access": "RO",
+              "reset": "0x01",
+              "description": "Source-of-truth schema version."
+            }
           ]
         },
         {
@@ -85,10 +122,38 @@
           "offset": "0x008",
           "description": "Shape of the register plane, so a discovery walk needs no compiled-in constants.",
           "fields": [
-            {"name": "N_BLOCKS", "lsb": 0, "width": 8, "access": "RO", "reset": "$N_BLOCKS", "description": "Declared blocks, implemented and planned."},
-            {"name": "N_REGS", "lsb": 8, "width": 8, "access": "RO", "reset": "$N_REGS_TOTAL", "description": "Implemented registers across all blocks."},
-            {"name": "DATA_W", "lsb": 16, "width": 8, "access": "RO", "reset": "$DATA_W", "description": "Register data width in bits."},
-            {"name": "ADDR_W", "lsb": 24, "width": 8, "access": "RO", "reset": "$ADDR_W", "description": "Register address width in bits."}
+            {
+              "name": "N_BLOCKS",
+              "lsb": 0,
+              "width": 8,
+              "access": "RO",
+              "reset": "$N_BLOCKS",
+              "description": "Declared blocks, implemented and planned."
+            },
+            {
+              "name": "N_REGS",
+              "lsb": 8,
+              "width": 8,
+              "access": "RO",
+              "reset": "$N_REGS_TOTAL",
+              "description": "Implemented registers across all blocks."
+            },
+            {
+              "name": "DATA_W",
+              "lsb": 16,
+              "width": 8,
+              "access": "RO",
+              "reset": "$DATA_W",
+              "description": "Register data width in bits."
+            },
+            {
+              "name": "ADDR_W",
+              "lsb": 24,
+              "width": 8,
+              "access": "RO",
+              "reset": "$ADDR_W",
+              "description": "Register address width in bits."
+            }
           ]
         },
         {
@@ -96,7 +161,14 @@
           "offset": "0x00C",
           "description": "One bit per declared block, set when that block is implemented in this build. Bit i is block i in declaration order; a planned block reads 0 and its window returns error.",
           "fields": [
-            {"name": "BLOCK_MASK", "lsb": 0, "width": 32, "access": "RO", "reset": "$BLOCK_MASK", "description": "Implemented-block bitmap."}
+            {
+              "name": "BLOCK_MASK",
+              "lsb": 0,
+              "width": 32,
+              "access": "RO",
+              "reset": "$BLOCK_MASK",
+              "description": "Implemented-block bitmap."
+            }
           ]
         }
       ]
@@ -106,25 +178,190 @@
       "base": "0x1000",
       "size": "0x1000",
       "implemented": true,
-      "spec_groups": ["Build parameters"],
+      "spec_groups": [
+        "Build parameters"
+      ],
       "description": "Read-only mirror of the elaboration parameters. Every value is driven from config_pkg, which scripts/build_verilator.py generates from config/<name>.json (SPEC 11), so this block reports what was actually elaborated rather than what a header claims.",
       "registers": [
-        {"name": "N_ANTENNAS",        "offset": "0x000", "description": "SPEC 11 sized parameter.",     "fields": [{"name": "VALUE", "lsb": 0, "width": 32, "access": "ROHW", "source": "config_pkg::N_ANTENNAS",        "description": "Antenna count."}]},
-        {"name": "SAMPLES_PER_CYCLE", "offset": "0x004", "description": "SPEC 11 sized parameter.",     "fields": [{"name": "VALUE", "lsb": 0, "width": 32, "access": "ROHW", "source": "config_pkg::SAMPLES_PER_CYCLE", "description": "Samples presented per core clock."}]},
-        {"name": "FFT_SIZE",          "offset": "0x008", "description": "SPEC 11 sized parameter.",     "fields": [{"name": "VALUE", "lsb": 0, "width": 32, "access": "ROHW", "source": "config_pkg::FFT_SIZE",          "description": "FFT points."}]},
-        {"name": "PFB_TAPS",          "offset": "0x00C", "description": "SPEC 11 sized parameter.",     "fields": [{"name": "VALUE", "lsb": 0, "width": 32, "access": "ROHW", "source": "config_pkg::PFB_TAPS",          "description": "Polyphase taps per branch."}]},
-        {"name": "N_BEAMS",           "offset": "0x010", "description": "SPEC 11 sized parameter.",     "fields": [{"name": "VALUE", "lsb": 0, "width": 32, "access": "ROHW", "source": "config_pkg::N_BEAMS",           "description": "Formed beams."}]},
-        {"name": "HISTORY_FRAMES",    "offset": "0x014", "description": "SPEC 11 sized parameter.",     "fields": [{"name": "VALUE", "lsb": 0, "width": 32, "access": "ROHW", "source": "config_pkg::HISTORY_FRAMES",    "description": "Frames of history retained."}]},
-        {"name": "PACKET_W",          "offset": "0x018", "description": "SPEC 11 sized parameter.",     "fields": [{"name": "VALUE", "lsb": 0, "width": 32, "access": "ROHW", "source": "config_pkg::PACKET_W",          "description": "Packet datapath width."}]},
-        {"name": "SAMPLE_W",          "offset": "0x01C", "description": "SPEC 3 invariant parameter.",  "fields": [{"name": "VALUE", "lsb": 0, "width": 32, "access": "ROHW", "source": "config_pkg::SAMPLE_W",          "description": "Sample component width."}]},
-        {"name": "COEFF_W",           "offset": "0x020", "description": "SPEC 3 invariant parameter.",  "fields": [{"name": "VALUE", "lsb": 0, "width": 32, "access": "ROHW", "source": "config_pkg::COEFF_W",           "description": "Coefficient width."}]},
-        {"name": "POWER_W",           "offset": "0x024", "description": "SPEC 3 invariant parameter.",  "fields": [{"name": "VALUE", "lsb": 0, "width": 32, "access": "ROHW", "source": "config_pkg::POWER_W",           "description": "Power/magnitude accumulator width."}]},
-        {"name": "N_VIRTUAL_CHANS",   "offset": "0x028", "description": "SPEC 3 invariant parameter.",  "fields": [{"name": "VALUE", "lsb": 0, "width": 32, "access": "ROHW", "source": "config_pkg::N_VIRTUAL_CHANS",   "description": "Packet virtual channels."}]},
+        {
+          "name": "N_ANTENNAS",
+          "offset": "0x000",
+          "description": "SPEC 11 sized parameter.",
+          "fields": [
+            {
+              "name": "VALUE",
+              "lsb": 0,
+              "width": 32,
+              "access": "ROHW",
+              "source": "config_pkg::N_ANTENNAS",
+              "description": "Antenna count."
+            }
+          ]
+        },
+        {
+          "name": "SAMPLES_PER_CYCLE",
+          "offset": "0x004",
+          "description": "SPEC 11 sized parameter.",
+          "fields": [
+            {
+              "name": "VALUE",
+              "lsb": 0,
+              "width": 32,
+              "access": "ROHW",
+              "source": "config_pkg::SAMPLES_PER_CYCLE",
+              "description": "Samples presented per core clock."
+            }
+          ]
+        },
+        {
+          "name": "FFT_SIZE",
+          "offset": "0x008",
+          "description": "SPEC 11 sized parameter.",
+          "fields": [
+            {
+              "name": "VALUE",
+              "lsb": 0,
+              "width": 32,
+              "access": "ROHW",
+              "source": "config_pkg::FFT_SIZE",
+              "description": "FFT points."
+            }
+          ]
+        },
+        {
+          "name": "PFB_TAPS",
+          "offset": "0x00C",
+          "description": "SPEC 11 sized parameter.",
+          "fields": [
+            {
+              "name": "VALUE",
+              "lsb": 0,
+              "width": 32,
+              "access": "ROHW",
+              "source": "config_pkg::PFB_TAPS",
+              "description": "Polyphase taps per branch."
+            }
+          ]
+        },
+        {
+          "name": "N_BEAMS",
+          "offset": "0x010",
+          "description": "SPEC 11 sized parameter.",
+          "fields": [
+            {
+              "name": "VALUE",
+              "lsb": 0,
+              "width": 32,
+              "access": "ROHW",
+              "source": "config_pkg::N_BEAMS",
+              "description": "Formed beams."
+            }
+          ]
+        },
+        {
+          "name": "HISTORY_FRAMES",
+          "offset": "0x014",
+          "description": "SPEC 11 sized parameter.",
+          "fields": [
+            {
+              "name": "VALUE",
+              "lsb": 0,
+              "width": 32,
+              "access": "ROHW",
+              "source": "config_pkg::HISTORY_FRAMES",
+              "description": "Frames of history retained."
+            }
+          ]
+        },
+        {
+          "name": "PACKET_W",
+          "offset": "0x018",
+          "description": "SPEC 11 sized parameter.",
+          "fields": [
+            {
+              "name": "VALUE",
+              "lsb": 0,
+              "width": 32,
+              "access": "ROHW",
+              "source": "config_pkg::PACKET_W",
+              "description": "Packet datapath width."
+            }
+          ]
+        },
+        {
+          "name": "SAMPLE_W",
+          "offset": "0x01C",
+          "description": "SPEC 3 invariant parameter.",
+          "fields": [
+            {
+              "name": "VALUE",
+              "lsb": 0,
+              "width": 32,
+              "access": "ROHW",
+              "source": "config_pkg::SAMPLE_W",
+              "description": "Sample component width."
+            }
+          ]
+        },
+        {
+          "name": "COEFF_W",
+          "offset": "0x020",
+          "description": "SPEC 3 invariant parameter.",
+          "fields": [
+            {
+              "name": "VALUE",
+              "lsb": 0,
+              "width": 32,
+              "access": "ROHW",
+              "source": "config_pkg::COEFF_W",
+              "description": "Coefficient width."
+            }
+          ]
+        },
+        {
+          "name": "POWER_W",
+          "offset": "0x024",
+          "description": "SPEC 3 invariant parameter.",
+          "fields": [
+            {
+              "name": "VALUE",
+              "lsb": 0,
+              "width": 32,
+              "access": "ROHW",
+              "source": "config_pkg::POWER_W",
+              "description": "Power/magnitude accumulator width."
+            }
+          ]
+        },
+        {
+          "name": "N_VIRTUAL_CHANS",
+          "offset": "0x028",
+          "description": "SPEC 3 invariant parameter.",
+          "fields": [
+            {
+              "name": "VALUE",
+              "lsb": 0,
+              "width": 32,
+              "access": "ROHW",
+              "source": "config_pkg::N_VIRTUAL_CHANS",
+              "description": "Packet virtual channels."
+            }
+          ]
+        },
         {
           "name": "PARAM_CHECKSUM",
           "offset": "0x02C",
           "description": "FNV-1a 32 over the eleven parameter words above, in offset order, little-endian bytes. Computed in RTL from config_pkg and independently in the C++ harness from config_sim.h: a mismatch means the RTL and the harness were elaborated from different configurations, which is otherwise a silent and very expensive failure.",
-          "fields": [{"name": "VALUE", "lsb": 0, "width": 32, "access": "ROHW", "source": "computed", "description": "FNV-1a 32 of the build parameters."}]
+          "fields": [
+            {
+              "name": "VALUE",
+              "lsb": 0,
+              "width": 32,
+              "access": "ROHW",
+              "source": "computed",
+              "description": "FNV-1a 32 of the build parameters."
+            }
+          ]
         }
       ]
     },
@@ -133,7 +370,9 @@
       "base": "0x2000",
       "size": "0x1000",
       "implemented": true,
-      "spec_groups": ["Per-block enable and reset"],
+      "spec_groups": [
+        "Per-block enable and reset"
+      ],
       "description": "Per-block enable and soft-reset stubs. The bit assignment is fixed now so that each kernel issue wires its own enable and reset without renumbering anything; a bit whose consumer has not landed drives an output of control_top and nothing else.",
       "registers": [
         {
@@ -141,14 +380,70 @@
           "offset": "0x000",
           "description": "Per-block enable. Reset value enables every block, so a build with no software present still runs.",
           "fields": [
-            {"name": "PFB",        "lsb": 0, "width": 1, "access": "RW", "reset": "0x1", "description": "Polyphase filter bank (issue #11)."},
-            {"name": "FFT",        "lsb": 1, "width": 1, "access": "RW", "reset": "0x1", "description": "FFT (issue #10)."},
-            {"name": "BEAMFORMER", "lsb": 2, "width": 1, "access": "RW", "reset": "0x1", "description": "Beamformer (issue #12)."},
-            {"name": "COVARIANCE", "lsb": 3, "width": 1, "access": "RW", "reset": "0x1", "description": "Covariance (issue #13)."},
-            {"name": "CFAR",       "lsb": 4, "width": 1, "access": "RW", "reset": "0x1", "description": "CFAR detector (issue #14)."},
-            {"name": "PACKET",     "lsb": 5, "width": 1, "access": "RW", "reset": "0x1", "description": "Packet fabric (issue #18)."},
-            {"name": "MEMORY",     "lsb": 6, "width": 1, "access": "RW", "reset": "0x1", "description": "History memory / corner turn (issue #15)."},
-            {"name": "TELEMETRY",  "lsb": 7, "width": 1, "access": "RW", "reset": "0x1", "description": "Telemetry and counters (issue #8)."}
+            {
+              "name": "PFB",
+              "lsb": 0,
+              "width": 1,
+              "access": "RW",
+              "reset": "0x1",
+              "description": "Polyphase filter bank (issue #11)."
+            },
+            {
+              "name": "FFT",
+              "lsb": 1,
+              "width": 1,
+              "access": "RW",
+              "reset": "0x1",
+              "description": "FFT (issue #10)."
+            },
+            {
+              "name": "BEAMFORMER",
+              "lsb": 2,
+              "width": 1,
+              "access": "RW",
+              "reset": "0x1",
+              "description": "Beamformer (issue #12)."
+            },
+            {
+              "name": "COVARIANCE",
+              "lsb": 3,
+              "width": 1,
+              "access": "RW",
+              "reset": "0x1",
+              "description": "Covariance (issue #13)."
+            },
+            {
+              "name": "CFAR",
+              "lsb": 4,
+              "width": 1,
+              "access": "RW",
+              "reset": "0x1",
+              "description": "CFAR detector (issue #14)."
+            },
+            {
+              "name": "PACKET",
+              "lsb": 5,
+              "width": 1,
+              "access": "RW",
+              "reset": "0x1",
+              "description": "Packet fabric (issue #18)."
+            },
+            {
+              "name": "MEMORY",
+              "lsb": 6,
+              "width": 1,
+              "access": "RW",
+              "reset": "0x1",
+              "description": "History memory / corner turn (issue #15)."
+            },
+            {
+              "name": "TELEMETRY",
+              "lsb": 7,
+              "width": 1,
+              "access": "RW",
+              "reset": "0x1",
+              "description": "Telemetry and counters (issue #8)."
+            }
           ]
         },
         {
@@ -156,14 +451,62 @@
           "offset": "0x004",
           "description": "Per-block soft reset request. Writing 1 emits a one-cycle pulse in the cfg_clk domain; the bit always reads 0. Crossing the pulse into each block's own domain is issue #6 work and is deliberately not done here.",
           "fields": [
-            {"name": "PFB",        "lsb": 0, "width": 1, "access": "RWP", "description": "Pulse a soft reset at the PFB."},
-            {"name": "FFT",        "lsb": 1, "width": 1, "access": "RWP", "description": "Pulse a soft reset at the FFT."},
-            {"name": "BEAMFORMER", "lsb": 2, "width": 1, "access": "RWP", "description": "Pulse a soft reset at the beamformer."},
-            {"name": "COVARIANCE", "lsb": 3, "width": 1, "access": "RWP", "description": "Pulse a soft reset at the covariance engine."},
-            {"name": "CFAR",       "lsb": 4, "width": 1, "access": "RWP", "description": "Pulse a soft reset at the CFAR detector."},
-            {"name": "PACKET",     "lsb": 5, "width": 1, "access": "RWP", "description": "Pulse a soft reset at the packet fabric."},
-            {"name": "MEMORY",     "lsb": 6, "width": 1, "access": "RWP", "description": "Pulse a soft reset at the history memory."},
-            {"name": "TELEMETRY",  "lsb": 7, "width": 1, "access": "RWP", "description": "Pulse a soft reset at the telemetry block."}
+            {
+              "name": "PFB",
+              "lsb": 0,
+              "width": 1,
+              "access": "RWP",
+              "description": "Pulse a soft reset at the PFB."
+            },
+            {
+              "name": "FFT",
+              "lsb": 1,
+              "width": 1,
+              "access": "RWP",
+              "description": "Pulse a soft reset at the FFT."
+            },
+            {
+              "name": "BEAMFORMER",
+              "lsb": 2,
+              "width": 1,
+              "access": "RWP",
+              "description": "Pulse a soft reset at the beamformer."
+            },
+            {
+              "name": "COVARIANCE",
+              "lsb": 3,
+              "width": 1,
+              "access": "RWP",
+              "description": "Pulse a soft reset at the covariance engine."
+            },
+            {
+              "name": "CFAR",
+              "lsb": 4,
+              "width": 1,
+              "access": "RWP",
+              "description": "Pulse a soft reset at the CFAR detector."
+            },
+            {
+              "name": "PACKET",
+              "lsb": 5,
+              "width": 1,
+              "access": "RWP",
+              "description": "Pulse a soft reset at the packet fabric."
+            },
+            {
+              "name": "MEMORY",
+              "lsb": 6,
+              "width": 1,
+              "access": "RWP",
+              "description": "Pulse a soft reset at the history memory."
+            },
+            {
+              "name": "TELEMETRY",
+              "lsb": 7,
+              "width": 1,
+              "access": "RWP",
+              "description": "Pulse a soft reset at the telemetry block."
+            }
           ]
         },
         {
@@ -171,9 +514,28 @@
           "offset": "0x008",
           "description": "Datapath-wide control. GLOBAL_ENABLE gates every block regardless of BLOCK_ENABLE.",
           "fields": [
-            {"name": "GLOBAL_ENABLE", "lsb": 0, "width": 1, "access": "RW",  "reset": "0x1", "description": "Master enable for the datapath."},
-            {"name": "FLUSH",         "lsb": 1, "width": 1, "access": "RWP", "description": "Pulse a pipeline flush."},
-            {"name": "SOFT_RESET",    "lsb": 2, "width": 1, "access": "RWP", "description": "Pulse a datapath-wide soft reset."}
+            {
+              "name": "GLOBAL_ENABLE",
+              "lsb": 0,
+              "width": 1,
+              "access": "RW",
+              "reset": "0x1",
+              "description": "Master enable for the datapath."
+            },
+            {
+              "name": "FLUSH",
+              "lsb": 1,
+              "width": 1,
+              "access": "RWP",
+              "description": "Pulse a pipeline flush."
+            },
+            {
+              "name": "SOFT_RESET",
+              "lsb": 2,
+              "width": 1,
+              "access": "RWP",
+              "description": "Pulse a datapath-wide soft reset."
+            }
           ]
         },
         {
@@ -181,8 +543,20 @@
           "offset": "0x00C",
           "description": "Hardware-driven status. ENABLED_COUNT is computed in the block from the live BLOCK_ENABLE value, so it exercises a real hardware read path rather than mirroring storage.",
           "fields": [
-            {"name": "ENABLED_COUNT", "lsb": 0, "width": 4, "access": "ROHW", "description": "Population count of BLOCK_ENABLE."},
-            {"name": "ALIVE",         "lsb": 8, "width": 1, "access": "ROHW", "description": "Tied high by the block; reads 1 whenever the control plane is out of reset."}
+            {
+              "name": "ENABLED_COUNT",
+              "lsb": 0,
+              "width": 4,
+              "access": "ROHW",
+              "description": "Population count of BLOCK_ENABLE."
+            },
+            {
+              "name": "ALIVE",
+              "lsb": 8,
+              "width": 1,
+              "access": "ROHW",
+              "description": "Tied high by the block; reads 1 whenever the control plane is out of reset."
+            }
           ]
         }
       ]
@@ -192,7 +566,9 @@
       "base": "0x3000",
       "size": "0x1000",
       "implemented": true,
-      "spec_groups": ["Fault injection"],
+      "spec_groups": [
+        "Fault injection"
+      ],
       "description": "Fault injection (SPEC 24). Injection is two-step on purpose: a persistent arming mask plus a one-shot trigger. A single stray write can therefore never inject a fault, and the arming state is visible in a register dump taken after the fact.",
       "registers": [
         {
@@ -200,12 +576,48 @@
           "offset": "0x000",
           "description": "Arming mask. A trigger bit has no effect unless the matching enable bit is set.",
           "fields": [
-            {"name": "STREAM_CORRUPT", "lsb": 0, "width": 1, "access": "RW", "description": "Corrupt a stream payload."},
-            {"name": "SEQ_ERROR",      "lsb": 1, "width": 1, "access": "RW", "description": "Force a sequence discontinuity."},
-            {"name": "FIFO_OVERFLOW",  "lsb": 2, "width": 1, "access": "RW", "description": "Force a FIFO overflow (issue #6 primitives)."},
-            {"name": "CDC_ERROR",      "lsb": 3, "width": 1, "access": "RW", "description": "Force a CDC error report."},
-            {"name": "SATURATION",     "lsb": 4, "width": 1, "access": "RW", "description": "Force a fixed-point saturation event."},
-            {"name": "PACKET_DROP",    "lsb": 5, "width": 1, "access": "RW", "description": "Drop a packet in the packet fabric."}
+            {
+              "name": "STREAM_CORRUPT",
+              "lsb": 0,
+              "width": 1,
+              "access": "RW",
+              "description": "Corrupt a stream payload."
+            },
+            {
+              "name": "SEQ_ERROR",
+              "lsb": 1,
+              "width": 1,
+              "access": "RW",
+              "description": "Force a sequence discontinuity."
+            },
+            {
+              "name": "FIFO_OVERFLOW",
+              "lsb": 2,
+              "width": 1,
+              "access": "RW",
+              "description": "Force a FIFO overflow (issue #6 primitives)."
+            },
+            {
+              "name": "CDC_ERROR",
+              "lsb": 3,
+              "width": 1,
+              "access": "RW",
+              "description": "Force a CDC error report."
+            },
+            {
+              "name": "SATURATION",
+              "lsb": 4,
+              "width": 1,
+              "access": "RW",
+              "description": "Force a fixed-point saturation event."
+            },
+            {
+              "name": "PACKET_DROP",
+              "lsb": 5,
+              "width": 1,
+              "access": "RW",
+              "description": "Drop a packet in the packet fabric."
+            }
           ]
         },
         {
@@ -213,12 +625,48 @@
           "offset": "0x004",
           "description": "One-shot triggers, same bit assignment as FAULT_ENABLE. Writing 1 to an armed bit emits a one-cycle pulse and sets the matching FAULT_STATUS bit. Always reads 0.",
           "fields": [
-            {"name": "STREAM_CORRUPT", "lsb": 0, "width": 1, "access": "RWP", "description": "Trigger a stream corruption."},
-            {"name": "SEQ_ERROR",      "lsb": 1, "width": 1, "access": "RWP", "description": "Trigger a sequence discontinuity."},
-            {"name": "FIFO_OVERFLOW",  "lsb": 2, "width": 1, "access": "RWP", "description": "Trigger a FIFO overflow."},
-            {"name": "CDC_ERROR",      "lsb": 3, "width": 1, "access": "RWP", "description": "Trigger a CDC error."},
-            {"name": "SATURATION",     "lsb": 4, "width": 1, "access": "RWP", "description": "Trigger a saturation event."},
-            {"name": "PACKET_DROP",    "lsb": 5, "width": 1, "access": "RWP", "description": "Trigger a packet drop."}
+            {
+              "name": "STREAM_CORRUPT",
+              "lsb": 0,
+              "width": 1,
+              "access": "RWP",
+              "description": "Trigger a stream corruption."
+            },
+            {
+              "name": "SEQ_ERROR",
+              "lsb": 1,
+              "width": 1,
+              "access": "RWP",
+              "description": "Trigger a sequence discontinuity."
+            },
+            {
+              "name": "FIFO_OVERFLOW",
+              "lsb": 2,
+              "width": 1,
+              "access": "RWP",
+              "description": "Trigger a FIFO overflow."
+            },
+            {
+              "name": "CDC_ERROR",
+              "lsb": 3,
+              "width": 1,
+              "access": "RWP",
+              "description": "Trigger a CDC error."
+            },
+            {
+              "name": "SATURATION",
+              "lsb": 4,
+              "width": 1,
+              "access": "RWP",
+              "description": "Trigger a saturation event."
+            },
+            {
+              "name": "PACKET_DROP",
+              "lsb": 5,
+              "width": 1,
+              "access": "RWP",
+              "description": "Trigger a packet drop."
+            }
           ]
         },
         {
@@ -226,12 +674,48 @@
           "offset": "0x008",
           "description": "Sticky record of faults actually injected, set by hardware and cleared by writing 1. A hardware set in the same cycle as a software clear wins, so an event is never lost to a racing clear.",
           "fields": [
-            {"name": "STREAM_CORRUPT", "lsb": 0, "width": 1, "access": "W1C", "description": "A stream corruption was injected."},
-            {"name": "SEQ_ERROR",      "lsb": 1, "width": 1, "access": "W1C", "description": "A sequence discontinuity was injected."},
-            {"name": "FIFO_OVERFLOW",  "lsb": 2, "width": 1, "access": "W1C", "description": "A FIFO overflow was injected."},
-            {"name": "CDC_ERROR",      "lsb": 3, "width": 1, "access": "W1C", "description": "A CDC error was injected."},
-            {"name": "SATURATION",     "lsb": 4, "width": 1, "access": "W1C", "description": "A saturation event was injected."},
-            {"name": "PACKET_DROP",    "lsb": 5, "width": 1, "access": "W1C", "description": "A packet drop was injected."}
+            {
+              "name": "STREAM_CORRUPT",
+              "lsb": 0,
+              "width": 1,
+              "access": "W1C",
+              "description": "A stream corruption was injected."
+            },
+            {
+              "name": "SEQ_ERROR",
+              "lsb": 1,
+              "width": 1,
+              "access": "W1C",
+              "description": "A sequence discontinuity was injected."
+            },
+            {
+              "name": "FIFO_OVERFLOW",
+              "lsb": 2,
+              "width": 1,
+              "access": "W1C",
+              "description": "A FIFO overflow was injected."
+            },
+            {
+              "name": "CDC_ERROR",
+              "lsb": 3,
+              "width": 1,
+              "access": "W1C",
+              "description": "A CDC error was injected."
+            },
+            {
+              "name": "SATURATION",
+              "lsb": 4,
+              "width": 1,
+              "access": "W1C",
+              "description": "A saturation event was injected."
+            },
+            {
+              "name": "PACKET_DROP",
+              "lsb": 5,
+              "width": 1,
+              "access": "W1C",
+              "description": "A packet drop was injected."
+            }
           ]
         },
         {
@@ -239,7 +723,13 @@
           "offset": "0x00C",
           "description": "Free-running count of injected fault pulses (one per armed bit per trigger). Saturating, not wrapping, so a dump taken long after the event still reports 'many' rather than an ambiguous small number.",
           "fields": [
-            {"name": "VALUE", "lsb": 0, "width": 32, "access": "ROHW", "description": "Injected fault pulses, saturating at 0xFFFFFFFF."}
+            {
+              "name": "VALUE",
+              "lsb": 0,
+              "width": 32,
+              "access": "ROHW",
+              "description": "Injected fault pulses, saturating at 0xFFFFFFFF."
+            }
           ]
         }
       ]
@@ -249,19 +739,77 @@
       "base": "0x4000",
       "size": "0x1000",
       "implemented": true,
-      "spec_groups": ["Snapshot and debug control"],
+      "spec_groups": [
+        "Snapshot and debug control"
+      ],
       "description": "Software scratch registers with no hardware effect. They exist to test the fabric itself: four distinct reset values prove per-register reset defaults, and SCRATCH3 mixes a writable half with a read-only half so that partial writability is covered by construction rather than by a future block happening to need it. The snapshot and debug-control group proper lands with issue #19 in the debug window.",
       "registers": [
-        {"name": "SCRATCH0", "offset": "0x000", "description": "Scratch, reset all zeros.",  "fields": [{"name": "VALUE", "lsb": 0, "width": 32, "access": "RW", "reset": "0x00000000", "description": "Free software use."}]},
-        {"name": "SCRATCH1", "offset": "0x004", "description": "Scratch, reset all ones.",   "fields": [{"name": "VALUE", "lsb": 0, "width": 32, "access": "RW", "reset": "0xFFFFFFFF", "description": "Free software use."}]},
-        {"name": "SCRATCH2", "offset": "0x008", "description": "Scratch, alternating reset.", "fields": [{"name": "VALUE", "lsb": 0, "width": 32, "access": "RW", "reset": "0xA5A5A5A5", "description": "Free software use."}]},
+        {
+          "name": "SCRATCH0",
+          "offset": "0x000",
+          "description": "Scratch, reset all zeros.",
+          "fields": [
+            {
+              "name": "VALUE",
+              "lsb": 0,
+              "width": 32,
+              "access": "RW",
+              "reset": "0x00000000",
+              "description": "Free software use."
+            }
+          ]
+        },
+        {
+          "name": "SCRATCH1",
+          "offset": "0x004",
+          "description": "Scratch, reset all ones.",
+          "fields": [
+            {
+              "name": "VALUE",
+              "lsb": 0,
+              "width": 32,
+              "access": "RW",
+              "reset": "0xFFFFFFFF",
+              "description": "Free software use."
+            }
+          ]
+        },
+        {
+          "name": "SCRATCH2",
+          "offset": "0x008",
+          "description": "Scratch, alternating reset.",
+          "fields": [
+            {
+              "name": "VALUE",
+              "lsb": 0,
+              "width": 32,
+              "access": "RW",
+              "reset": "0xA5A5A5A5",
+              "description": "Free software use."
+            }
+          ]
+        },
         {
           "name": "SCRATCH3",
           "offset": "0x00C",
           "description": "Half writable, half constant. A write updates RW_LOW and leaves RO_HIGH untouched, and the transaction succeeds (error=0) because the register is partially writable.",
           "fields": [
-            {"name": "RW_LOW",  "lsb": 0,  "width": 16, "access": "RW", "reset": "0x5A5A", "description": "Writable half."},
-            {"name": "RO_HIGH", "lsb": 16, "width": 16, "access": "RO", "reset": "0xDEAD", "description": "Constant half; writes are ignored, not refused."}
+            {
+              "name": "RW_LOW",
+              "lsb": 0,
+              "width": 16,
+              "access": "RW",
+              "reset": "0x5A5A",
+              "description": "Writable half."
+            },
+            {
+              "name": "RO_HIGH",
+              "lsb": 16,
+              "width": 16,
+              "access": "RO",
+              "reset": "0xDEAD",
+              "description": "Constant half; writes are ignored, not refused."
+            }
           ]
         }
       ]
@@ -272,7 +820,10 @@
       "size": "0x1000",
       "implemented": true,
       "planned_by": "#11, #16",
-      "spec_groups": ["Coefficient and weight programming", "Active bank selection"],
+      "spec_groups": [
+        "Coefficient and weight programming",
+        "Active bank selection"
+      ],
       "description": "Coefficient and weight programming with double buffering and an active-bank select (SPEC 7.1, SPEC 9). Implemented for the polyphase FIR bank by issue #10; the FFT twiddles (#11), the beam weights (#12) and the per-antenna fan-out (#16) extend it inside the same reserved window. PROGRAMMING SEQUENCE: set COEFF_CTRL.BANK_SEL to the SPARE bank, write COEFF_ADDR once, then write COEFF_DATA per coefficient (the DATA write is what issues the transfer; AUTO_INC advances the index), then write COEFF_CTRL.SWAP_REQ. The swap takes effect at the next start-of-frame beat and not before, which is what makes a frame filtered by exactly one coefficient set. A write aimed at the bank that is currently ACTIVE is refused and raises COEFF_STATUS.WR_REJECT; it is never merged and never deferred. Every field here crosses a clock domain, because the register plane runs on cfg_clk and the bank on core_clk (rtl/pfb/coeff_bank.sv, issue #6 primitives): writes through a four-phase handshake, SWAP_REQ through a pulse synchronizer, and each status bit through its own flip-flop synchronizer. WR_BUSY and SWAP_BUSY are therefore flow control, not decoration. ISSUE #12 ADDED THE BEAM-WEIGHT HALF OF THIS WINDOW (WEIGHT_CTRL, WEIGHT_ADDR, WEIGHT_DATA, WEIGHT_STATUS, WEIGHT_PARALLELISM, WEIGHT_THROUGHPUT), at offsets 0x010..0x024. It is a SECOND, INDEPENDENT programming port with the same shape as the coefficient half above, not a re-use of it: the polyphase coefficients and the beam weights are different stores in different blocks with independent active banks, and sharing one CTRL/ADDR/DATA triple would make loading one of them while the other streams a race with no way to express it. Every rule above - the DATA write is what issues the transfer, AUTO_INC advances the live index, a write aimed at the ACTIVE bank is refused and flagged, the swap takes effect at a frame boundary and not before - holds verbatim for the weight half, because rtl/beamformer/weight_bank.sv reuses the same dual-bank store rather than reimplementing it. WEIGHT_PARALLELISM and WEIGHT_THROUGHPUT are the SPEC 7.5 requirement that any time multiplexing be visible in reported throughput rather than silently reducing it; they are hardware-driven constants folded in at elaboration, so a build cannot report a throughput it does not have.",
       "registers": [
         {
@@ -280,9 +831,28 @@
           "offset": "0x000",
           "description": "Bank selection and the swap request. BANK_SEL names the bank a COEFF_DATA write targets; it is NOT the active bank, which changes only at a frame boundary and is reported by COEFF_STATUS.ACTIVE_BANK.",
           "fields": [
-            {"name": "BANK_SEL",     "lsb": 0, "width": 1, "access": "RW",  "reset": "0x1", "description": "Target bank for coefficient writes. Resets to 1 because the active bank resets to 0, so the reset state is already a legal programming state and software can write without reading anything first."},
-            {"name": "SWAP_REQ",     "lsb": 8, "width": 1, "access": "RWP", "description": "Writing 1 requests a bank swap. The swap happens at the next start-of-frame beat, not here; poll COEFF_STATUS.SWAP_PENDING to watch it retire. Refused, and flagged in SWAP_OVERRUN, while SWAP_BUSY is set."},
-            {"name": "STATUS_CLEAR", "lsb": 9, "width": 1, "access": "RWP", "description": "Writing 1 clears the sticky COEFF_STATUS.WR_REJECT and COEFF_STATUS.SWAP_OVERRUN bits."}
+            {
+              "name": "BANK_SEL",
+              "lsb": 0,
+              "width": 1,
+              "access": "RW",
+              "reset": "0x1",
+              "description": "Target bank for coefficient writes. Resets to 1 because the active bank resets to 0, so the reset state is already a legal programming state and software can write without reading anything first."
+            },
+            {
+              "name": "SWAP_REQ",
+              "lsb": 8,
+              "width": 1,
+              "access": "RWP",
+              "description": "Writing 1 requests a bank swap. The swap happens at the next start-of-frame beat, not here; poll COEFF_STATUS.SWAP_PENDING to watch it retire. Refused, and flagged in SWAP_OVERRUN, while SWAP_BUSY is set."
+            },
+            {
+              "name": "STATUS_CLEAR",
+              "lsb": 9,
+              "width": 1,
+              "access": "RWP",
+              "description": "Writing 1 clears the sticky COEFF_STATUS.WR_REJECT and COEFF_STATUS.SWAP_OVERRUN bits."
+            }
           ]
         },
         {
@@ -290,8 +860,22 @@
           "offset": "0x004",
           "description": "Coefficient index within the selected bank, phase-major and tap-minor: index = phase*PFB_TAPS + tap (pfb_pkg::pfb_coeff_index). That is the order scripts/generate_coefficients.py writes its files in, so a bank is loaded by counting up from zero.",
           "fields": [
-            {"name": "INDEX",    "lsb": 0,  "width": 16, "access": "RW", "reset": "0x0000", "description": "Coefficient index. 16 bits covers 8 phases x 16 taps across 16 antennas with room to spare; an index beyond the elaborated bank is dropped and raises WR_REJECT."},
-            {"name": "AUTO_INC", "lsb": 31, "width": 1,  "access": "RW", "reset": "0x1",    "description": "When 1, the LIVE index advances by one after every accepted COEFF_DATA write, so a whole bank is loaded by writing COEFF_ADDR once and COEFF_DATA repeatedly. Note that INDEX above reads back the last value SOFTWARE wrote, not the live index: reg_csr_block has no hardware-write path into an RW field, and giving it one would hand every RW register in the design a side channel. The live index lives in rtl/control/reg_block_coeff.sv, is reloaded by any COEFF_ADDR write, and is what a transfer carries."}
+            {
+              "name": "INDEX",
+              "lsb": 0,
+              "width": 16,
+              "access": "RW",
+              "reset": "0x0000",
+              "description": "Coefficient index. 16 bits covers 8 phases x 16 taps across 16 antennas with room to spare; an index beyond the elaborated bank is dropped and raises WR_REJECT."
+            },
+            {
+              "name": "AUTO_INC",
+              "lsb": 31,
+              "width": 1,
+              "access": "RW",
+              "reset": "0x1",
+              "description": "When 1, the LIVE index advances by one after every accepted COEFF_DATA write, so a whole bank is loaded by writing COEFF_ADDR once and COEFF_DATA repeatedly. Note that INDEX above reads back the last value SOFTWARE wrote, not the live index: reg_csr_block has no hardware-write path into an RW field, and giving it one would hand every RW register in the design a side channel. The live index lives in rtl/control/reg_block_coeff.sv, is reloaded by any COEFF_ADDR write, and is what a transfer carries."
+            }
           ]
         },
         {
@@ -299,8 +883,22 @@
           "offset": "0x008",
           "description": "One complex Q1.15 coefficient, packed {IM, RE} with the real part in the low half - the same layout as fxp_pkg::fxp_complex_t and the coefficient files. WRITING THIS REGISTER ISSUES THE TRANSFER; COEFF_CTRL and COEFF_ADDR only set it up. Refused while COEFF_STATUS.WR_BUSY is set. Reads return the last value written, not the bank contents: the bank lives in the core clock domain and a read-back path would be a second crossing for no diagnostic gain the coefficient files do not already provide.",
           "fields": [
-            {"name": "RE", "lsb": 0,  "width": 16, "access": "RW", "reset": "0x0000", "description": "Real part, Q1.15."},
-            {"name": "IM", "lsb": 16, "width": 16, "access": "RW", "reset": "0x0000", "description": "Imaginary part, Q1.15."}
+            {
+              "name": "RE",
+              "lsb": 0,
+              "width": 16,
+              "access": "RW",
+              "reset": "0x0000",
+              "description": "Real part, Q1.15."
+            },
+            {
+              "name": "IM",
+              "lsb": 16,
+              "width": 16,
+              "access": "RW",
+              "reset": "0x0000",
+              "description": "Imaginary part, Q1.15."
+            }
           ]
         },
         {
@@ -308,13 +906,55 @@
           "offset": "0x00C",
           "description": "Hardware-driven status for the coefficient plane. Every bit is synchronised out of the core clock domain, so it is a snapshot of a free-running block rather than a handshake - except the two BUSY bits, which are exactly the flow control.",
           "fields": [
-            {"name": "ACTIVE_BANK",  "lsb": 0,  "width": 1,  "access": "ROHW", "description": "The bank the datapath is filtering with. Changes only on a start-of-frame beat (SPEC 7.1), which the RTL asserts as a_coeff_swap_at_sof."},
-            {"name": "SWAP_PENDING", "lsb": 1,  "width": 1,  "access": "ROHW", "description": "A swap has been requested and is waiting for the next frame boundary."},
-            {"name": "WR_BUSY",      "lsb": 2,  "width": 1,  "access": "ROHW", "description": "A coefficient write is in flight across the clock-domain crossing. A COEFF_DATA write issued while this is set is refused."},
-            {"name": "SWAP_BUSY",    "lsb": 3,  "width": 1,  "access": "ROHW", "description": "A swap request is in flight across the crossing. A second SWAP_REQ while this is set is refused and sets SWAP_OVERRUN."},
-            {"name": "WR_REJECT",    "lsb": 8,  "width": 1,  "access": "ROHW", "description": "Sticky: at least one coefficient write since the last completed swap targeted the ACTIVE bank, or an index outside the elaborated bank, and was dropped. Cleared by COEFF_CTRL.STATUS_CLEAR."},
-            {"name": "SWAP_OVERRUN", "lsb": 9,  "width": 1,  "access": "ROHW", "description": "Sticky: a swap request was refused because one was already in flight. Cleared by COEFF_CTRL.STATUS_CLEAR."},
-            {"name": "N_COEFF",      "lsb": 16, "width": 16, "access": "ROHW", "description": "Coefficients per bank in the elaborated design (SAMPLES_PER_CYCLE * PFB_TAPS), reported by hardware so software can size a load without a build-time constant."}
+            {
+              "name": "ACTIVE_BANK",
+              "lsb": 0,
+              "width": 1,
+              "access": "ROHW",
+              "description": "The bank the datapath is filtering with. Changes only on a start-of-frame beat (SPEC 7.1), which the RTL asserts as a_coeff_swap_at_sof."
+            },
+            {
+              "name": "SWAP_PENDING",
+              "lsb": 1,
+              "width": 1,
+              "access": "ROHW",
+              "description": "A swap has been requested and is waiting for the next frame boundary."
+            },
+            {
+              "name": "WR_BUSY",
+              "lsb": 2,
+              "width": 1,
+              "access": "ROHW",
+              "description": "A coefficient write is in flight across the clock-domain crossing. A COEFF_DATA write issued while this is set is refused."
+            },
+            {
+              "name": "SWAP_BUSY",
+              "lsb": 3,
+              "width": 1,
+              "access": "ROHW",
+              "description": "A swap request is in flight across the crossing. A second SWAP_REQ while this is set is refused and sets SWAP_OVERRUN."
+            },
+            {
+              "name": "WR_REJECT",
+              "lsb": 8,
+              "width": 1,
+              "access": "ROHW",
+              "description": "Sticky: at least one coefficient write since the last completed swap targeted the ACTIVE bank, or an index outside the elaborated bank, and was dropped. Cleared by COEFF_CTRL.STATUS_CLEAR."
+            },
+            {
+              "name": "SWAP_OVERRUN",
+              "lsb": 9,
+              "width": 1,
+              "access": "ROHW",
+              "description": "Sticky: a swap request was refused because one was already in flight. Cleared by COEFF_CTRL.STATUS_CLEAR."
+            },
+            {
+              "name": "N_COEFF",
+              "lsb": 16,
+              "width": 16,
+              "access": "ROHW",
+              "description": "Coefficients per bank in the elaborated design (SAMPLES_PER_CYCLE * PFB_TAPS), reported by hardware so software can size a load without a build-time constant."
+            }
           ]
         },
         {
@@ -322,9 +962,28 @@
           "offset": "0x010",
           "description": "Bank selection and the swap request for the BEAM-WEIGHT store (SPEC 7.5, issue #12). BANK_SEL names the bank a WEIGHT_DATA write targets; it is NOT the active bank, which changes only at a frame boundary and is reported by WEIGHT_STATUS.ACTIVE_BANK.",
           "fields": [
-            {"name": "BANK_SEL",     "lsb": 0, "width": 1, "access": "RW",  "reset": "0x1", "description": "Target bank for weight writes. Resets to 1 because the active bank resets to 0, so the reset state is already a legal programming state and software can write without reading anything first."},
-            {"name": "SWAP_REQ",     "lsb": 8, "width": 1, "access": "RWP", "description": "Writing 1 requests a weight-bank swap. The swap happens when the first beam group of the next start-of-frame beat is issued, not here; poll WEIGHT_STATUS.SWAP_PENDING to watch it retire. Refused, and flagged in SWAP_OVERRUN, while SWAP_BUSY is set. THE WHOLE MATRIX SWAPS AT ONCE, never per beam: a beamforming matrix is one calibration solution and a half-swapped array steers to a geometry that was never solved for. See rtl/beamformer/weight_bank.sv section 2 for the alternatives that were rejected."},
-            {"name": "STATUS_CLEAR", "lsb": 9, "width": 1, "access": "RWP", "description": "Writing 1 clears the sticky WEIGHT_STATUS.WR_REJECT and WEIGHT_STATUS.SWAP_OVERRUN bits."}
+            {
+              "name": "BANK_SEL",
+              "lsb": 0,
+              "width": 1,
+              "access": "RW",
+              "reset": "0x1",
+              "description": "Target bank for weight writes. Resets to 1 because the active bank resets to 0, so the reset state is already a legal programming state and software can write without reading anything first."
+            },
+            {
+              "name": "SWAP_REQ",
+              "lsb": 8,
+              "width": 1,
+              "access": "RWP",
+              "description": "Writing 1 requests a weight-bank swap. The swap happens when the first beam group of the next start-of-frame beat is issued, not here; poll WEIGHT_STATUS.SWAP_PENDING to watch it retire. Refused, and flagged in SWAP_OVERRUN, while SWAP_BUSY is set. THE WHOLE MATRIX SWAPS AT ONCE, never per beam: a beamforming matrix is one calibration solution and a half-swapped array steers to a geometry that was never solved for. See rtl/beamformer/weight_bank.sv section 2 for the alternatives that were rejected."
+            },
+            {
+              "name": "STATUS_CLEAR",
+              "lsb": 9,
+              "width": 1,
+              "access": "RWP",
+              "description": "Writing 1 clears the sticky WEIGHT_STATUS.WR_REJECT and WEIGHT_STATUS.SWAP_OVERRUN bits."
+            }
           ]
         },
         {
@@ -332,8 +991,22 @@
           "offset": "0x014",
           "description": "Weight index within the selected bank, beam-major and antenna-minor: index = beam*N_ANTENNAS + antenna (beamformer_pkg::bf_weight_index). That is the order the RTL, the C++ model and the weight files all use, so a bank is loaded by counting up from zero.",
           "fields": [
-            {"name": "INDEX",    "lsb": 0,  "width": 16, "access": "RW", "reset": "0x0000", "description": "Weight index. 16 bits covers 16 beams x 16 antennas with room for the larger arrays beamformer_pkg's bounds allow; an index beyond the elaborated bank is dropped and raises WR_REJECT."},
-            {"name": "AUTO_INC", "lsb": 31, "width": 1,  "access": "RW", "reset": "0x1",    "description": "When 1, the LIVE index advances by one after every accepted WEIGHT_DATA write, so a whole bank is loaded by writing WEIGHT_ADDR once and WEIGHT_DATA repeatedly. As with COEFF_ADDR, INDEX reads back the last value SOFTWARE wrote rather than the live index, for the same reason: reg_csr_block has no hardware-write path into an RW field. The live index lives in rtl/control/reg_block_coeff.sv, is reloaded by any WEIGHT_ADDR write, and is what a transfer carries."}
+            {
+              "name": "INDEX",
+              "lsb": 0,
+              "width": 16,
+              "access": "RW",
+              "reset": "0x0000",
+              "description": "Weight index. 16 bits covers 16 beams x 16 antennas with room for the larger arrays beamformer_pkg's bounds allow; an index beyond the elaborated bank is dropped and raises WR_REJECT."
+            },
+            {
+              "name": "AUTO_INC",
+              "lsb": 31,
+              "width": 1,
+              "access": "RW",
+              "reset": "0x1",
+              "description": "When 1, the LIVE index advances by one after every accepted WEIGHT_DATA write, so a whole bank is loaded by writing WEIGHT_ADDR once and WEIGHT_DATA repeatedly. As with COEFF_ADDR, INDEX reads back the last value SOFTWARE wrote rather than the live index, for the same reason: reg_csr_block has no hardware-write path into an RW field. The live index lives in rtl/control/reg_block_coeff.sv, is reloaded by any WEIGHT_ADDR write, and is what a transfer carries."
+            }
           ]
         },
         {
@@ -341,8 +1014,22 @@
           "offset": "0x018",
           "description": "One complex Q1.15 beam weight, packed {IM, RE} with the real part in the low half - the same layout as fxp_pkg::fxp_complex_t. WRITING THIS REGISTER ISSUES THE TRANSFER; WEIGHT_CTRL and WEIGHT_ADDR only set it up. Refused while WEIGHT_STATUS.WR_BUSY is set. Reads return the last value written, not the bank contents: the bank lives in the core clock domain and a read-back path would be a second crossing for no diagnostic gain.",
           "fields": [
-            {"name": "RE", "lsb": 0,  "width": 16, "access": "RW", "reset": "0x0000", "description": "Real part, Q1.15."},
-            {"name": "IM", "lsb": 16, "width": 16, "access": "RW", "reset": "0x0000", "description": "Imaginary part, Q1.15."}
+            {
+              "name": "RE",
+              "lsb": 0,
+              "width": 16,
+              "access": "RW",
+              "reset": "0x0000",
+              "description": "Real part, Q1.15."
+            },
+            {
+              "name": "IM",
+              "lsb": 16,
+              "width": 16,
+              "access": "RW",
+              "reset": "0x0000",
+              "description": "Imaginary part, Q1.15."
+            }
           ]
         },
         {
@@ -350,13 +1037,55 @@
           "offset": "0x01C",
           "description": "Hardware-driven status for the beam-weight plane. Every bit is synchronised out of the core clock domain, so it is a snapshot of a free-running block rather than a handshake - except the two BUSY bits, which are exactly the flow control.",
           "fields": [
-            {"name": "ACTIVE_BANK",  "lsb": 0,  "width": 1,  "access": "ROHW", "description": "The bank the matrix is beamforming with. Changes only when the first beam group of a start-of-frame beat is issued (SPEC 7.5), which the RTL asserts as a_coeff_swap_at_sof inside the reused store."},
-            {"name": "SWAP_PENDING", "lsb": 1,  "width": 1,  "access": "ROHW", "description": "A swap has been requested and is waiting for the next frame boundary."},
-            {"name": "WR_BUSY",      "lsb": 2,  "width": 1,  "access": "ROHW", "description": "A weight write is in flight across the clock-domain crossing. A WEIGHT_DATA write issued while this is set is refused."},
-            {"name": "SWAP_BUSY",    "lsb": 3,  "width": 1,  "access": "ROHW", "description": "A swap request is in flight across the crossing. A second SWAP_REQ while this is set is refused and sets SWAP_OVERRUN."},
-            {"name": "WR_REJECT",    "lsb": 8,  "width": 1,  "access": "ROHW", "description": "Sticky: at least one weight write since the last completed swap targeted the ACTIVE bank, or an index outside the elaborated bank, and was dropped. Cleared by WEIGHT_CTRL.STATUS_CLEAR."},
-            {"name": "SWAP_OVERRUN", "lsb": 9,  "width": 1,  "access": "ROHW", "description": "Sticky: a swap request was refused because one was already in flight. Cleared by WEIGHT_CTRL.STATUS_CLEAR."},
-            {"name": "N_WEIGHTS",    "lsb": 16, "width": 16, "access": "ROHW", "description": "Weights per bank in the elaborated design (N_BEAMS * N_ANTENNAS), reported by hardware so software can size a load without a build-time constant."}
+            {
+              "name": "ACTIVE_BANK",
+              "lsb": 0,
+              "width": 1,
+              "access": "ROHW",
+              "description": "The bank the matrix is beamforming with. Changes only when the first beam group of a start-of-frame beat is issued (SPEC 7.5), which the RTL asserts as a_coeff_swap_at_sof inside the reused store."
+            },
+            {
+              "name": "SWAP_PENDING",
+              "lsb": 1,
+              "width": 1,
+              "access": "ROHW",
+              "description": "A swap has been requested and is waiting for the next frame boundary."
+            },
+            {
+              "name": "WR_BUSY",
+              "lsb": 2,
+              "width": 1,
+              "access": "ROHW",
+              "description": "A weight write is in flight across the clock-domain crossing. A WEIGHT_DATA write issued while this is set is refused."
+            },
+            {
+              "name": "SWAP_BUSY",
+              "lsb": 3,
+              "width": 1,
+              "access": "ROHW",
+              "description": "A swap request is in flight across the crossing. A second SWAP_REQ while this is set is refused and sets SWAP_OVERRUN."
+            },
+            {
+              "name": "WR_REJECT",
+              "lsb": 8,
+              "width": 1,
+              "access": "ROHW",
+              "description": "Sticky: at least one weight write since the last completed swap targeted the ACTIVE bank, or an index outside the elaborated bank, and was dropped. Cleared by WEIGHT_CTRL.STATUS_CLEAR."
+            },
+            {
+              "name": "SWAP_OVERRUN",
+              "lsb": 9,
+              "width": 1,
+              "access": "ROHW",
+              "description": "Sticky: a swap request was refused because one was already in flight. Cleared by WEIGHT_CTRL.STATUS_CLEAR."
+            },
+            {
+              "name": "N_WEIGHTS",
+              "lsb": 16,
+              "width": 16,
+              "access": "ROHW",
+              "description": "Weights per bank in the elaborated design (N_BEAMS * N_ANTENNAS), reported by hardware so software can size a load without a build-time constant."
+            }
           ]
         },
         {
@@ -364,10 +1093,34 @@
           "offset": "0x020",
           "description": "The elaborated beamformer geometry, driven by hardware from rtl/beamformer/beamformer.sv's tput_* ports. SPEC 7.5: 'Do not silently reduce throughput to meet utilization. Any time multiplexing must be visible in parameters and reported throughput.' These four fields plus WEIGHT_THROUGHPUT are that visibility, and they are folded in at elaboration so a build cannot report a shape it does not have.",
           "fields": [
-            {"name": "N_ANTENNAS", "lsb": 0,  "width": 8, "access": "ROHW", "description": "Antennas summed by each dot product."},
-            {"name": "N_BEAMS",    "lsb": 8,  "width": 8, "access": "ROHW", "description": "Beams the matrix produces per frequency bin."},
-            {"name": "BIN_PAR",    "lsb": 16, "width": 8, "access": "ROHW", "description": "Frequency bins carried by one input beat, each as a complete N_ANTENNAS vector."},
-            {"name": "BEAM_PAR",   "lsb": 24, "width": 8, "access": "ROHW", "description": "Beams computed per cycle by the elaborated engine. Equal to N_BEAMS when there is no time multiplexing."}
+            {
+              "name": "N_ANTENNAS",
+              "lsb": 0,
+              "width": 8,
+              "access": "ROHW",
+              "description": "Antennas summed by each dot product."
+            },
+            {
+              "name": "N_BEAMS",
+              "lsb": 8,
+              "width": 8,
+              "access": "ROHW",
+              "description": "Beams the matrix produces per frequency bin."
+            },
+            {
+              "name": "BIN_PAR",
+              "lsb": 16,
+              "width": 8,
+              "access": "ROHW",
+              "description": "Frequency bins carried by one input beat, each as a complete N_ANTENNAS vector."
+            },
+            {
+              "name": "BEAM_PAR",
+              "lsb": 24,
+              "width": 8,
+              "access": "ROHW",
+              "description": "Beams computed per cycle by the elaborated engine. Equal to N_BEAMS when there is no time multiplexing."
+            }
           ]
         },
         {
@@ -375,8 +1128,20 @@
           "offset": "0x024",
           "description": "The derived throughput of the elaborated beamformer. BEAM_MUX is the time-multiplex factor N_BEAMS/BEAM_PAR: the block accepts one input beat every BEAM_MUX cycles and emits one output beat per cycle, each carrying BEAM_PAR beams of BIN_PAR bins, so sustained bins per cycle is BIN_PAR/BEAM_MUX. Reading a value greater than 1 in BEAM_MUX is the design telling software that its input rate is reduced - which is precisely what SPEC 7.5 forbids doing silently.",
           "fields": [
-            {"name": "BEAM_MUX",            "lsb": 0, "width": 8,  "access": "ROHW", "description": "N_BEAMS / BEAM_PAR. 1 when every beam is computed in parallel and there is no multiplexing at all."},
-            {"name": "BEAM_BINS_PER_CYCLE", "lsb": 8, "width": 16, "access": "ROHW", "description": "BIN_PAR * BEAM_PAR: the engine's arithmetic throughput in beam-bins per cycle. Invariant under the multiplex, because multiplexing trades input rate for engine reuse and nothing else."}
+            {
+              "name": "BEAM_MUX",
+              "lsb": 0,
+              "width": 8,
+              "access": "ROHW",
+              "description": "N_BEAMS / BEAM_PAR. 1 when every beam is computed in parallel and there is no multiplexing at all."
+            },
+            {
+              "name": "BEAM_BINS_PER_CYCLE",
+              "lsb": 8,
+              "width": 16,
+              "access": "ROHW",
+              "description": "BIN_PAR * BEAM_PAR: the engine's arithmetic throughput in beam-bins per cycle. Invariant under the multiplex, because multiplexing trades input rate for engine reuse and nothing else."
+            }
           ]
         }
       ]
@@ -387,7 +1152,9 @@
       "size": "0x1000",
       "implemented": true,
       "planned_by": "#14, #16",
-      "spec_groups": ["CFAR settings"],
+      "spec_groups": [
+        "CFAR settings"
+      ],
       "description": "Settings for the SPEC 7.7 one-dimensional CFAR detector over frequency bins (rtl/cfar/, issue #14): the detection mode, the guard and reference cell counts on each side independently, the threshold multiplier, the output mode, and the detection/suppression accounting coming back the other way. EVERYTHING WRITABLE HERE TAKES EFFECT AT A FRAME BOUNDARY AND ONLY THERE. rtl/cfar/cfar_core.sv latches the whole window into an active copy at the admitted start-of-frame beat, so a frame is always processed under exactly one geometry - which is the only way its suppression count, its detection count and the alpha carried in its events mean anything. CFAR_STATUS.CFG_PENDING reports that a write has not been taken yet, so software watches the change retire rather than inferring it. A guard or reference count above the elaborated maximum is CLAMPED to that maximum and raises CFAR_FAULT.CFG_CLAMPED; out of range is defined rather than undefined, because a register plane can be programmed with anything. The elaborated maxima themselves are reported in CFAR_STATUS so software sizes its programming without a compiled-in constant. Note that issue #16 was expected to add coherent and non-coherent integration settings to this window; the SPEC 9 group 'Integration settings' is implemented by the covariance window at 0x9000 (issue #13), so this window claims only 'CFAR settings'.",
       "registers": [
         {
@@ -395,10 +1162,37 @@
           "offset": "0x000",
           "description": "Master controls. STATUS_CLEAR is write-1-pulse and reads back zero, because it is an event rather than a mode.",
           "fields": [
-            {"name": "ENABLE", "lsb": 0, "width": 1, "access": "RW", "reset": "0x0", "description": "Detection enable. Cleared, every bin is reported SUPPRESSED and no detection is raised - the same path an incomplete window takes, so there is one suppression rule and one counter rather than two. Resets to 0: a detector that powers up detecting would flood the packet network before software had configured a threshold."},
-            {"name": "MODE", "lsb": 4, "width": 2, "access": "RW", "reset": "0x0", "description": "0: cell averaging, the noise estimate is the mean of ALL reference cells. 1: greatest-of, the noise estimate is the larger of the two one-sided means. 2 and 3 are reserved; ordered-statistics CFAR needs a rank-order network rather than a sum and is not implemented (SPEC 7.7 lists it as optional). Greatest-of requires a non-zero reference count on BOTH sides; cell averaging requires only that their sum be non-zero. A mode whose reference geometry is unusable suppresses every bin and raises CFAR_FAULT.NO_REF."},
-            {"name": "OUT_MODE", "lsb": 8, "width": 1, "access": "RW", "reset": "0x0", "description": "0: EVENTS - the output stream carries only the bins that detected, plus one end-of-frame summary per input frame. 1: DENSE - every bin is reported (detected, evaluated-and-not-detected, or suppressed) plus the same summary. DENSE is the debug and snapshot mode: it makes the whole per-bin decision observable without a second data path, at the cost of one output beat per bin."},
-            {"name": "STATUS_CLEAR", "lsb": 16, "width": 1, "access": "RWP", "description": "Writing 1 clears the sticky CFAR_FAULT bits and zeroes CFAR_DET_COUNT, CFAR_SUP_COUNT and CFAR_FRAME_COUNT. A fault raised in the same cycle as the clear survives it, which is what stops a read-then-clear from losing an event."}
+            {
+              "name": "ENABLE",
+              "lsb": 0,
+              "width": 1,
+              "access": "RW",
+              "reset": "0x0",
+              "description": "Detection enable. Cleared, every bin is reported SUPPRESSED and no detection is raised - the same path an incomplete window takes, so there is one suppression rule and one counter rather than two. Resets to 0: a detector that powers up detecting would flood the packet network before software had configured a threshold."
+            },
+            {
+              "name": "MODE",
+              "lsb": 4,
+              "width": 2,
+              "access": "RW",
+              "reset": "0x0",
+              "description": "0: cell averaging, the noise estimate is the mean of ALL reference cells. 1: greatest-of, the noise estimate is the larger of the two one-sided means. 2 and 3 are reserved; ordered-statistics CFAR needs a rank-order network rather than a sum and is not implemented (SPEC 7.7 lists it as optional). Greatest-of requires a non-zero reference count on BOTH sides; cell averaging requires only that their sum be non-zero. A mode whose reference geometry is unusable suppresses every bin and raises CFAR_FAULT.NO_REF."
+            },
+            {
+              "name": "OUT_MODE",
+              "lsb": 8,
+              "width": 1,
+              "access": "RW",
+              "reset": "0x0",
+              "description": "0: EVENTS - the output stream carries only the bins that detected, plus one end-of-frame summary per input frame. 1: DENSE - every bin is reported (detected, evaluated-and-not-detected, or suppressed) plus the same summary. DENSE is the debug and snapshot mode: it makes the whole per-bin decision observable without a second data path, at the cost of one output beat per bin."
+            },
+            {
+              "name": "STATUS_CLEAR",
+              "lsb": 16,
+              "width": 1,
+              "access": "RWP",
+              "description": "Writing 1 clears the sticky CFAR_FAULT bits and zeroes CFAR_DET_COUNT, CFAR_SUP_COUNT and CFAR_FRAME_COUNT. A fault raised in the same cycle as the clear survives it, which is what stops a read-then-clear from losing an event."
+            }
           ]
         },
         {
@@ -406,10 +1200,38 @@
           "offset": "0x004",
           "description": "Guard and reference cell counts, LEADING (higher frequency) and LAGGING (lower frequency) sides independently. The reference cells of a side start immediately beyond that side's guard cells. The first and last (guard + reference) bins of every frame have an incomplete window and are suppressed, which at a 64-bin frame with 2 guard and 8 reference cells is 20 of 64 bins - the reason these are runtime registers rather than compile-time constants.",
           "fields": [
-            {"name": "GUARD_LEAD", "lsb": 0, "width": 5, "access": "RW", "reset": "0x02", "description": "Guard cells between the cell under test and the leading reference band. Zero is legal and means the reference cells start in the adjacent bin."},
-            {"name": "GUARD_LAG", "lsb": 8, "width": 5, "access": "RW", "reset": "0x02", "description": "Guard cells on the lagging side."},
-            {"name": "REF_LEAD", "lsb": 16, "width": 6, "access": "RW", "reset": "0x08", "description": "Leading reference cells. Zero is legal in cell-averaging mode (a one-sided estimator) and is not in greatest-of mode."},
-            {"name": "REF_LAG", "lsb": 24, "width": 6, "access": "RW", "reset": "0x08", "description": "Lagging reference cells."}
+            {
+              "name": "GUARD_LEAD",
+              "lsb": 0,
+              "width": 5,
+              "access": "RW",
+              "reset": "0x02",
+              "description": "Guard cells between the cell under test and the leading reference band. Zero is legal and means the reference cells start in the adjacent bin."
+            },
+            {
+              "name": "GUARD_LAG",
+              "lsb": 8,
+              "width": 5,
+              "access": "RW",
+              "reset": "0x02",
+              "description": "Guard cells on the lagging side."
+            },
+            {
+              "name": "REF_LEAD",
+              "lsb": 16,
+              "width": 6,
+              "access": "RW",
+              "reset": "0x08",
+              "description": "Leading reference cells. Zero is legal in cell-averaging mode (a one-sided estimator) and is not in greatest-of mode."
+            },
+            {
+              "name": "REF_LAG",
+              "lsb": 24,
+              "width": 6,
+              "access": "RW",
+              "reset": "0x08",
+              "description": "Lagging reference cells."
+            }
           ]
         },
         {
@@ -417,7 +1239,14 @@
           "offset": "0x008",
           "description": "The programmable threshold multiplier (SPEC 7.7). A bin detects when its power strictly exceeds ALPHA times the mean of its reference cells; the detector never divides, comparing cell*N*2^F against ALPHA*sum instead, so the decision is an exact integer inequality with no rounding and no tolerance.",
           "fields": [
-            {"name": "ALPHA", "lsb": 0, "width": 16, "access": "RW", "reset": "0x1400", "description": "Threshold multiplier in UNSIGNED Q8.8: 8 integer bits and 8 fractional bits, covering [0, 255.996] in steps of 1/256. NOT Q1.15 - the SPEC 6 sample format cannot represent a value above 1, and the textbook cell-averaging design point alpha = N*(Pfa^(-1/N) - 1) is about 21.9 for 16 reference cells at Pfa = 1e-6. The reset value 0x1400 is exactly 20.0, close to that design point. 0x0100 is exactly 1.0, at which a perfectly flat spectrum detects nothing because the comparison is strict; alpha below 1.0 is legal and is the cheapest way for a test to force detections everywhere."}
+            {
+              "name": "ALPHA",
+              "lsb": 0,
+              "width": 16,
+              "access": "RW",
+              "reset": "0x1400",
+              "description": "Threshold multiplier in UNSIGNED Q8.8: 8 integer bits and 8 fractional bits, covering [0, 255.996] in steps of 1/256. NOT Q1.15 - the SPEC 6 sample format cannot represent a value above 1, and the textbook cell-averaging design point alpha = N*(Pfa^(-1/N) - 1) is about 21.9 for 16 reference cells at Pfa = 1e-6. The reset value 0x1400 is exactly 20.0, close to that design point. 0x0100 is exactly 1.0, at which a perfectly flat spectrum detects nothing because the comparison is strict; alpha below 1.0 is legal and is the cheapest way for a test to force detections everywhere."
+            }
           ]
         },
         {
@@ -425,11 +1254,41 @@
           "offset": "0x00C",
           "description": "Hardware-driven status. The geometry fields let software size its programming without compiled-in constants, exactly as the build-parameter block does for the rest of the design.",
           "fields": [
-            {"name": "MAX_GUARD", "lsb": 0, "width": 8, "access": "ROHW", "description": "Elaborated maximum guard-cell count per side. A larger value written to CFAR_WINDOW is clamped to this."},
-            {"name": "MAX_REF", "lsb": 8, "width": 8, "access": "ROHW", "description": "Elaborated maximum reference-cell count per side."},
-            {"name": "ALPHA_FRAC_W", "lsb": 16, "width": 8, "access": "ROHW", "description": "Fractional bits in CFAR_THRESHOLD.ALPHA, so software converts a real-valued multiplier without a compiled-in scale factor."},
-            {"name": "CFG_PENDING", "lsb": 24, "width": 1, "access": "ROHW", "description": "The register values differ from the active copy: a write is waiting for the next frame boundary. Clears when the frame that takes it starts."},
-            {"name": "FRAME_OPEN", "lsb": 25, "width": 1, "access": "ROHW", "description": "A frame is in flight (being consumed, flushed, or summarised). A write issued while this is clear takes effect on the next frame with no wait."}
+            {
+              "name": "MAX_GUARD",
+              "lsb": 0,
+              "width": 8,
+              "access": "ROHW",
+              "description": "Elaborated maximum guard-cell count per side. A larger value written to CFAR_WINDOW is clamped to this."
+            },
+            {
+              "name": "MAX_REF",
+              "lsb": 8,
+              "width": 8,
+              "access": "ROHW",
+              "description": "Elaborated maximum reference-cell count per side."
+            },
+            {
+              "name": "ALPHA_FRAC_W",
+              "lsb": 16,
+              "width": 8,
+              "access": "ROHW",
+              "description": "Fractional bits in CFAR_THRESHOLD.ALPHA, so software converts a real-valued multiplier without a compiled-in scale factor."
+            },
+            {
+              "name": "CFG_PENDING",
+              "lsb": 24,
+              "width": 1,
+              "access": "ROHW",
+              "description": "The register values differ from the active copy: a write is waiting for the next frame boundary. Clears when the frame that takes it starts."
+            },
+            {
+              "name": "FRAME_OPEN",
+              "lsb": 25,
+              "width": 1,
+              "access": "ROHW",
+              "description": "A frame is in flight (being consumed, flushed, or summarised). A write issued while this is clear takes effect on the next frame with no wait."
+            }
           ]
         },
         {
@@ -437,9 +1296,27 @@
           "offset": "0x010",
           "description": "Widths of the detection-event format, reported by hardware so a consumer of the SPEC 7.8 packet network can parse events without a build-time header.",
           "fields": [
-            {"name": "EVENT_W", "lsb": 0, "width": 16, "access": "ROHW", "description": "Total width of a packed detection event in bits. Configuration-independent by construction: every field of the event format is a constant of rtl/packages/cfar_pkg.sv, none is an elaboration parameter, because a packet format that changed with the FFT size would have to be renegotiated at every SPEC 11 size."},
-            {"name": "POWER_W", "lsb": 16, "width": 8, "access": "ROHW", "description": "Width of the cell-power field, which is SPEC 3 POWER_W."},
-            {"name": "SUM_W", "lsb": 24, "width": 8, "access": "ROHW", "description": "Width of the reference-sum field. The noise estimate is reported as the SUM and the COUNT rather than as their quotient, because the detector never divides and adding a divider to fill in a metadata field would put the only inexact operation in the block on the reporting path."}
+            {
+              "name": "EVENT_W",
+              "lsb": 0,
+              "width": 16,
+              "access": "ROHW",
+              "description": "Total width of a packed detection event in bits. Configuration-independent by construction: every field of the event format is a constant of rtl/packages/cfar_pkg.sv, none is an elaboration parameter, because a packet format that changed with the FFT size would have to be renegotiated at every SPEC 11 size."
+            },
+            {
+              "name": "POWER_W",
+              "lsb": 16,
+              "width": 8,
+              "access": "ROHW",
+              "description": "Width of the cell-power field, which is SPEC 3 POWER_W."
+            },
+            {
+              "name": "SUM_W",
+              "lsb": 24,
+              "width": 8,
+              "access": "ROHW",
+              "description": "Width of the reference-sum field. The noise estimate is reported as the SUM and the COUNT rather than as their quotient, because the detector never divides and adding a divider to fill in a metadata field would put the only inexact operation in the block on the reporting path."
+            }
           ]
         },
         {
@@ -447,7 +1324,13 @@
           "offset": "0x014",
           "description": "Detections raised since the last CFAR_CTRL.STATUS_CLEAR. Saturates at all-ones rather than wrapping: a wrapped counter can read zero on a detector that is firing continuously, which is the one reading that must never be produced.",
           "fields": [
-            {"name": "VALUE", "lsb": 0, "width": 32, "access": "ROHW", "description": "Detection count."}
+            {
+              "name": "VALUE",
+              "lsb": 0,
+              "width": 32,
+              "access": "ROHW",
+              "description": "Detection count."
+            }
           ]
         },
         {
@@ -455,7 +1338,13 @@
           "offset": "0x018",
           "description": "Bins suppressed since the last CFAR_CTRL.STATUS_CLEAR: incomplete window at a frame edge, block disabled, or an unusable reference geometry. SPEC 7.7 requires suppression under invalid or incomplete windows; this is the number that makes it visible rather than silent. Saturating, for the reason CFAR_DET_COUNT is.",
           "fields": [
-            {"name": "VALUE", "lsb": 0, "width": 32, "access": "ROHW", "description": "Suppressed-bin count."}
+            {
+              "name": "VALUE",
+              "lsb": 0,
+              "width": 32,
+              "access": "ROHW",
+              "description": "Suppressed-bin count."
+            }
           ]
         },
         {
@@ -463,12 +1352,48 @@
           "offset": "0x01C",
           "description": "Sticky fault bits, write 1 to clear; also cleared by CFAR_CTRL.STATUS_CLEAR. Every one of these is a condition the detector handles deterministically rather than a condition it fails on - the bit exists so that the handling is visible instead of plausible.",
           "fields": [
-            {"name": "CFG_CLAMPED", "lsb": 0, "width": 1, "access": "W1C", "description": "A guard or reference count written above the elaborated maximum was clamped to it when the frame latched."},
-            {"name": "NEG_INPUT", "lsb": 1, "width": 1, "access": "W1C", "description": "An input cell arrived with its sign bit set. A negative integrated power is not physical; it is clamped to zero so that every width downstream is an honest magnitude, and flagged here because it can only be an upstream defect or a cross-power stream wired to the detector by mistake."},
-            {"name": "ORPHAN_BEAT", "lsb": 2, "width": 1, "access": "W1C", "description": "A beat arrived between frames without start_of_frame. It has no defined bin index, so it is consumed and discarded rather than stalled: a stalled detector backs pressure into the FFT."},
-            {"name": "SOF_IN_FRAME", "lsb": 3, "width": 1, "access": "W1C", "description": "start_of_frame was asserted on a beat that is not a frame's first. The bit is IGNORED and the beat is treated as an ordinary bin; the source is violating SPEC 5."},
-            {"name": "NO_REF", "lsb": 4, "width": 1, "access": "W1C", "description": "A frame ran with a reference geometry the selected mode cannot use - zero reference cells in cell-averaging mode, or a zero count on either side in greatest-of mode. Every bin of that frame is suppressed."},
-            {"name": "BIN_OVERFLOW", "lsb": 5, "width": 1, "access": "W1C", "description": "A frame ran past 65535 bins, so the bin index saturated rather than wrapping. A wrapped index would put two different frequencies in one detection event."}
+            {
+              "name": "CFG_CLAMPED",
+              "lsb": 0,
+              "width": 1,
+              "access": "W1C",
+              "description": "A guard or reference count written above the elaborated maximum was clamped to it when the frame latched."
+            },
+            {
+              "name": "NEG_INPUT",
+              "lsb": 1,
+              "width": 1,
+              "access": "W1C",
+              "description": "An input cell arrived with its sign bit set. A negative integrated power is not physical; it is clamped to zero so that every width downstream is an honest magnitude, and flagged here because it can only be an upstream defect or a cross-power stream wired to the detector by mistake."
+            },
+            {
+              "name": "ORPHAN_BEAT",
+              "lsb": 2,
+              "width": 1,
+              "access": "W1C",
+              "description": "A beat arrived between frames without start_of_frame. It has no defined bin index, so it is consumed and discarded rather than stalled: a stalled detector backs pressure into the FFT."
+            },
+            {
+              "name": "SOF_IN_FRAME",
+              "lsb": 3,
+              "width": 1,
+              "access": "W1C",
+              "description": "start_of_frame was asserted on a beat that is not a frame's first. The bit is IGNORED and the beat is treated as an ordinary bin; the source is violating SPEC 5."
+            },
+            {
+              "name": "NO_REF",
+              "lsb": 4,
+              "width": 1,
+              "access": "W1C",
+              "description": "A frame ran with a reference geometry the selected mode cannot use - zero reference cells in cell-averaging mode, or a zero count on either side in greatest-of mode. Every bin of that frame is suppressed."
+            },
+            {
+              "name": "BIN_OVERFLOW",
+              "lsb": 5,
+              "width": 1,
+              "access": "W1C",
+              "description": "A frame ran past 65535 bins, so the bin index saturated rather than wrapping. A wrapped index would put two different frequencies in one detection event."
+            }
           ]
         },
         {
@@ -476,7 +1401,13 @@
           "offset": "0x020",
           "description": "Frames summarised since the last CFAR_CTRL.STATUS_CLEAR. Exactly one summary event is emitted per input frame, so this counter and the number of end_of_frame beats on the detection stream are the same number - which is what lets a consumer detect a lost output frame.",
           "fields": [
-            {"name": "VALUE", "lsb": 0, "width": 32, "access": "ROHW", "description": "Summarised-frame count."}
+            {
+              "name": "VALUE",
+              "lsb": 0,
+              "width": 32,
+              "access": "ROHW",
+              "description": "Summarised-frame count."
+            }
           ]
         }
       ]
@@ -503,12 +1434,50 @@
           "offset": "0x000",
           "description": "Measurement window and the three strobes. ENABLE gates every counter, so a window can be opened and closed without touching the traffic being measured. SNAPSHOT, CLEAR and STICKY_CLEAR are write-1-pulse and always read 0.",
           "fields": [
-            {"name": "ENABLE", "lsb": 0, "width": 1, "access": "RW", "reset": "0x1", "description": "Counters advance only while this is 1. Reset to 1 so a design that never touches the control plane still measures itself."},
-            {"name": "SEQ_ENABLE", "lsb": 1, "width": 1, "access": "RW", "reset": "0x1", "description": "Enables the sequence checker. Clearing it drops every stream's expectation, so the first beat after it is set again re-initialises instead of reporting a loss."},
-            {"name": "SEQ_SOF_RESYNC", "lsb": 2, "width": 1, "access": "RW", "description": "Treat start_of_frame as a sequence resync point. Correct for a source that restarts numbering each frame; masks real loss at every frame boundary for one that does not, hence off by default."},
-            {"name": "SNAPSHOT", "lsb": 8, "width": 1, "access": "RWP", "description": "Latch every counter in this block, and the sequence checker's five, into their shadows at one edge. The shadow includes any event in the strobe cycle."},
-            {"name": "CLEAR", "lsb": 9, "width": 1, "access": "RWP", "description": "Zero every counter, every shadow, the high-water mark and the shadow-valid flag. Beats a simultaneous event."},
-            {"name": "STICKY_CLEAR", "lsb": 10, "width": 1, "access": "RWP", "description": "Clear the sequence checker's sticky flags. Does not touch the counts, and a fault detected in the same cycle still sets them."}
+            {
+              "name": "ENABLE",
+              "lsb": 0,
+              "width": 1,
+              "access": "RW",
+              "reset": "0x1",
+              "description": "Counters advance only while this is 1. Reset to 1 so a design that never touches the control plane still measures itself."
+            },
+            {
+              "name": "SEQ_ENABLE",
+              "lsb": 1,
+              "width": 1,
+              "access": "RW",
+              "reset": "0x1",
+              "description": "Enables the sequence checker. Clearing it drops every stream's expectation, so the first beat after it is set again re-initialises instead of reporting a loss."
+            },
+            {
+              "name": "SEQ_SOF_RESYNC",
+              "lsb": 2,
+              "width": 1,
+              "access": "RW",
+              "description": "Treat start_of_frame as a sequence resync point. Correct for a source that restarts numbering each frame; masks real loss at every frame boundary for one that does not, hence off by default."
+            },
+            {
+              "name": "SNAPSHOT",
+              "lsb": 8,
+              "width": 1,
+              "access": "RWP",
+              "description": "Latch every counter in this block, and the sequence checker's five, into their shadows at one edge. The shadow includes any event in the strobe cycle."
+            },
+            {
+              "name": "CLEAR",
+              "lsb": 9,
+              "width": 1,
+              "access": "RWP",
+              "description": "Zero every counter, every shadow, the high-water mark and the shadow-valid flag. Beats a simultaneous event."
+            },
+            {
+              "name": "STICKY_CLEAR",
+              "lsb": 10,
+              "width": 1,
+              "access": "RWP",
+              "description": "Clear the sequence checker's sticky flags. Does not touch the counts, and a fault detected in the same cycle still sets them."
+            }
           ]
         },
         {
@@ -516,13 +1485,60 @@
           "offset": "0x004",
           "description": "Build geometry of this telemetry instance plus the two facts a reader needs before trusting a count: whether a snapshot was ever taken, and whether any counter has passed its maximum since the last clear.",
           "fields": [
-            {"name": "COUNT_W", "lsb": 0, "width": 8, "access": "ROHW", "source": "telemetry_block COUNT_W", "description": "Width in bits of the ordinary counters. Anything above it in a count register reads 0."},
-            {"name": "WIDE_W", "lsb": 8, "width": 8, "access": "ROHW", "source": "telemetry_block WIDE_W", "description": "Width in bits of the beat and stall counters, which are presented as a LO/HI pair."},
-            {"name": "TRACKED_IDS", "lsb": 16, "width": 8, "access": "ROHW", "source": "telemetry_block N_TRACKED_IDS", "description": "Streams the sequence checker tracks independently. Beats on a higher stream_id are counted in SEQ_UNTRACKED_COUNT rather than folded onto a tracked stream."},
-            {"name": "SNAP_VALID", "lsb": 24, "width": 1, "access": "ROHW", "description": "A snapshot has been taken since reset or the last CLEAR. While this is 0 every count register reads 0 because nothing was captured, not because nothing happened."},
-            {"name": "TRAFFIC_SATURATE", "lsb": 25, "width": 1, "access": "ROHW", "source": "telemetry_block TRAFFIC_SATURATE", "description": "0: the traffic counters are exact modulo 2**width and set a WRAP_STATUS bit when they roll. 1: they stop at all ones."},
-            {"name": "ERROR_SATURATE", "lsb": 26, "width": 1, "access": "ROHW", "source": "telemetry_block ERROR_SATURATE", "description": "The same, for the error and fault counters. 1 by default: a dump taken after a long run must not report a small number because the counter went round."},
-            {"name": "WRAP_ANY", "lsb": 27, "width": 1, "access": "ROHW", "description": "Sticky OR of every counter's own range flag. A quick 'are these numbers still absolute' test that does not need WRAP_STATUS decoded."}
+            {
+              "name": "COUNT_W",
+              "lsb": 0,
+              "width": 8,
+              "access": "ROHW",
+              "source": "telemetry_block COUNT_W",
+              "description": "Width in bits of the ordinary counters. Anything above it in a count register reads 0."
+            },
+            {
+              "name": "WIDE_W",
+              "lsb": 8,
+              "width": 8,
+              "access": "ROHW",
+              "source": "telemetry_block WIDE_W",
+              "description": "Width in bits of the beat and stall counters, which are presented as a LO/HI pair."
+            },
+            {
+              "name": "TRACKED_IDS",
+              "lsb": 16,
+              "width": 8,
+              "access": "ROHW",
+              "source": "telemetry_block N_TRACKED_IDS",
+              "description": "Streams the sequence checker tracks independently. Beats on a higher stream_id are counted in SEQ_UNTRACKED_COUNT rather than folded onto a tracked stream."
+            },
+            {
+              "name": "SNAP_VALID",
+              "lsb": 24,
+              "width": 1,
+              "access": "ROHW",
+              "description": "A snapshot has been taken since reset or the last CLEAR. While this is 0 every count register reads 0 because nothing was captured, not because nothing happened."
+            },
+            {
+              "name": "TRAFFIC_SATURATE",
+              "lsb": 25,
+              "width": 1,
+              "access": "ROHW",
+              "source": "telemetry_block TRAFFIC_SATURATE",
+              "description": "0: the traffic counters are exact modulo 2**width and set a WRAP_STATUS bit when they roll. 1: they stop at all ones."
+            },
+            {
+              "name": "ERROR_SATURATE",
+              "lsb": 26,
+              "width": 1,
+              "access": "ROHW",
+              "source": "telemetry_block ERROR_SATURATE",
+              "description": "The same, for the error and fault counters. 1 by default: a dump taken after a long run must not report a small number because the counter went round."
+            },
+            {
+              "name": "WRAP_ANY",
+              "lsb": 27,
+              "width": 1,
+              "access": "ROHW",
+              "description": "Sticky OR of every counter's own range flag. A quick 'are these numbers still absolute' test that does not need WRAP_STATUS decoded."
+            }
           ]
         },
         {
@@ -530,7 +1546,13 @@
           "offset": "0x008",
           "description": "Snapshots taken since reset or the last CLEAR, saturating. Read it before and after a sweep of this block: if the two agree, every register in between came from one edge. This is the only defence against a second agent snapshotting in the middle of someone else's read sequence, and it costs one register.",
           "fields": [
-            {"name": "VALUE", "lsb": 0, "width": 32, "access": "ROHW", "description": "Count of SNAPSHOT strobes."}
+            {
+              "name": "VALUE",
+              "lsb": 0,
+              "width": 32,
+              "access": "ROHW",
+              "description": "Count of SNAPSHOT strobes."
+            }
           ]
         },
         {
@@ -538,7 +1560,13 @@
           "offset": "0x00C",
           "description": "SPEC 9 stream counters. Low half of the accepted-transfer count on the observed interface: cycles in which valid && ready. Read together with BEAT_COUNT_HI after one SNAPSHOT; the pair is coherent because both halves come from one shadow.",
           "fields": [
-            {"name": "VALUE", "lsb": 0, "width": 32, "access": "ROHW", "description": "Bits 31:0 of the beat count."}
+            {
+              "name": "VALUE",
+              "lsb": 0,
+              "width": 32,
+              "access": "ROHW",
+              "description": "Bits 31:0 of the beat count."
+            }
           ]
         },
         {
@@ -546,7 +1574,13 @@
           "offset": "0x010",
           "description": "High half of the accepted-transfer count. Reads 0 when WIDE_W is 32 or less.",
           "fields": [
-            {"name": "VALUE", "lsb": 0, "width": 32, "access": "ROHW", "description": "Bits 63:32 of the beat count."}
+            {
+              "name": "VALUE",
+              "lsb": 0,
+              "width": 32,
+              "access": "ROHW",
+              "description": "Bits 63:32 of the beat count."
+            }
           ]
         },
         {
@@ -554,7 +1588,13 @@
           "offset": "0x014",
           "description": "SPEC 9 stall counters. Low half of the count of cycles in which the source offered a beat and the sink refused it: valid && !ready. Divided by the beat count this is the backpressure the interface actually suffered, which is the number that decides whether a stage needs more buffering.",
           "fields": [
-            {"name": "VALUE", "lsb": 0, "width": 32, "access": "ROHW", "description": "Bits 31:0 of the stall count."}
+            {
+              "name": "VALUE",
+              "lsb": 0,
+              "width": 32,
+              "access": "ROHW",
+              "description": "Bits 31:0 of the stall count."
+            }
           ]
         },
         {
@@ -562,7 +1602,13 @@
           "offset": "0x018",
           "description": "High half of the stall count.",
           "fields": [
-            {"name": "VALUE", "lsb": 0, "width": 32, "access": "ROHW", "description": "Bits 63:32 of the stall count."}
+            {
+              "name": "VALUE",
+              "lsb": 0,
+              "width": 32,
+              "access": "ROHW",
+              "description": "Bits 63:32 of the stall count."
+            }
           ]
         },
         {
@@ -570,7 +1616,13 @@
           "offset": "0x01C",
           "description": "Cycles in which the sink was ready and the source had nothing: !valid && ready. The third arm of the three-way split of a ready cycle - beat, stall, idle - so a starved stage is distinguishable from a stalled one rather than both appearing as 'not full throughput'.",
           "fields": [
-            {"name": "VALUE", "lsb": 0, "width": 32, "access": "ROHW", "description": "Count of starved cycles."}
+            {
+              "name": "VALUE",
+              "lsb": 0,
+              "width": 32,
+              "access": "ROHW",
+              "description": "Count of starved cycles."
+            }
           ]
         },
         {
@@ -578,7 +1630,13 @@
           "offset": "0x020",
           "description": "SPEC 9 frame counts. Accepted beats carrying end_of_frame, i.e. frames completed on the observed interface.",
           "fields": [
-            {"name": "VALUE", "lsb": 0, "width": 32, "access": "ROHW", "description": "Frames completed."}
+            {
+              "name": "VALUE",
+              "lsb": 0,
+              "width": 32,
+              "access": "ROHW",
+              "description": "Frames completed."
+            }
           ]
         },
         {
@@ -586,7 +1644,13 @@
           "offset": "0x024",
           "description": "Accepted beats carrying start_of_frame. Counted separately from FRAME_COUNT because the difference between the two is the frame that was opened and never closed, which is exactly the symptom of a truncated frame and is invisible in either count alone.",
           "fields": [
-            {"name": "VALUE", "lsb": 0, "width": 32, "access": "ROHW", "description": "Frames started."}
+            {
+              "name": "VALUE",
+              "lsb": 0,
+              "width": 32,
+              "access": "ROHW",
+              "description": "Frames started."
+            }
           ]
         },
         {
@@ -594,8 +1658,21 @@
           "offset": "0x028",
           "description": "SPEC 9 FIFO high-water marks. The deepest fill level the observed FIFO reached in the measurement window, beside the depth it was built with, so the margin is readable without knowing the elaboration parameters. This is the number that sizes the next revision of a DEPTH.",
           "fields": [
-            {"name": "HIGH", "lsb": 0, "width": 16, "access": "ROHW", "description": "Maximum fill level since reset or the last CLEAR."},
-            {"name": "DEPTH", "lsb": 16, "width": 16, "access": "ROHW", "source": "telemetry_block FIFO_DEPTH", "description": "Depth the observed FIFO was elaborated with. HIGH equal to DEPTH means it filled."}
+            {
+              "name": "HIGH",
+              "lsb": 0,
+              "width": 16,
+              "access": "ROHW",
+              "description": "Maximum fill level since reset or the last CLEAR."
+            },
+            {
+              "name": "DEPTH",
+              "lsb": 16,
+              "width": 16,
+              "access": "ROHW",
+              "source": "telemetry_block FIFO_DEPTH",
+              "description": "Depth the observed FIFO was elaborated with. HIGH equal to DEPTH means it filled."
+            }
           ]
         },
         {
@@ -603,7 +1680,13 @@
           "offset": "0x02C",
           "description": "SPEC 9 overflow counts. Overflow events reported by the observed storage. Unreachable in correct operation, so any non-zero value here is a design defect rather than a traffic condition.",
           "fields": [
-            {"name": "VALUE", "lsb": 0, "width": 32, "access": "ROHW", "description": "Overflow events."}
+            {
+              "name": "VALUE",
+              "lsb": 0,
+              "width": 32,
+              "access": "ROHW",
+              "description": "Overflow events."
+            }
           ]
         },
         {
@@ -611,7 +1694,13 @@
           "offset": "0x030",
           "description": "SPEC 9 saturation counts. Arithmetic saturation events reported by the observed datapath (SPEC 6 saturating arithmetic, collected by rtl/common/fxp_sticky_flags.sv). Non-zero is legal and expected on loud input; it is the number that says whether a headroom choice was right.",
           "fields": [
-            {"name": "VALUE", "lsb": 0, "width": 32, "access": "ROHW", "description": "Saturation events."}
+            {
+              "name": "VALUE",
+              "lsb": 0,
+              "width": 32,
+              "access": "ROHW",
+              "description": "Saturation events."
+            }
           ]
         },
         {
@@ -619,7 +1708,13 @@
           "offset": "0x034",
           "description": "SPEC 9 CDC errors. Events reported by the crossings the observed path contains - a handshake that did not complete, a Gray pointer that moved by more than one bit. Like OVERFLOW_COUNT, unreachable in correct operation.",
           "fields": [
-            {"name": "VALUE", "lsb": 0, "width": 32, "access": "ROHW", "description": "CDC error events."}
+            {
+              "name": "VALUE",
+              "lsb": 0,
+              "width": 32,
+              "access": "ROHW",
+              "description": "CDC error events."
+            }
           ]
         },
         {
@@ -627,7 +1722,13 @@
           "offset": "0x038",
           "description": "SPEC 9 sequence errors. Gap EVENTS seen by the attached seq_checker: occasions on which the sequence number jumped forward. Counted separately from the beats lost, because one gap of forty and forty gaps of one are different failures.",
           "fields": [
-            {"name": "VALUE", "lsb": 0, "width": 32, "access": "ROHW", "description": "Gap events."}
+            {
+              "name": "VALUE",
+              "lsb": 0,
+              "width": 32,
+              "access": "ROHW",
+              "description": "Gap events."
+            }
           ]
         },
         {
@@ -635,7 +1736,13 @@
           "offset": "0x03C",
           "description": "Beats whose sequence number repeated the one immediately before it: duplication.",
           "fields": [
-            {"name": "VALUE", "lsb": 0, "width": 32, "access": "ROHW", "description": "Duplicate beats."}
+            {
+              "name": "VALUE",
+              "lsb": 0,
+              "width": 32,
+              "access": "ROHW",
+              "description": "Duplicate beats."
+            }
           ]
         },
         {
@@ -643,7 +1750,13 @@
           "offset": "0x040",
           "description": "Beats whose sequence number came from behind the current position and was not the immediately preceding one: reordering.",
           "fields": [
-            {"name": "VALUE", "lsb": 0, "width": 32, "access": "ROHW", "description": "Out-of-order beats."}
+            {
+              "name": "VALUE",
+              "lsb": 0,
+              "width": 32,
+              "access": "ROHW",
+              "description": "Out-of-order beats."
+            }
           ]
         },
         {
@@ -651,7 +1764,13 @@
           "offset": "0x044",
           "description": "Beats that never arrived, summed over every gap. SEQ_GAP_COUNT says how often the stream broke; this says how much of it was lost.",
           "fields": [
-            {"name": "VALUE", "lsb": 0, "width": 32, "access": "ROHW", "description": "Missing beats."}
+            {
+              "name": "VALUE",
+              "lsb": 0,
+              "width": 32,
+              "access": "ROHW",
+              "description": "Missing beats."
+            }
           ]
         },
         {
@@ -659,7 +1778,13 @@
           "offset": "0x048",
           "description": "Beats on a stream_id at or above TRACKED_IDS. Counted rather than ignored: an instance sized for four streams that silently dropped everything on stream 7 would report a clean run on traffic it never looked at.",
           "fields": [
-            {"name": "VALUE", "lsb": 0, "width": 32, "access": "ROHW", "description": "Beats on an untracked stream."}
+            {
+              "name": "VALUE",
+              "lsb": 0,
+              "width": 32,
+              "access": "ROHW",
+              "description": "Beats on an untracked stream."
+            }
           ]
         },
         {
@@ -667,11 +1792,42 @@
           "offset": "0x04C",
           "description": "Sticky record of which kinds of sequence fault occurred at all, so a fault that happened once in a long run is still visible after the counts have been cleared. The W1C half is this block's own copy, cleared by writing 1; CHECKER_STICKY mirrors the checker's flags, which TELEM_CTRL.STICKY_CLEAR clears.",
           "fields": [
-            {"name": "GAP", "lsb": 0, "width": 1, "access": "W1C", "description": "A gap was detected."},
-            {"name": "DUP", "lsb": 1, "width": 1, "access": "W1C", "description": "A duplicate was detected."},
-            {"name": "REORDER", "lsb": 2, "width": 1, "access": "W1C", "description": "A reordered beat was detected."},
-            {"name": "UNTRACKED", "lsb": 3, "width": 1, "access": "W1C", "description": "A beat arrived on an untracked stream."},
-            {"name": "CHECKER_STICKY", "lsb": 8, "width": 4, "access": "ROHW", "source": "seq_checker sticky", "description": "The checker's own sticky flags, in the same bit order: untracked, reorder, dup, gap, from bit 11 down to bit 8."}
+            {
+              "name": "GAP",
+              "lsb": 0,
+              "width": 1,
+              "access": "W1C",
+              "description": "A gap was detected."
+            },
+            {
+              "name": "DUP",
+              "lsb": 1,
+              "width": 1,
+              "access": "W1C",
+              "description": "A duplicate was detected."
+            },
+            {
+              "name": "REORDER",
+              "lsb": 2,
+              "width": 1,
+              "access": "W1C",
+              "description": "A reordered beat was detected."
+            },
+            {
+              "name": "UNTRACKED",
+              "lsb": 3,
+              "width": 1,
+              "access": "W1C",
+              "description": "A beat arrived on an untracked stream."
+            },
+            {
+              "name": "CHECKER_STICKY",
+              "lsb": 8,
+              "width": 4,
+              "access": "ROHW",
+              "source": "seq_checker sticky",
+              "description": "The checker's own sticky flags, in the same bit order: untracked, reorder, dup, gap, from bit 11 down to bit 8."
+            }
           ]
         },
         {
@@ -679,15 +1835,69 @@
           "offset": "0x050",
           "description": "One sticky bit per counter, set when that counter passed its maximum. For a modulo counter this says the absolute value is no longer meaningful and only differences are; for a saturating one it says the count has stopped moving. Either way it is the difference between a number and a number that can be believed, which is why SPEC 13.4 exercises wrap deliberately.",
           "fields": [
-            {"name": "BEAT", "lsb": 0, "width": 1, "access": "W1C", "description": "The beat counter passed its maximum."},
-            {"name": "STALL", "lsb": 1, "width": 1, "access": "W1C", "description": "The stall counter passed its maximum."},
-            {"name": "IDLE", "lsb": 2, "width": 1, "access": "W1C", "description": "The idle counter passed its maximum."},
-            {"name": "FRAME", "lsb": 3, "width": 1, "access": "W1C", "description": "The frame counter passed its maximum."},
-            {"name": "FRAME_START", "lsb": 4, "width": 1, "access": "W1C", "description": "The frame-start counter passed its maximum."},
-            {"name": "OVERFLOW", "lsb": 5, "width": 1, "access": "W1C", "description": "The overflow counter passed its maximum."},
-            {"name": "SATURATE", "lsb": 6, "width": 1, "access": "W1C", "description": "The saturation counter passed its maximum."},
-            {"name": "CDC_ERROR", "lsb": 7, "width": 1, "access": "W1C", "description": "The CDC error counter passed its maximum."},
-            {"name": "SNAPSHOT_ID", "lsb": 8, "width": 1, "access": "W1C", "description": "SNAPSHOT_ID rolled over. Harmless in itself - it is an identity, not a magnitude - but a reader comparing it across a sweep should know that equal values are now only overwhelmingly likely to mean the same instant rather than certain to."}
+            {
+              "name": "BEAT",
+              "lsb": 0,
+              "width": 1,
+              "access": "W1C",
+              "description": "The beat counter passed its maximum."
+            },
+            {
+              "name": "STALL",
+              "lsb": 1,
+              "width": 1,
+              "access": "W1C",
+              "description": "The stall counter passed its maximum."
+            },
+            {
+              "name": "IDLE",
+              "lsb": 2,
+              "width": 1,
+              "access": "W1C",
+              "description": "The idle counter passed its maximum."
+            },
+            {
+              "name": "FRAME",
+              "lsb": 3,
+              "width": 1,
+              "access": "W1C",
+              "description": "The frame counter passed its maximum."
+            },
+            {
+              "name": "FRAME_START",
+              "lsb": 4,
+              "width": 1,
+              "access": "W1C",
+              "description": "The frame-start counter passed its maximum."
+            },
+            {
+              "name": "OVERFLOW",
+              "lsb": 5,
+              "width": 1,
+              "access": "W1C",
+              "description": "The overflow counter passed its maximum."
+            },
+            {
+              "name": "SATURATE",
+              "lsb": 6,
+              "width": 1,
+              "access": "W1C",
+              "description": "The saturation counter passed its maximum."
+            },
+            {
+              "name": "CDC_ERROR",
+              "lsb": 7,
+              "width": 1,
+              "access": "W1C",
+              "description": "The CDC error counter passed its maximum."
+            },
+            {
+              "name": "SNAPSHOT_ID",
+              "lsb": 8,
+              "width": 1,
+              "access": "W1C",
+              "description": "SNAPSHOT_ID rolled over. Harmless in itself - it is an identity, not a magnitude - but a reader comparing it across a sweep should know that equal values are now only overwhelmingly likely to mean the same instant rather than certain to."
+            }
           ]
         }
       ]
@@ -698,7 +1908,9 @@
       "size": "0x1000",
       "implemented": false,
       "planned_by": "#19",
-      "spec_groups": ["Snapshot and debug control"],
+      "spec_groups": [
+        "Snapshot and debug control"
+      ],
       "description": "PLANNED. Snapshot capture, trigger configuration and debug readback.",
       "registers": []
     },
@@ -707,7 +1919,9 @@
       "base": "0x9000",
       "size": "0x1000",
       "implemented": true,
-      "spec_groups": ["Integration settings"],
+      "spec_groups": [
+        "Integration settings"
+      ],
       "description": "Integration settings for the SPEC 7.6 power and covariance engine (rtl/covariance/, issue #13): the programmable window length, the exponential-averaging mode and its shift, the per-pair enable mask, the pair table, the deterministic flush, and the accumulator-protection status. Everything writable here is latched by rtl/covariance/integrator.sv at a window boundary and never mid-window, so a write can lengthen or shorten the NEXT window but can never change the interval a result already covers. Software that needs a change to take effect at once writes the register and then pulses COVAR_CTRL.FLUSH, which drains the open window with its truncated marker and restarts the block from its post-reset state.",
       "registers": [
         {
@@ -715,11 +1929,44 @@
           "offset": "0x000",
           "description": "Master controls. FLUSH and SAT_CLEAR are write-1-pulse and read back zero, because they are events rather than modes.",
           "fields": [
-            {"name": "ENABLE",    "lsb": 0, "width": 1, "access": "RW",  "reset": "0x1", "description": "Global accumulate enable. Cleared, the integrators admit no samples and emit nothing. Latched at a window boundary, so clearing it mid-window lets that window finish rather than truncating it."},
-            {"name": "EXP_MODE",  "lsb": 1, "width": 1, "access": "RW",  "reset": "0x0", "description": "0: block integration, acc += x over COVAR_WINDOW.LENGTH samples, cleared at each boundary. 1: exponential averaging, y += (x - y) >> EXP_K per sample, reported every COVAR_WINDOW.LENGTH samples and NOT cleared at the boundary. rtl/covariance/integrator.sv section 4 states the exact fixed-point behaviour."},
-            {"name": "EXP_K",     "lsb": 4, "width": 4, "access": "RW",  "reset": "0x3", "description": "Exponential-averaging shift k, 0..15. k = 0 is a pass-through. The update truncates toward -infinity, so a constant target is approached from below and the filter settles inside (x - 2^k, x]."},
-            {"name": "FLUSH",     "lsb": 8, "width": 1, "access": "RWP", "description": "Drain every open window, mark each result flushed (and truncated when short), then restart the block in its post-reset state: zero accumulators, zero sample counts, window_id back to zero, sticky saturation cleared, and the pair table reloaded from COVAR_PAIR_TABLE."},
-            {"name": "SAT_CLEAR", "lsb": 9, "width": 1, "access": "RWP", "description": "Clear the sticky saturation flags and the saturation-event counter without disturbing any window."}
+            {
+              "name": "ENABLE",
+              "lsb": 0,
+              "width": 1,
+              "access": "RW",
+              "reset": "0x1",
+              "description": "Global accumulate enable. Cleared, the integrators admit no samples and emit nothing. Latched at a window boundary, so clearing it mid-window lets that window finish rather than truncating it."
+            },
+            {
+              "name": "EXP_MODE",
+              "lsb": 1,
+              "width": 1,
+              "access": "RW",
+              "reset": "0x0",
+              "description": "0: block integration, acc += x over COVAR_WINDOW.LENGTH samples, cleared at each boundary. 1: exponential averaging, y += (x - y) >> EXP_K per sample, reported every COVAR_WINDOW.LENGTH samples and NOT cleared at the boundary. rtl/covariance/integrator.sv section 4 states the exact fixed-point behaviour."
+            },
+            {
+              "name": "EXP_K",
+              "lsb": 4,
+              "width": 4,
+              "access": "RW",
+              "reset": "0x3",
+              "description": "Exponential-averaging shift k, 0..15. k = 0 is a pass-through. The update truncates toward -infinity, so a constant target is approached from below and the filter settles inside (x - 2^k, x]."
+            },
+            {
+              "name": "FLUSH",
+              "lsb": 8,
+              "width": 1,
+              "access": "RWP",
+              "description": "Drain every open window, mark each result flushed (and truncated when short), then restart the block in its post-reset state: zero accumulators, zero sample counts, window_id back to zero, sticky saturation cleared, and the pair table reloaded from COVAR_PAIR_TABLE."
+            },
+            {
+              "name": "SAT_CLEAR",
+              "lsb": 9,
+              "width": 1,
+              "access": "RWP",
+              "description": "Clear the sticky saturation flags and the saturation-event counter without disturbing any window."
+            }
           ]
         },
         {
@@ -727,7 +1974,14 @@
           "offset": "0x004",
           "description": "Programmable integration window (SPEC 7.6).",
           "fields": [
-            {"name": "LENGTH", "lsb": 0, "width": 16, "access": "RW", "reset": "0x0010", "description": "Samples per integration window. Zero is treated as one, so a zero-initialised register plane cannot make the window infinite - which would be indistinguishable from a hang. A signed POWER_W = 40 accumulator integrates terms bounded by 2^31 exactly for LENGTH <= 255 (rtl/packages/covar_pkg.sv section 1); longer windows are legal and may clamp, which COVAR_SAT_STATUS reports."}
+            {
+              "name": "LENGTH",
+              "lsb": 0,
+              "width": 16,
+              "access": "RW",
+              "reset": "0x0010",
+              "description": "Samples per integration window. Zero is treated as one, so a zero-initialised register plane cannot make the window infinite - which would be indistinguishable from a hang. A signed POWER_W = 40 accumulator integrates terms bounded by 2^31 exactly for LENGTH <= 255 (rtl/packages/covar_pkg.sv section 1); longer windows are legal and may clamp, which COVAR_SAT_STATUS reports."
+            }
           ]
         },
         {
@@ -735,7 +1989,14 @@
           "offset": "0x008",
           "description": "Runtime enable, one bit per covariance pair (SPEC 7.6, 'runtime enable per covariance pair').",
           "fields": [
-            {"name": "MASK", "lsb": 0, "width": 32, "access": "RW", "reset": "0x00000001", "description": "Bit p enables pair p. Latched by that pair's accumulators at a window boundary, so a pair disabled mid-window completes the window it is in and a pair enabled mid-window starts at the next one with a full-length window. A disabled pair accumulates nothing and emits nothing; its multiplier still free-runs, because a clock enable on a DSP register is what stops the tool using the block's own pipeline registers."}
+            {
+              "name": "MASK",
+              "lsb": 0,
+              "width": 32,
+              "access": "RW",
+              "reset": "0x00000001",
+              "description": "Bit p enables pair p. Latched by that pair's accumulators at a window boundary, so a pair disabled mid-window completes the window it is in and a pair enabled mid-window starts at the next one with a full-length window. A disabled pair accumulates nothing and emits nothing; its multiplier still free-runs, because a clock enable on a DSP register is what stops the tool using the block's own pipeline registers."
+            }
           ]
         },
         {
@@ -743,10 +2004,37 @@
           "offset": "0x00C",
           "description": "Pair table programming port. One entry per write: set INDEX, X_SEL and Y_SEL, then pulse WRITE. The table takes effect at the next COVAR_CTRL.FLUSH rather than at a window boundary; rtl/covariance/covar_engine.sv section 4 explains why a multiplier pipeline deeper than one cycle cannot re-point a pair cleanly at a window edge.",
           "fields": [
-            {"name": "INDEX", "lsb": 0,  "width": 8, "access": "RW",  "reset": "0x00", "description": "Pair index to program."},
-            {"name": "X_SEL", "lsb": 8,  "width": 8, "access": "RW",  "reset": "0x00", "description": "Source index for X. An index beyond the elaborated source count reads source 0; out of range is defined rather than undefined, because a register plane can be programmed with anything."},
-            {"name": "Y_SEL", "lsb": 16, "width": 8, "access": "RW",  "reset": "0x00", "description": "Source index for Y, the conjugated operand."},
-            {"name": "WRITE", "lsb": 24, "width": 1, "access": "RWP", "description": "Write the entry named by INDEX. One-cycle pulse; reads back zero."}
+            {
+              "name": "INDEX",
+              "lsb": 0,
+              "width": 8,
+              "access": "RW",
+              "reset": "0x00",
+              "description": "Pair index to program."
+            },
+            {
+              "name": "X_SEL",
+              "lsb": 8,
+              "width": 8,
+              "access": "RW",
+              "reset": "0x00",
+              "description": "Source index for X. An index beyond the elaborated source count reads source 0; out of range is defined rather than undefined, because a register plane can be programmed with anything."
+            },
+            {
+              "name": "Y_SEL",
+              "lsb": 16,
+              "width": 8,
+              "access": "RW",
+              "reset": "0x00",
+              "description": "Source index for Y, the conjugated operand."
+            },
+            {
+              "name": "WRITE",
+              "lsb": 24,
+              "width": 1,
+              "access": "RWP",
+              "description": "Write the entry named by INDEX. One-cycle pulse; reads back zero."
+            }
           ]
         },
         {
@@ -754,9 +2042,27 @@
           "offset": "0x010",
           "description": "Hardware-driven status. The geometry fields let software size its own buffers without compiled-in constants, exactly as the build-parameter block does for the rest of the design.",
           "fields": [
-            {"name": "WINDOW_ID", "lsb": 0,  "width": 16, "access": "ROHW", "description": "Window id of the most recent result, wrapping at 2^16. Increments by exactly one per emitted window, so a consumer detects a dropped one."},
-            {"name": "N_PAIRS",   "lsb": 16, "width": 8,  "access": "ROHW", "description": "Elaborated covariance pair count."},
-            {"name": "ACC_W",     "lsb": 24, "width": 8,  "access": "ROHW", "description": "Elaborated accumulator width in bits (SPEC 3 POWER_W)."}
+            {
+              "name": "WINDOW_ID",
+              "lsb": 0,
+              "width": 16,
+              "access": "ROHW",
+              "description": "Window id of the most recent result, wrapping at 2^16. Increments by exactly one per emitted window, so a consumer detects a dropped one."
+            },
+            {
+              "name": "N_PAIRS",
+              "lsb": 16,
+              "width": 8,
+              "access": "ROHW",
+              "description": "Elaborated covariance pair count."
+            },
+            {
+              "name": "ACC_W",
+              "lsb": 24,
+              "width": 8,
+              "access": "ROHW",
+              "description": "Elaborated accumulator width in bits (SPEC 3 POWER_W)."
+            }
           ]
         },
         {
@@ -764,9 +2070,27 @@
           "offset": "0x014",
           "description": "Accumulator protection (SPEC 7.6 'accumulator protection', SPEC 6 overflow flags). Sticky, write 1 to clear; also cleared by COVAR_CTRL.SAT_CLEAR and by COVAR_CTRL.FLUSH.",
           "fields": [
-            {"name": "POWER",     "lsb": 0, "width": 1, "access": "W1C", "description": "The power accumulator clamped at least once since the last clear."},
-            {"name": "CROSS",     "lsb": 1, "width": 1, "access": "W1C", "description": "A cross-power accumulator clamped at least once since the last clear."},
-            {"name": "TRUNCATED", "lsb": 2, "width": 1, "access": "W1C", "description": "At least one window was emitted short of its programmed length. Set only by a flush, because a flush is the only thing that can shorten a window."}
+            {
+              "name": "POWER",
+              "lsb": 0,
+              "width": 1,
+              "access": "W1C",
+              "description": "The power accumulator clamped at least once since the last clear."
+            },
+            {
+              "name": "CROSS",
+              "lsb": 1,
+              "width": 1,
+              "access": "W1C",
+              "description": "A cross-power accumulator clamped at least once since the last clear."
+            },
+            {
+              "name": "TRUNCATED",
+              "lsb": 2,
+              "width": 1,
+              "access": "W1C",
+              "description": "At least one window was emitted short of its programmed length. Set only by a flush, because a flush is the only thing that can shorten a window."
+            }
           ]
         },
         {
@@ -774,7 +2098,13 @@
           "offset": "0x018",
           "description": "Count of saturation events, highest across the block's accumulators. Saturates at all-ones rather than wrapping: a wrapped counter can read zero on a permanently clamping datapath, which is the one reading that must never be produced.",
           "fields": [
-            {"name": "VALUE", "lsb": 0, "width": 32, "access": "ROHW", "description": "Saturation-event count."}
+            {
+              "name": "VALUE",
+              "lsb": 0,
+              "width": 32,
+              "access": "ROHW",
+              "description": "Saturation-event count."
+            }
           ]
         }
       ]
@@ -784,7 +2114,10 @@
       "base": "0xA000",
       "size": "0x1000",
       "implemented": true,
-      "spec_groups": ["Active bank selection", "Frame counts"],
+      "spec_groups": [
+        "Active bank selection",
+        "Frame counts"
+      ],
       "description": "The SPEC 7.3 time-frequency history and corner turn (rtl/memory/, issue #15). Two SPEC 9 groups land here and both are literal: 'Active bank selection' is the rotating frame-bank pointer and its programmable depth, and 'Frame counts' is the completed-frame counter that decides what a beamformer read is allowed to ask for. The window claims no group of its own because SPEC 9's list has none for a memory, and inventing one would make scripts/gen_regmap.py's copy of that list stop being a copy. CLOCK DOMAIN: every register here is in core_clk, the WRITE side of the subsystem, because that is where the frame sequencers and the rotation policy live. The three read-side counters (HISTORY_READS, HISTORY_COLLISION, HISTORY_ERROR) are produced in history_clk and cross back through one cdc_handshake carrying all three at once, so they are always a consistent snapshot of each other and are at most one crossing stale; a reader that needs them settled should quiesce the traffic first. DEPTH CHANGES DISCARD THE HISTORY: writing HISTORY_DEPTH and pulsing HISTORY_CTRL.DEPTH_APPLY remaps every frame slot, so the block waits for a frame boundary on every antenna and then restarts empty. HISTORY_STATUS.DEPTH_PENDING reports the wait and HISTORY_STATUS.EPOCH counts the applies, so software can tell 'no frames yet' from 'frames from before a reconfiguration'.",
       "registers": [
         {
@@ -792,11 +2125,43 @@
           "offset": "0x000",
           "description": "Master controls. The three pulse fields are events rather than modes and read back zero.",
           "fields": [
-            {"name": "ENABLE",        "lsb": 0,  "width": 1, "access": "RW",  "reset": "0x1", "description": "Global enable. Cleared, the block refuses write beats (s_ready goes low on every antenna) and advances nothing. Read requests are still answered from whatever is stored."},
-            {"name": "FORCE_UNSAFE",  "lsb": 1,  "width": 1, "access": "RW",  "reset": "0x0", "description": "SPEC 9 fault injection. Normally an out-of-range frame offset is CLAMPED to the newest readable frame, which makes HISTORY_COLLISION unreachable by construction. Setting this removes the clamp, so an out-of-range request reaches the slot being written and the collision counter increments. It exists because a counter that cannot be made to fire is a counter nobody has tested; it is not a mode for production use, and rtl/memory/history_core.sv section 4 says why."},
-            {"name": "DEPTH_APPLY",   "lsb": 8,  "width": 1, "access": "RWP", "description": "Arm the value in HISTORY_DEPTH. The change lands at the next instant at which no antenna is mid-frame, and discards the stored history when it does."},
-            {"name": "COUNTER_CLEAR", "lsb": 9,  "width": 1, "access": "RWP", "description": "Zero every counter in this window, on both sides of the clock-domain crossing. The read-side counters are cleared through a toggle synchroniser, so they reach zero a few cycles after the write-side ones do."},
-            {"name": "STATUS_CLEAR",  "lsb": 10, "width": 1, "access": "RWP", "description": "Clear the block's own sticky fault state. HISTORY_FAULT's bits are W1C on top of that, so clearing a bit the block still holds set has no lasting effect until this pulse is issued as well."}
+            {
+              "name": "ENABLE",
+              "lsb": 0,
+              "width": 1,
+              "access": "RW",
+              "reset": "0x1",
+              "description": "Global enable. Cleared, the block refuses write beats (s_ready goes low on every antenna) and advances nothing. Read requests are still answered from whatever is stored."
+            },
+            {
+              "name": "FORCE_UNSAFE",
+              "lsb": 1,
+              "width": 1,
+              "access": "RW",
+              "reset": "0x0",
+              "description": "SPEC 9 fault injection. Normally an out-of-range frame offset is CLAMPED to the newest readable frame, which makes HISTORY_COLLISION unreachable by construction. Setting this removes the clamp, so an out-of-range request reaches the slot being written and the collision counter increments. It exists because a counter that cannot be made to fire is a counter nobody has tested; it is not a mode for production use, and rtl/memory/history_core.sv section 4 says why."
+            },
+            {
+              "name": "DEPTH_APPLY",
+              "lsb": 8,
+              "width": 1,
+              "access": "RWP",
+              "description": "Arm the value in HISTORY_DEPTH. The change lands at the next instant at which no antenna is mid-frame, and discards the stored history when it does."
+            },
+            {
+              "name": "COUNTER_CLEAR",
+              "lsb": 9,
+              "width": 1,
+              "access": "RWP",
+              "description": "Zero every counter in this window, on both sides of the clock-domain crossing. The read-side counters are cleared through a toggle synchroniser, so they reach zero a few cycles after the write-side ones do."
+            },
+            {
+              "name": "STATUS_CLEAR",
+              "lsb": 10,
+              "width": 1,
+              "access": "RWP",
+              "description": "Clear the block's own sticky fault state. HISTORY_FAULT's bits are W1C on top of that, so clearing a bit the block still holds set has no lasting effect until this pulse is issued as well."
+            }
           ]
         },
         {
@@ -804,7 +2169,14 @@
           "offset": "0x004",
           "description": "Requested history depth, in frames. Takes effect on HISTORY_CTRL.DEPTH_APPLY, never before.",
           "fields": [
-            {"name": "DEPTH", "lsb": 0, "width": 10, "access": "RW", "reset": "0x000", "description": "Frames of history to retain, 1..FRAMES_MAX. Zero is clamped to one and anything above the elaborated maximum is clamped to it, so a zero-initialised register plane cannot request an illegal geometry. NOTE that the depth after reset is the ELABORATED MAXIMUM and not this field's reset value: nothing is applied until DEPTH_APPLY is pulsed, and HISTORY_STATUS.DEPTH_ACTIVE reports what is actually in force. A depth of 1 or 2 leaves nothing readable, because the readable set is two slots short of the depth - one for the frame being written, one to absorb a frame of publication lag across the clock crossing. That is legal, and it is reported through HISTORY_STATUS.OCCUPANCY."}
+            {
+              "name": "DEPTH",
+              "lsb": 0,
+              "width": 10,
+              "access": "RW",
+              "reset": "0x000",
+              "description": "Frames of history to retain, 1..FRAMES_MAX. Zero is clamped to one and anything above the elaborated maximum is clamped to it, so a zero-initialised register plane cannot request an illegal geometry. NOTE that the depth after reset is the ELABORATED MAXIMUM and not this field's reset value: nothing is applied until DEPTH_APPLY is pulsed, and HISTORY_STATUS.DEPTH_ACTIVE reports what is actually in force. A depth of 1 or 2 leaves nothing readable, because the readable set is two slots short of the depth - one for the frame being written, one to absorb a frame of publication lag across the clock crossing. That is legal, and it is reported through HISTORY_STATUS.OCCUPANCY."
+            }
           ]
         },
         {
@@ -812,10 +2184,34 @@
           "offset": "0x008",
           "description": "Live state of the rotation. Every field is hardware-driven.",
           "fields": [
-            {"name": "DEPTH_ACTIVE",  "lsb": 0,  "width": 10, "access": "ROHW", "description": "Depth currently in force. Equals the elaborated maximum until the first DEPTH_APPLY."},
-            {"name": "OCCUPANCY",     "lsb": 10, "width": 10, "access": "ROHW", "description": "Complete frames currently held: min(frames completed, DEPTH_ACTIVE). A frame counts as complete only when EVERY antenna has finished writing it, so this never claims a frame a beamformer read could not assemble."},
-            {"name": "EPOCH",         "lsb": 20, "width": 8,  "access": "ROHW", "description": "Increments on every applied depth change. Modulo 256; software compares it against the value it last saw rather than reading an absolute count."},
-            {"name": "DEPTH_PENDING", "lsb": 28, "width": 1,  "access": "ROHW", "description": "A depth change is armed and waiting for a frame boundary."}
+            {
+              "name": "DEPTH_ACTIVE",
+              "lsb": 0,
+              "width": 10,
+              "access": "ROHW",
+              "description": "Depth currently in force. Equals the elaborated maximum until the first DEPTH_APPLY."
+            },
+            {
+              "name": "OCCUPANCY",
+              "lsb": 10,
+              "width": 10,
+              "access": "ROHW",
+              "description": "Complete frames currently held: min(frames completed, DEPTH_ACTIVE). A frame counts as complete only when EVERY antenna has finished writing it, so this never claims a frame a beamformer read could not assemble."
+            },
+            {
+              "name": "EPOCH",
+              "lsb": 20,
+              "width": 8,
+              "access": "ROHW",
+              "description": "Increments on every applied depth change. Modulo 256; software compares it against the value it last saw rather than reading an absolute count."
+            },
+            {
+              "name": "DEPTH_PENDING",
+              "lsb": 28,
+              "width": 1,
+              "access": "ROHW",
+              "description": "A depth change is armed and waiting for a frame boundary."
+            }
           ]
         },
         {
@@ -823,10 +2219,34 @@
           "offset": "0x00C",
           "description": "Elaborated geometry, part one. Reported by hardware so a consumer can size its own requests without a build-time header, which is the argument CFAR_STATUS makes for its own geometry fields.",
           "fields": [
-            {"name": "N_ANT",        "lsb": 0,  "width": 8,  "access": "ROHW", "description": "Antennas, and therefore samples in one read response."},
-            {"name": "LANES",        "lsb": 8,  "width": 8,  "access": "ROHW", "description": "Complex samples per write beat (SPEC 11 SAMPLES_PER_CYCLE). Also the number of independently addressed banks per antenna."},
-            {"name": "FRAMES_MAX",   "lsb": 16, "width": 10, "access": "ROHW", "description": "Elaborated maximum history depth, the upper clamp on HISTORY_DEPTH.DEPTH."},
-            {"name": "BIT_REVERSED", "lsb": 26, "width": 1,  "access": "ROHW", "description": "1 when the block absorbs the FFT's bit-reversed beat order in its read addressing, i.e. when rtl/fft/streaming_fft.sv upstream runs with REORDER = 0. Costs nothing here and saves the FFT its whole reorder buffer; rtl/packages/history_pkg.sv section 3 has the measured numbers."}
+            {
+              "name": "N_ANT",
+              "lsb": 0,
+              "width": 8,
+              "access": "ROHW",
+              "description": "Antennas, and therefore samples in one read response."
+            },
+            {
+              "name": "LANES",
+              "lsb": 8,
+              "width": 8,
+              "access": "ROHW",
+              "description": "Complex samples per write beat (SPEC 11 SAMPLES_PER_CYCLE). Also the number of independently addressed banks per antenna."
+            },
+            {
+              "name": "FRAMES_MAX",
+              "lsb": 16,
+              "width": 10,
+              "access": "ROHW",
+              "description": "Elaborated maximum history depth, the upper clamp on HISTORY_DEPTH.DEPTH."
+            },
+            {
+              "name": "BIT_REVERSED",
+              "lsb": 26,
+              "width": 1,
+              "access": "ROHW",
+              "description": "1 when the block absorbs the FFT's bit-reversed beat order in its read addressing, i.e. when rtl/fft/streaming_fft.sv upstream runs with REORDER = 0. Costs nothing here and saves the FFT its whole reorder buffer; rtl/packages/history_pkg.sv section 3 has the measured numbers."
+            }
           ]
         },
         {
@@ -834,8 +2254,20 @@
           "offset": "0x010",
           "description": "Elaborated geometry, part two.",
           "fields": [
-            {"name": "FFT_SIZE", "lsb": 0,  "width": 16, "access": "ROHW", "description": "Frequency bins per frame. A read request's bin index is valid over 0..FFT_SIZE-1; anything else is answered with HISTORY_ERROR advanced and the out-of-range flag set in the response metadata."},
-            {"name": "N_BANKS",  "lsb": 16, "width": 16, "access": "ROHW", "description": "Independently addressed memory banks, N_ANT * LANES. Reported because it is the number the SPEC 18 M20K projection is built from."}
+            {
+              "name": "FFT_SIZE",
+              "lsb": 0,
+              "width": 16,
+              "access": "ROHW",
+              "description": "Frequency bins per frame. A read request's bin index is valid over 0..FFT_SIZE-1; anything else is answered with HISTORY_ERROR advanced and the out-of-range flag set in the response metadata."
+            },
+            {
+              "name": "N_BANKS",
+              "lsb": 16,
+              "width": 16,
+              "access": "ROHW",
+              "description": "Independently addressed memory banks, N_ANT * LANES. Reported because it is the number the SPEC 18 M20K projection is built from."
+            }
           ]
         },
         {
@@ -843,7 +2275,13 @@
           "offset": "0x014",
           "description": "Frames completed on every antenna since reset or the last applied depth change. This is the origin the relative frame offset in a read request counts back from.",
           "fields": [
-            {"name": "VALUE", "lsb": 0, "width": 32, "access": "ROHW", "description": "Modulo 2^32. At the SPEC 8 history_clk and the SPEC 11 full-scale frame length this does not wrap inside any run this project makes."}
+            {
+              "name": "VALUE",
+              "lsb": 0,
+              "width": 32,
+              "access": "ROHW",
+              "description": "Modulo 2^32. At the SPEC 8 history_clk and the SPEC 11 full-scale frame length this does not wrap inside any run this project makes."
+            }
           ]
         },
         {
@@ -851,7 +2289,13 @@
           "offset": "0x018",
           "description": "Frames EVICTED by the rotation: max(frames completed - DEPTH_ACTIVE, 0). The honest measure of how much history a consumer lost, and exact at every instant.",
           "fields": [
-            {"name": "COUNT", "lsb": 0, "width": 32, "access": "ROHW", "description": "Saturating 32-bit counter. Cleared by HISTORY_CTRL.COUNTER_CLEAR; saturates rather than wraps, because a telemetry counter that wraps reports a small number for a large problem."}
+            {
+              "name": "COUNT",
+              "lsb": 0,
+              "width": 32,
+              "access": "ROHW",
+              "description": "Saturating 32-bit counter. Cleared by HISTORY_CTRL.COUNTER_CLEAR; saturates rather than wraps, because a telemetry counter that wraps reports a small number for a large problem."
+            }
           ]
         },
         {
@@ -859,7 +2303,13 @@
           "offset": "0x01C",
           "description": "Read responses whose addressed frame slot was the slot being written. ZERO IN CORRECT OPERATION: the readable set excludes the in-flight slot by construction, which makes this a defect detector rather than a statistic. HISTORY_CTRL.FORCE_UNSAFE is what makes it reachable, and therefore testable.",
           "fields": [
-            {"name": "COUNT", "lsb": 0, "width": 32, "access": "ROHW", "description": "Saturating 32-bit counter. Cleared by HISTORY_CTRL.COUNTER_CLEAR; saturates rather than wraps, because a telemetry counter that wraps reports a small number for a large problem. Produced in history_clk and crossed back to core_clk with the other two read-side counters as one consistent bundle, so the three can never be read from different snapshots of each other."}
+            {
+              "name": "COUNT",
+              "lsb": 0,
+              "width": 32,
+              "access": "ROHW",
+              "description": "Saturating 32-bit counter. Cleared by HISTORY_CTRL.COUNTER_CLEAR; saturates rather than wraps, because a telemetry counter that wraps reports a small number for a large problem. Produced in history_clk and crossed back to core_clk with the other two read-side counters as one consistent bundle, so the three can never be read from different snapshots of each other."
+            }
           ]
         },
         {
@@ -867,7 +2317,13 @@
           "offset": "0x020",
           "description": "Read requests whose bin or frame offset was outside the legal set. The request is still ANSWERED, deterministically and clamped, with the out-of-range flag set in the response metadata: dropping it would break the one-response-per-request invariant the consumer's pipeline is built on, and would turn a software mistake into a hang.",
           "fields": [
-            {"name": "COUNT", "lsb": 0, "width": 32, "access": "ROHW", "description": "Saturating 32-bit counter. Cleared by HISTORY_CTRL.COUNTER_CLEAR; saturates rather than wraps, because a telemetry counter that wraps reports a small number for a large problem. Produced in history_clk and crossed back to core_clk with the other two read-side counters as one consistent bundle, so the three can never be read from different snapshots of each other."}
+            {
+              "name": "COUNT",
+              "lsb": 0,
+              "width": 32,
+              "access": "ROHW",
+              "description": "Saturating 32-bit counter. Cleared by HISTORY_CTRL.COUNTER_CLEAR; saturates rather than wraps, because a telemetry counter that wraps reports a small number for a large problem. Produced in history_clk and crossed back to core_clk with the other two read-side counters as one consistent bundle, so the three can never be read from different snapshots of each other."
+            }
           ]
         },
         {
@@ -875,7 +2331,13 @@
           "offset": "0x024",
           "description": "Read responses produced.",
           "fields": [
-            {"name": "COUNT", "lsb": 0, "width": 32, "access": "ROHW", "description": "Saturating 32-bit counter. Cleared by HISTORY_CTRL.COUNTER_CLEAR; saturates rather than wraps, because a telemetry counter that wraps reports a small number for a large problem. Produced in history_clk and crossed back to core_clk with the other two read-side counters as one consistent bundle, so the three can never be read from different snapshots of each other."}
+            {
+              "name": "COUNT",
+              "lsb": 0,
+              "width": 32,
+              "access": "ROHW",
+              "description": "Saturating 32-bit counter. Cleared by HISTORY_CTRL.COUNTER_CLEAR; saturates rather than wraps, because a telemetry counter that wraps reports a small number for a large problem. Produced in history_clk and crossed back to core_clk with the other two read-side counters as one consistent bundle, so the three can never be read from different snapshots of each other."
+            }
           ]
         },
         {
@@ -883,7 +2345,13 @@
           "offset": "0x028",
           "description": "Write beats accepted, summed over every antenna. One beat carries LANES complex samples of one antenna's frame.",
           "fields": [
-            {"name": "COUNT", "lsb": 0, "width": 32, "access": "ROHW", "description": "Saturating 32-bit counter. Cleared by HISTORY_CTRL.COUNTER_CLEAR; saturates rather than wraps, because a telemetry counter that wraps reports a small number for a large problem."}
+            {
+              "name": "COUNT",
+              "lsb": 0,
+              "width": 32,
+              "access": "ROHW",
+              "description": "Saturating 32-bit counter. Cleared by HISTORY_CTRL.COUNTER_CLEAR; saturates rather than wraps, because a telemetry counter that wraps reports a small number for a large problem."
+            }
           ]
         },
         {
@@ -891,7 +2359,13 @@
           "offset": "0x02C",
           "description": "Occasions on which an antenna ran a whole DEPTH_ACTIVE frames ahead of the slowest one, and was therefore about to overwrite a slot the frame barrier still considered live. Counted on the RISING EDGE of the condition, not while it holds: skew is an episode and not a duration, and a level count would report a number that depends on how long the condition happened to last.",
           "fields": [
-            {"name": "COUNT", "lsb": 0, "width": 32, "access": "ROHW", "description": "Saturating 32-bit counter. Cleared by HISTORY_CTRL.COUNTER_CLEAR; saturates rather than wraps, because a telemetry counter that wraps reports a small number for a large problem."}
+            {
+              "name": "COUNT",
+              "lsb": 0,
+              "width": 32,
+              "access": "ROHW",
+              "description": "Saturating 32-bit counter. Cleared by HISTORY_CTRL.COUNTER_CLEAR; saturates rather than wraps, because a telemetry counter that wraps reports a small number for a large problem."
+            }
           ]
         },
         {
@@ -899,10 +2373,34 @@
           "offset": "0x030",
           "description": "Sticky fault bits, write 1 to clear. The block holds its own copy, so clearing a bit here while the block still holds it set has no lasting effect until HISTORY_CTRL.STATUS_CLEAR is pulsed. Same arrangement, and same reason, as CFAR_FAULT.",
           "fields": [
-            {"name": "ERROR_SEEN",     "lsb": 0, "width": 1, "access": "W1C", "description": "At least one read request was out of range."},
-            {"name": "COLLISION_SEEN", "lsb": 1, "width": 1, "access": "W1C", "description": "At least one response addressed the slot being written. Unreachable outside fault injection."},
-            {"name": "SKEW_SEEN",      "lsb": 2, "width": 1, "access": "W1C", "description": "At least one antenna ran a full depth ahead of the frame barrier."},
-            {"name": "FRAMING_SEEN",   "lsb": 3, "width": 1, "access": "W1C", "description": "At least one write beat carried a start- or end-of-frame flag at the wrong beat index. A frame one beat short shifts every subsequent bin of that antenna for the rest of the run, and nothing downstream can tell a short frame from a correct one, because both are just words in a bank."}
+            {
+              "name": "ERROR_SEEN",
+              "lsb": 0,
+              "width": 1,
+              "access": "W1C",
+              "description": "At least one read request was out of range."
+            },
+            {
+              "name": "COLLISION_SEEN",
+              "lsb": 1,
+              "width": 1,
+              "access": "W1C",
+              "description": "At least one response addressed the slot being written. Unreachable outside fault injection."
+            },
+            {
+              "name": "SKEW_SEEN",
+              "lsb": 2,
+              "width": 1,
+              "access": "W1C",
+              "description": "At least one antenna ran a full depth ahead of the frame barrier."
+            },
+            {
+              "name": "FRAMING_SEEN",
+              "lsb": 3,
+              "width": 1,
+              "access": "W1C",
+              "description": "At least one write beat carried a start- or end-of-frame flag at the wrong beat index. A frame one beat short shifts every subsequent bin of that antenna for the rest of the run, and nothing downstream can tell a short frame from a correct one, because both are just words in a bank."
+            }
           ]
         }
       ]
@@ -912,7 +2410,11 @@
       "base": "0xB000",
       "size": "0x1000",
       "implemented": true,
-      "spec_groups": ["Fault injection", "Stall counters", "FIFO high-water marks"],
+      "spec_groups": [
+        "Fault injection",
+        "Stall counters",
+        "FIFO high-water marks"
+      ],
       "description": "The SPEC 7.8 packet network (rtl/packet/, issue #18): the fabric's geometry and packet format reported by hardware, the SPEC 9 fault-injection hooks, the sticky reassembly-error bits from both ends of the network, and the per-stage and per-port telemetry. The window is at 0xB000 and NOT at the next free address (0xA000), deliberately: issue #15 was building the history-memory window concurrently with this one, and two blocks landing on one base is a merge conflict that neither side would see until the generator ran. Leaving a window between them costs nothing - the space is 16 windows wide and 12 are in use - and the alternative costs a re-gate.\n\nWhat this window does NOT contain is the CONTENT that rides over the network: the snapshot records, the aggregated telemetry payloads and the error-event bodies belong to issue #19, which owns the debug window at 0x8000. This block owns the fabric, not its traffic.",
       "registers": [
         {
@@ -920,8 +2422,21 @@
           "offset": "0x000",
           "description": "Master controls. TEL_CLEAR is write-1-pulse and reads back zero, because it is an event rather than a mode.",
           "fields": [
-            {"name": "ENABLE",    "lsb": 0, "width": 1, "access": "RW",  "reset": "0x1", "description": "Global fabric enable. Reserved for the multi-domain integration (issue #19), which is where an enable can be lowered safely: a fabric disabled with packets in flight would strand them, so the sequencing belongs to the block that owns the producers."},
-            {"name": "TEL_CLEAR", "lsb": 8, "width": 1, "access": "RWP", "description": "Clear every telemetry counter, every buffer high-water mark and every sticky error bit in the fabric, in one cycle across all stages and ports. One strobe rather than a per-counter clear, so a measurement window opens at one edge everywhere - the same argument rtl/common/perf_counter.sv makes for its snapshot strobe."}
+            {
+              "name": "ENABLE",
+              "lsb": 0,
+              "width": 1,
+              "access": "RW",
+              "reset": "0x1",
+              "description": "Global fabric enable. Reserved for the multi-domain integration (issue #19), which is where an enable can be lowered safely: a fabric disabled with packets in flight would strand them, so the sequencing belongs to the block that owns the producers."
+            },
+            {
+              "name": "TEL_CLEAR",
+              "lsb": 8,
+              "width": 1,
+              "access": "RWP",
+              "description": "Clear every telemetry counter, every buffer high-water mark and every sticky error bit in the fabric, in one cycle across all stages and ports. One strobe rather than a per-counter clear, so a measurement window opens at one edge everywhere - the same argument rtl/common/perf_counter.sv makes for its snapshot strobe."
+            }
           ]
         },
         {
@@ -929,10 +2444,34 @@
           "offset": "0x004",
           "description": "Elaborated topology, reported by hardware. Software sizing its own buffers reads this rather than carrying build-time constants, exactly as the build-parameter block serves the rest of the design.",
           "fields": [
-            {"name": "N_PORTS", "lsb": 0,  "width": 8, "access": "ROHW", "description": "Ingress and egress port count, RADIX**STAGES."},
-            {"name": "N_VC",    "lsb": 8,  "width": 8, "access": "ROHW", "description": "Virtual channels per port."},
-            {"name": "RADIX",   "lsb": 16, "width": 8, "access": "ROHW", "description": "Ports per switch stage."},
-            {"name": "STAGES",  "lsb": 24, "width": 8, "access": "ROHW", "description": "Switch stages between ingress and egress."}
+            {
+              "name": "N_PORTS",
+              "lsb": 0,
+              "width": 8,
+              "access": "ROHW",
+              "description": "Ingress and egress port count, RADIX**STAGES."
+            },
+            {
+              "name": "N_VC",
+              "lsb": 8,
+              "width": 8,
+              "access": "ROHW",
+              "description": "Virtual channels per port."
+            },
+            {
+              "name": "RADIX",
+              "lsb": 16,
+              "width": 8,
+              "access": "ROHW",
+              "description": "Ports per switch stage."
+            },
+            {
+              "name": "STAGES",
+              "lsb": 24,
+              "width": 8,
+              "access": "ROHW",
+              "description": "Switch stages between ingress and egress."
+            }
           ]
         },
         {
@@ -940,8 +2479,20 @@
           "offset": "0x008",
           "description": "Flit geometry, reported by hardware because PACKET_W is a SPEC 11 sized parameter and a register map that baked it in would be a different map at every configuration.",
           "fields": [
-            {"name": "PACKET_W", "lsb": 0,  "width": 16, "access": "ROHW", "description": "Flit payload width in bits."},
-            {"name": "FLIT_W",   "lsb": 16, "width": 16, "access": "ROHW", "description": "Total flit width including the parity, VC, SOF and EOF control bits."}
+            {
+              "name": "PACKET_W",
+              "lsb": 0,
+              "width": 16,
+              "access": "ROHW",
+              "description": "Flit payload width in bits."
+            },
+            {
+              "name": "FLIT_W",
+              "lsb": 16,
+              "width": 16,
+              "access": "ROHW",
+              "description": "Total flit width including the parity, VC, SOF and EOF control bits."
+            }
           ]
         },
         {
@@ -949,11 +2500,41 @@
           "offset": "0x00C",
           "description": "Packet-header geometry. Every field here is a CONSTANT of rtl/packages/packet_pkg.sv rather than an elaboration parameter, so a captured packet decodes identically at every SPEC 11 size; it is reported anyway so that a decoder needs no build-time header at all.",
           "fields": [
-            {"name": "HDR_W",     "lsb": 0,  "width": 8, "access": "ROHW", "description": "Header width in bits, occupying the low bits of the header flit's data field."},
-            {"name": "MAX_FLITS", "lsb": 8,  "width": 8, "access": "ROHW", "description": "Longest legal packet in flits, header included."},
-            {"name": "SEQ_W",     "lsb": 16, "width": 8, "access": "ROHW", "description": "Per (source, VC) packet sequence-number width."},
-            {"name": "DEST_W",    "lsb": 24, "width": 4, "access": "ROHW", "description": "Destination field width."},
-            {"name": "SRC_W",     "lsb": 28, "width": 4, "access": "ROHW", "description": "Source field width."}
+            {
+              "name": "HDR_W",
+              "lsb": 0,
+              "width": 8,
+              "access": "ROHW",
+              "description": "Header width in bits, occupying the low bits of the header flit's data field."
+            },
+            {
+              "name": "MAX_FLITS",
+              "lsb": 8,
+              "width": 8,
+              "access": "ROHW",
+              "description": "Longest legal packet in flits, header included."
+            },
+            {
+              "name": "SEQ_W",
+              "lsb": 16,
+              "width": 8,
+              "access": "ROHW",
+              "description": "Per (source, VC) packet sequence-number width."
+            },
+            {
+              "name": "DEST_W",
+              "lsb": 24,
+              "width": 4,
+              "access": "ROHW",
+              "description": "Destination field width."
+            },
+            {
+              "name": "SRC_W",
+              "lsb": 28,
+              "width": 4,
+              "access": "ROHW",
+              "description": "Source field width."
+            }
           ]
         },
         {
@@ -961,12 +2542,54 @@
           "offset": "0x010",
           "description": "SPEC 9 fault injection for the fabric (SPEC 7.8 'error injection hook'). Two independent hooks. FLIP corrupts payload bits of the flits one ingress port is emitting: one bit is caught by the per-flit parity at the next hop, two are not - parity is blind to an even error count by construction - and are caught by the payload scoreboard instead, so the limits of the parity scheme are exercised rather than assumed. KILL withholds the credit one switch buffer would have returned upstream, which stops that virtual channel dead while producing no wrong data at all. The withheld credits are HELD and released when KILL_EN clears, not dropped, so the injection can be reverted and the fabric proved to recover; a dropped credit would be a one-way trip.",
           "fields": [
-            {"name": "FLIP_MASK",  "lsb": 0,  "width": 2, "access": "RW", "reset": "0x0", "description": "Bit 0 flips one payload bit of the flit being emitted, bit 1 flips a second. Header flits are never corrupted: a flipped destination is a misroute the fabric would deliver correctly, which tests nothing."},
-            {"name": "FLIP_PORT",  "lsb": 4,  "width": 5, "access": "RW", "reset": "0x00", "description": "Ingress port the FLIP hook applies to."},
-            {"name": "KILL_EN",    "lsb": 12, "width": 1, "access": "RW", "reset": "0x0", "description": "Enable the credit-return hook."},
-            {"name": "KILL_STAGE", "lsb": 16, "width": 4, "access": "RW", "reset": "0x0", "description": "Switch stage whose credit return is withheld."},
-            {"name": "KILL_PORT",  "lsb": 20, "width": 5, "access": "RW", "reset": "0x00", "description": "Global port index within that stage."},
-            {"name": "KILL_VC",    "lsb": 28, "width": 2, "access": "RW", "reset": "0x0", "description": "Virtual channel whose credit return is withheld."}
+            {
+              "name": "FLIP_MASK",
+              "lsb": 0,
+              "width": 2,
+              "access": "RW",
+              "reset": "0x0",
+              "description": "Bit 0 flips one payload bit of the flit being emitted, bit 1 flips a second. Header flits are never corrupted: a flipped destination is a misroute the fabric would deliver correctly, which tests nothing."
+            },
+            {
+              "name": "FLIP_PORT",
+              "lsb": 4,
+              "width": 5,
+              "access": "RW",
+              "reset": "0x00",
+              "description": "Ingress port the FLIP hook applies to."
+            },
+            {
+              "name": "KILL_EN",
+              "lsb": 12,
+              "width": 1,
+              "access": "RW",
+              "reset": "0x0",
+              "description": "Enable the credit-return hook."
+            },
+            {
+              "name": "KILL_STAGE",
+              "lsb": 16,
+              "width": 4,
+              "access": "RW",
+              "reset": "0x0",
+              "description": "Switch stage whose credit return is withheld."
+            },
+            {
+              "name": "KILL_PORT",
+              "lsb": 20,
+              "width": 5,
+              "access": "RW",
+              "reset": "0x00",
+              "description": "Global port index within that stage."
+            },
+            {
+              "name": "KILL_VC",
+              "lsb": 28,
+              "width": 2,
+              "access": "RW",
+              "reset": "0x0",
+              "description": "Virtual channel whose credit return is withheld."
+            }
           ]
         },
         {
@@ -974,15 +2597,69 @@
           "offset": "0x014",
           "description": "Sticky reassembly and framing errors, from BOTH ends of the network. Write 1 to clear; also cleared by PACKET_CTRL.TEL_CLEAR. The ingress bits describe what a SOURCE handed over and the egress bits what the FABRIC delivered, and they are kept apart because they are different questions: an ingress length error is a producer defect, an egress one is a transport defect, and a single 'length error' bit would make the two indistinguishable.",
           "fields": [
-            {"name": "ING_LENGTH",    "lsb": 0,  "width": 1, "access": "W1C", "description": "A source's declared packet length disagreed with the flits it framed (SPEC 14 packet length consistency, checked at the producer)."},
-            {"name": "ING_TYPE",      "lsb": 1,  "width": 1, "access": "W1C", "description": "A source declared a reserved packet type."},
-            {"name": "ING_VC",        "lsb": 2,  "width": 1, "access": "W1C", "description": "A source moved the VC field mid packet."},
-            {"name": "ING_LEN_RANGE", "lsb": 3,  "width": 1, "access": "W1C", "description": "A source declared a length outside 1..MAX_FLITS."},
-            {"name": "EGR_PARITY",    "lsb": 8,  "width": 1, "access": "W1C", "description": "A delivered flit failed its parity check."},
-            {"name": "EGR_LENGTH",    "lsb": 9,  "width": 1, "access": "W1C", "description": "A delivered packet's flit count disagreed with its header (SPEC 14 packet length consistency, checked at the consumer)."},
-            {"name": "EGR_VC",        "lsb": 10, "width": 1, "access": "W1C", "description": "A delivered flit's VC tag disagreed with its packet's header."},
-            {"name": "EGR_DEST",      "lsb": 11, "width": 1, "access": "W1C", "description": "A packet arrived at a port that is not its destination: the routing function checked at its only observable end."},
-            {"name": "EGR_TYPE",      "lsb": 12, "width": 1, "access": "W1C", "description": "A delivered packet carried a reserved type."}
+            {
+              "name": "ING_LENGTH",
+              "lsb": 0,
+              "width": 1,
+              "access": "W1C",
+              "description": "A source's declared packet length disagreed with the flits it framed (SPEC 14 packet length consistency, checked at the producer)."
+            },
+            {
+              "name": "ING_TYPE",
+              "lsb": 1,
+              "width": 1,
+              "access": "W1C",
+              "description": "A source declared a reserved packet type."
+            },
+            {
+              "name": "ING_VC",
+              "lsb": 2,
+              "width": 1,
+              "access": "W1C",
+              "description": "A source moved the VC field mid packet."
+            },
+            {
+              "name": "ING_LEN_RANGE",
+              "lsb": 3,
+              "width": 1,
+              "access": "W1C",
+              "description": "A source declared a length outside 1..MAX_FLITS."
+            },
+            {
+              "name": "EGR_PARITY",
+              "lsb": 8,
+              "width": 1,
+              "access": "W1C",
+              "description": "A delivered flit failed its parity check."
+            },
+            {
+              "name": "EGR_LENGTH",
+              "lsb": 9,
+              "width": 1,
+              "access": "W1C",
+              "description": "A delivered packet's flit count disagreed with its header (SPEC 14 packet length consistency, checked at the consumer)."
+            },
+            {
+              "name": "EGR_VC",
+              "lsb": 10,
+              "width": 1,
+              "access": "W1C",
+              "description": "A delivered flit's VC tag disagreed with its packet's header."
+            },
+            {
+              "name": "EGR_DEST",
+              "lsb": 11,
+              "width": 1,
+              "access": "W1C",
+              "description": "A packet arrived at a port that is not its destination: the routing function checked at its only observable end."
+            },
+            {
+              "name": "EGR_TYPE",
+              "lsb": 12,
+              "width": 1,
+              "access": "W1C",
+              "description": "A delivered packet carried a reserved type."
+            }
           ]
         },
         {
@@ -990,7 +2667,13 @@
           "offset": "0x018",
           "description": "Flits switched by the observed stage. Saturating rather than wrapping, for the reason every error-adjacent counter in this map saturates: a wrapped counter can read small on a fabric that has been busy for a long time.",
           "fields": [
-            {"name": "VALUE", "lsb": 0, "width": 32, "access": "ROHW", "description": "Flit count."}
+            {
+              "name": "VALUE",
+              "lsb": 0,
+              "width": 32,
+              "access": "ROHW",
+              "description": "Flit count."
+            }
           ]
         },
         {
@@ -998,7 +2681,13 @@
           "offset": "0x01C",
           "description": "Cycles on which the observed stage held a buffered flit it could not move.",
           "fields": [
-            {"name": "VALUE", "lsb": 0, "width": 32, "access": "ROHW", "description": "Stall-cycle count."}
+            {
+              "name": "VALUE",
+              "lsb": 0,
+              "width": 32,
+              "access": "ROHW",
+              "description": "Stall-cycle count."
+            }
           ]
         },
         {
@@ -1006,8 +2695,20 @@
           "offset": "0x020",
           "description": "The two numbers that size the next revision of the fabric's buffering and bound its arbitration. MAX_WAIT is the fairness metric: for every buffered head flit it counts the cycles on which the output that flit wanted granted somebody else, and reports the maximum ever observed. Counting overtakes rather than idle cycles is what makes it a property of the ARBITER rather than of the traffic - a head that waits because the whole network is backpressured has not been treated unfairly.",
           "fields": [
-            {"name": "MAX_WAIT", "lsb": 0,  "width": 16, "access": "ROHW", "description": "Longest observed overtake run, in cycles."},
-            {"name": "HIWATER",  "lsb": 16, "width": 8,  "access": "ROHW", "description": "Deepest observed switch input-buffer occupancy."}
+            {
+              "name": "MAX_WAIT",
+              "lsb": 0,
+              "width": 16,
+              "access": "ROHW",
+              "description": "Longest observed overtake run, in cycles."
+            },
+            {
+              "name": "HIWATER",
+              "lsb": 16,
+              "width": 8,
+              "access": "ROHW",
+              "description": "Deepest observed switch input-buffer occupancy."
+            }
           ]
         },
         {
@@ -1015,7 +2716,13 @@
           "offset": "0x024",
           "description": "Packets accepted by the observed ingress port.",
           "fields": [
-            {"name": "VALUE", "lsb": 0, "width": 32, "access": "ROHW", "description": "Packet count."}
+            {
+              "name": "VALUE",
+              "lsb": 0,
+              "width": 32,
+              "access": "ROHW",
+              "description": "Packet count."
+            }
           ]
         },
         {
@@ -1023,7 +2730,13 @@
           "offset": "0x028",
           "description": "Packets delivered by the observed egress port. Compared against PACKET_PKT_IN summed over the sources addressing it, this is the loss and duplication check expressed in registers rather than in a scoreboard.",
           "fields": [
-            {"name": "VALUE", "lsb": 0, "width": 32, "access": "ROHW", "description": "Packet count."}
+            {
+              "name": "VALUE",
+              "lsb": 0,
+              "width": 32,
+              "access": "ROHW",
+              "description": "Packet count."
+            }
           ]
         },
         {
@@ -1031,8 +2744,527 @@
           "offset": "0x02C",
           "description": "Which port and which stage the counters above report. One observation window multiplexed by software rather than 16 ports x 2 counters x 32 bits of register space: the counters are free-running in hardware and only the READ is multiplexed, so nothing is lost by moving the selector instead of the storage.",
           "fields": [
-            {"name": "PORT",  "lsb": 0, "width": 5, "access": "RW", "reset": "0x00", "description": "Ingress and egress port index for PACKET_PKT_IN and PACKET_PKT_OUT."},
-            {"name": "STAGE", "lsb": 8, "width": 4, "access": "RW", "reset": "0x0",  "description": "Switch stage index for PACKET_FLITS, PACKET_STALLS and PACKET_WATERMARK."}
+            {
+              "name": "PORT",
+              "lsb": 0,
+              "width": 5,
+              "access": "RW",
+              "reset": "0x00",
+              "description": "Ingress and egress port index for PACKET_PKT_IN and PACKET_PKT_OUT."
+            },
+            {
+              "name": "STAGE",
+              "lsb": 8,
+              "width": 4,
+              "access": "RW",
+              "reset": "0x0",
+              "description": "Switch stage index for PACKET_FLITS, PACKET_STALLS and PACKET_WATERMARK."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "pipeline",
+      "base": "0xC000",
+      "size": "0x1000",
+      "implemented": true,
+      "spec_groups": [
+        "Per-block enable and reset",
+        "Stream counters",
+        "Stall counters",
+        "Frame counts"
+      ],
+      "description": "The SPEC 19 Phase 3 integration window (rtl/top/benchmark_core.sv, issue #17). It exists because two blocks in the assembled pipeline have no window of their own and both need one: the SPEC 3 synthetic ADC sources, which are design RTL rather than a testbench because benchmark_fabric_top has no pins to receive samples on, and the SPEC 7.4 alignment network, whose issue deliberately left its configuration on ports for the integration to bind. The window also carries the integration-level telemetry that belongs to no single block - the read-port multiplexer's arbitration counters, the delivered-event count, and the elaborated geometry and per-stage latency, so that the latency and throughput table in a pull request is a readback out of the design rather than a claim about it. CLOCK DOMAINS: every register here is in cfg_clk. The source and event counters are produced in core_clk and the alignment counters in history_clk; each group crosses back through one rtl/top/cfg_bundle_cdc.sv handshake carrying the whole group at once, so the counters within a group are always a consistent snapshot of each other and are at most one crossing stale. The window is at 0xC000 and not at 0x8000: that window is reserved for the snapshot and debug group, which issue #19 owns, and taking it here would force that issue to move.",
+      "registers": [
+        {
+          "name": "PIPE_CTRL",
+          "offset": "0x000",
+          "description": "Master controls for the two integration-level blocks that have no window of their own: the SPEC 3 synthetic ADC sources (rtl/top/adc_source.sv) and the SPEC 7.4 alignment network (rtl/align/align_net.sv). Every field here is in cfg_clk and reaches its consumer through rtl/top/cfg_bundle_cdc.sv, which crosses the whole word as ONE handshake payload rather than as independently synchronised bits (SPEC 8).",
+          "fields": [
+            {
+              "name": "SRC_ENABLE",
+              "lsb": 0,
+              "width": 1,
+              "access": "RW",
+              "reset": "0x1",
+              "description": "Enable the synthetic ADC sources. Resets set: a build with no software present must still produce traffic, or the Quartus benchmark optimises the datapath away."
+            },
+            {
+              "name": "SRC_RUN",
+              "lsb": 1,
+              "width": 1,
+              "access": "RW",
+              "reset": "0x0",
+              "description": "Sweep gate for the sources. Clearing it stops them AT A FRAME BOUNDARY, never mid-frame: a truncated frame is a permanent bin shift in the history rather than a missing beat. RESETS TO ZERO, unlike SRC_ENABLE: a pipeline that started streaming before its coefficient bank, its beam weights and its detector threshold were programmed would spend its first frames filtering with a bank of zeros and detecting against an unprogrammed threshold, and would leave the transform's delay feedbacks holding samples nobody can account for. The block enable resets set so the datapath is alive and nothing is optimised away; the TAP resets closed so that what flows through it is what software asked for."
+            },
+            {
+              "name": "ALIGN_ENABLE",
+              "lsb": 2,
+              "width": 1,
+              "access": "RW",
+              "reset": "0x1",
+              "description": "Enable the alignment network. Distinct from ALIGN_RUN and not interchangeable with it: clearing ENABLE also stops the block accepting history responses, so a block disabled with work in flight strands its own reassembly entries."
+            },
+            {
+              "name": "ALIGN_RUN",
+              "lsb": 3,
+              "width": 1,
+              "access": "RW",
+              "reset": "0x0",
+              "description": "Sweep gate for the alignment network. Stops at the next frame boundary. Resets to zero for the same reason SRC_RUN does, and for one more of its own: a sweep issued against a corner turn with no complete frame is answered out-of-range on every response, which is correct behaviour that costs a sticky fault bit and a counter nobody asked for."
+            },
+            {
+              "name": "ALIGN_PARTIAL",
+              "lsb": 4,
+              "width": 1,
+              "access": "RW",
+              "reset": "0x0",
+              "description": "Keep whatever arrived of an incomplete group instead of zeroing the absent lanes. A diagnosis mode; the beat is emitted and flagged either way."
+            },
+            {
+              "name": "ALIGN_FORCE_UNSAFE",
+              "lsb": 5,
+              "width": 1,
+              "access": "RW",
+              "reset": "0x0",
+              "description": "SPEC 9 tag-collision injection in the alignment network. Edge armed; not a production mode."
+            },
+            {
+              "name": "COUNTER_CLEAR",
+              "lsb": 8,
+              "width": 1,
+              "access": "RWP",
+              "description": "Zero every counter in this window."
+            },
+            {
+              "name": "STATUS_CLEAR",
+              "lsb": 9,
+              "width": 1,
+              "access": "RWP",
+              "description": "Clear the alignment network's sticky fault vector."
+            },
+            {
+              "name": "SRC_RESEED",
+              "lsb": 10,
+              "width": 1,
+              "access": "RWP",
+              "description": "Load PIPE_SRC_SEED into every source's LFSR. A zero seed is substituted with one, because zero is the LFSR's absorbing state and the register plane has no way to refuse a write."
+            }
+          ]
+        },
+        {
+          "name": "PIPE_SRC_MODE",
+          "offset": "0x004",
+          "description": "Stimulus selector for every antenna source. One mode for all of them: the antennas differ by their PHASE (PIPE_SRC_TONE.ANT_STEP), not by their kind of signal, because a beamformer's input is one wavefront seen from several positions.",
+          "fields": [
+            {
+              "name": "MODE",
+              "lsb": 0,
+              "width": 3,
+              "access": "RW",
+              "reset": "0x4",
+              "description": "0 ZERO, 1 IMPULSE, 2 CONST, 3 TONE, 4 LFSR. Resets to LFSR so an unprogrammed build exercises the whole datapath with reproducible pseudo-random traffic."
+            }
+          ]
+        },
+        {
+          "name": "PIPE_SRC_GAIN",
+          "offset": "0x008",
+          "description": "Amplitude applied to every generated sample, as a Q1.15 scale on each component independently (NOT a complex multiply - a complex gain would rotate the tone and correlate the two halves of the random mode).",
+          "fields": [
+            {
+              "name": "GAIN",
+              "lsb": 0,
+              "width": 16,
+              "access": "RW",
+              "reset": "0x7FFF",
+              "description": "Q1.15 scale. 0x7FFF is unity to within one LSB; Q1.15 cannot represent 1.0 (NUMERICS.md)."
+            },
+            {
+              "name": "GAIN_IM",
+              "lsb": 16,
+              "width": 16,
+              "access": "RW",
+              "reset": "0x0000",
+              "description": "Carried for symmetry with every other complex register word and deliberately unused by the source. See rtl/top/adc_source.sv."
+            }
+          ]
+        },
+        {
+          "name": "PIPE_SRC_TONE",
+          "offset": "0x00C",
+          "description": "Tone geometry, in units of FFT bins. Used only in TONE mode. A stimulus at step k produces a spectral line at bin (FFT_SIZE - k) mod FFT_SIZE, not at k: the generator's table and the transform's kernel are the same exp(-j2*pi*e/N), so the correlation peaks at the conjugate index.",
+          "fields": [
+            {
+              "name": "TONE_STEP",
+              "lsb": 0,
+              "width": 16,
+              "access": "RW",
+              "reset": "0x0001",
+              "description": "Phase increment per sample, in bins."
+            },
+            {
+              "name": "ANT_STEP",
+              "lsb": 16,
+              "width": 16,
+              "access": "RW",
+              "reset": "0x0000",
+              "description": "Additional phase per antenna index, in bins. This is the plane-wave arrival angle: it is what makes the beamformer's job real, because a source giving every antenna the same samples would let a broken alignment network pass every beamforming test."
+            }
+          ]
+        },
+        {
+          "name": "PIPE_SRC_SEED",
+          "offset": "0x010",
+          "description": "Seed loaded into every source's 32-bit Galois LFSR by PIPE_CTRL.SRC_RESEED. Every antenna starts from the same seed and they diverge only through their own advance, which keeps a run reproducible from one number.",
+          "fields": [
+            {
+              "name": "SEED",
+              "lsb": 0,
+              "width": 32,
+              "access": "RW",
+              "reset": "0x12345678",
+              "description": "LFSR seed."
+            }
+          ]
+        },
+        {
+          "name": "PIPE_ALIGN_CFG",
+          "offset": "0x014",
+          "description": "Alignment-network sweep parameters. FRAME_OFF is latched at the start of every sweep, so a frame is always assembled from ONE history offset even if software changes it mid-frame.",
+          "fields": [
+            {
+              "name": "FRAME_OFF",
+              "lsb": 0,
+              "width": 16,
+              "access": "RW",
+              "reset": "0x0000",
+              "description": "Frames back from the newest complete frame. 0 is the newest. Out of range is reported by the history rather than truncated here."
+            },
+            {
+              "name": "LANE_STALL",
+              "lsb": 16,
+              "width": 8,
+              "access": "RW",
+              "reset": "0x00",
+              "description": "Per-lane stall mask for the reassembly buffer. A test hook; zero in normal operation."
+            }
+          ]
+        },
+        {
+          "name": "PIPE_SRC_BEATS",
+          "offset": "0x018",
+          "description": "Beats delivered by the synthetic sources, summed over antennas.",
+          "fields": [
+            {
+              "name": "VALUE",
+              "lsb": 0,
+              "width": 32,
+              "access": "ROHW",
+              "description": "Saturating count. Beats delivered by the synthetic sources, summed over antennas."
+            }
+          ]
+        },
+        {
+          "name": "PIPE_SRC_FRAMES",
+          "offset": "0x01C",
+          "description": "Frames completed by the synthetic sources, summed over antennas.",
+          "fields": [
+            {
+              "name": "VALUE",
+              "lsb": 0,
+              "width": 32,
+              "access": "ROHW",
+              "description": "Saturating count. Frames completed by the synthetic sources, summed over antennas."
+            }
+          ]
+        },
+        {
+          "name": "PIPE_SRC_STALLS",
+          "offset": "0x020",
+          "description": "Cycles in which a source wanted to deliver a beat and could not.",
+          "fields": [
+            {
+              "name": "VALUE",
+              "lsb": 0,
+              "width": 32,
+              "access": "ROHW",
+              "description": "Saturating count. Cycles in which a source wanted to deliver a beat and could not."
+            }
+          ]
+        },
+        {
+          "name": "PIPE_ALIGN_BEATS",
+          "offset": "0x024",
+          "description": "Beamformer input beats emitted by the alignment network.",
+          "fields": [
+            {
+              "name": "VALUE",
+              "lsb": 0,
+              "width": 32,
+              "access": "ROHW",
+              "description": "Saturating count. Beamformer input beats emitted by the alignment network."
+            }
+          ]
+        },
+        {
+          "name": "PIPE_ALIGN_STALLS",
+          "offset": "0x028",
+          "description": "Cycles the alignment scheduler could not issue a group.",
+          "fields": [
+            {
+              "name": "VALUE",
+              "lsb": 0,
+              "width": 32,
+              "access": "ROHW",
+              "description": "Saturating count. Cycles the alignment scheduler could not issue a group."
+            }
+          ]
+        },
+        {
+          "name": "PIPE_ALIGN_MISSING",
+          "offset": "0x02C",
+          "description": "Lanes that never delivered a response and were resolved by timeout.",
+          "fields": [
+            {
+              "name": "VALUE",
+              "lsb": 0,
+              "width": 32,
+              "access": "ROHW",
+              "description": "Saturating count. Lanes that never delivered a response and were resolved by timeout."
+            }
+          ]
+        },
+        {
+          "name": "PIPE_ALIGN_DUP",
+          "offset": "0x030",
+          "description": "Responses that arrived for a lane already filled.",
+          "fields": [
+            {
+              "name": "VALUE",
+              "lsb": 0,
+              "width": 32,
+              "access": "ROHW",
+              "description": "Saturating count. Responses that arrived for a lane already filled."
+            }
+          ]
+        },
+        {
+          "name": "PIPE_ALIGN_ORPHAN",
+          "offset": "0x034",
+          "description": "Responses whose identity matched no open reassembly entry.",
+          "fields": [
+            {
+              "name": "VALUE",
+              "lsb": 0,
+              "width": 32,
+              "access": "ROHW",
+              "description": "Saturating count. Responses whose identity matched no open reassembly entry."
+            }
+          ]
+        },
+        {
+          "name": "PIPE_ALIGN_TIMEOUT",
+          "offset": "0x038",
+          "description": "Reassembly entries resolved by the missing-sample timeout.",
+          "fields": [
+            {
+              "name": "VALUE",
+              "lsb": 0,
+              "width": 32,
+              "access": "ROHW",
+              "description": "Saturating count. Reassembly entries resolved by the missing-sample timeout."
+            }
+          ]
+        },
+        {
+          "name": "PIPE_ALIGN_MULTI",
+          "offset": "0x03C",
+          "description": "Cycles the routing network delivered more than one lane at once. THE throughput statement SPEC 7.4's architecture comparison rests on: a run in which this stayed at zero never asked the network to do anything a bundle of wires could not do.",
+          "fields": [
+            {
+              "name": "VALUE",
+              "lsb": 0,
+              "width": 32,
+              "access": "ROHW",
+              "description": "Saturating count. Cycles the routing network delivered more than one lane at once. THE throughput statement SPEC 7.4's architecture comparison rests on: a run in which this stayed at zero never asked the network to do anything a bundle of wires could not do."
+            }
+          ]
+        },
+        {
+          "name": "PIPE_ALIGN_STATUS",
+          "offset": "0x040",
+          "description": "Alignment-network sticky faults and its elaborated architecture, reported by hardware so a pull request's architecture claim is a readback rather than a comment.",
+          "fields": [
+            {
+              "name": "FAULT",
+              "lsb": 0,
+              "width": 4,
+              "access": "W1C",
+              "description": "Sticky, LSB first: MISSING, DUPLICATE, ORPHAN, HIST. The same four bits, in the same order, as the SPEC 5 `user` field of an output beat."
+            },
+            {
+              "name": "NET_SEL",
+              "lsb": 8,
+              "width": 8,
+              "access": "ROHW",
+              "description": "0 direct crossbar, 1 multistage omega. The measured default is 1 (DECISIONS.md, issue #16)."
+            },
+            {
+              "name": "NET_LATENCY",
+              "lsb": 16,
+              "width": 8,
+              "access": "ROHW",
+              "description": "Routing-fabric latency in cycles."
+            },
+            {
+              "name": "BLOCK_LATENCY",
+              "lsb": 24,
+              "width": 8,
+              "access": "ROHW",
+              "description": "Whole-block latency in cycles."
+            }
+          ]
+        },
+        {
+          "name": "PIPE_RDMUX_GRANTS",
+          "offset": "0x044",
+          "description": "Requests forwarded from the alignment network to the history read port.",
+          "fields": [
+            {
+              "name": "VALUE",
+              "lsb": 0,
+              "width": 32,
+              "access": "ROHW",
+              "description": "Saturating count. Requests forwarded from the alignment network to the history read port."
+            }
+          ]
+        },
+        {
+          "name": "PIPE_RDMUX_STALLS",
+          "offset": "0x048",
+          "description": "Cycles a pending alignment request was not granted the read port.",
+          "fields": [
+            {
+              "name": "VALUE",
+              "lsb": 0,
+              "width": 32,
+              "access": "ROHW",
+              "description": "Saturating count. Cycles a pending alignment request was not granted the read port."
+            }
+          ]
+        },
+        {
+          "name": "PIPE_EVENTS",
+          "offset": "0x04C",
+          "description": "Detection events delivered out of the CFAR bank.",
+          "fields": [
+            {
+              "name": "VALUE",
+              "lsb": 0,
+              "width": 32,
+              "access": "ROHW",
+              "description": "Saturating count. Detection events delivered out of the CFAR bank."
+            }
+          ]
+        },
+        {
+          "name": "PIPE_GEOMETRY",
+          "offset": "0x050",
+          "description": "The elaborated integration geometry, reported by hardware. SPEC 7.5 requires any time multiplexing to be visible in reported throughput; these are the integration-level counterparts of the beamformer's own WEIGHT_PARALLELISM word.",
+          "fields": [
+            {
+              "name": "BIN_PAR",
+              "lsb": 0,
+              "width": 8,
+              "access": "ROHW",
+              "description": "Bins per alignment beat, and the number of request ports the network drives."
+            },
+            {
+              "name": "ALIGN_GROUPS",
+              "lsb": 8,
+              "width": 8,
+              "access": "ROHW",
+              "description": "Reassembly entries in the alignment network."
+            },
+            {
+              "name": "LANES",
+              "lsb": 16,
+              "width": 8,
+              "access": "ROHW",
+              "description": "Samples per cycle per antenna at the front end."
+            },
+            {
+              "name": "RD_PORTS",
+              "lsb": 24,
+              "width": 8,
+              "access": "ROHW",
+              "description": "History read ports actually present. One: the corner turn's banking cannot serve BIN_PAR CONSECUTIVE bins in parallel because consecutive bins share a memory lane, so the network's request ports are multiplexed onto it (rtl/top/history_rd_mux.sv)."
+            }
+          ]
+        },
+        {
+          "name": "PIPE_LAT_FRONT",
+          "offset": "0x054",
+          "description": "Front-end latency, reported by hardware from the same package functions the RTL elaborates from. Beat-measured and cycle-measured contributions are separate fields because the units are not interchangeable (ARCHITECTURE.md 8).",
+          "fields": [
+            {
+              "name": "PFB_CYCLES",
+              "lsb": 0,
+              "width": 8,
+              "access": "ROHW",
+              "description": "Polyphase bank, in cycles."
+            },
+            {
+              "name": "PFB_BEATS",
+              "lsb": 8,
+              "width": 8,
+              "access": "ROHW",
+              "description": "Polyphase bank, in beats. Zero for the TREE accumulation style, TAPS-1 for SYSTOLIC."
+            },
+            {
+              "name": "FFT_BEATS",
+              "lsb": 16,
+              "width": 16,
+              "access": "ROHW",
+              "description": "Streaming FFT, in beats."
+            }
+          ]
+        },
+        {
+          "name": "PIPE_LAT_BACK",
+          "offset": "0x058",
+          "description": "Back-end latency, in cycles, reported by hardware.",
+          "fields": [
+            {
+              "name": "HISTORY",
+              "lsb": 0,
+              "width": 8,
+              "access": "ROHW",
+              "description": "History read path, request to response."
+            },
+            {
+              "name": "ALIGN",
+              "lsb": 8,
+              "width": 8,
+              "access": "ROHW",
+              "description": "Alignment network, response to beamformer beat."
+            },
+            {
+              "name": "BEAMFORMER",
+              "lsb": 16,
+              "width": 8,
+              "access": "ROHW",
+              "description": "Beamforming matrix."
+            },
+            {
+              "name": "POWER",
+              "lsb": 24,
+              "width": 8,
+              "access": "ROHW",
+              "description": "Power stage, sample to power beat."
+            }
           ]
         }
       ]

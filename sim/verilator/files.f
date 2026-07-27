@@ -151,6 +151,14 @@ rtl/cdc/cdc_sync2.sv
 rtl/cdc/cdc_pulse.sv
 rtl/cdc/cdc_handshake.sv
 
+// The bulk transport across a clock boundary (issue #6). Listed here as of
+// issue #17: the assembled pipeline crosses the beamformer input beat from
+// history_clk into core_clk, and stream_cdc over async_fifo is the SPEC 8
+// mechanism for bulk traffic. Before #17 nothing in this build instantiated
+// either, which is why they were in files_cdc.f alone.
+rtl/cdc/async_fifo.sv
+rtl/cdc/stream_cdc.sv
+
 // ---- the polyphase FIR bank (SPEC 7.1, SPEC 19 Phase 2, issue #10) -----
 // Design RTL: one complex FIR lane, the dual coefficient banks with their
 // frame-aligned swap, the parameterised delay line, and the polyphase bank that
@@ -306,6 +314,40 @@ rtl/packet/pkt_ingress.sv
 rtl/packet/pkt_switch_stage.sv
 rtl/packet/pkt_egress.sv
 rtl/packet/pkt_fabric.sv
+
+// ---- the SPEC 9 register and control plane (issue #7, extended by #17) --
+// Listed here as of issue #17, which is the first build to instantiate the
+// plane inside the design rather than beside it in control_top: every window
+// control/regmap.json declares is wired to the block it configures.
+rtl/control/reg_if_pkg.sv
+sim/assertions/reg_if_checker.sv
+rtl/control/generated/regmap_pkg.sv
+rtl/control/reg_csr_block.sv
+rtl/control/reg_block_id.sv
+rtl/control/reg_block_build_params.sv
+rtl/control/reg_block_ctrl.sv
+rtl/control/reg_block_fault.sv
+rtl/control/reg_block_scratch.sv
+rtl/control/reg_block_coeff.sv
+rtl/control/reg_block_covar.sv
+rtl/control/reg_block_cfar.sv
+rtl/control/reg_block_history.sv
+rtl/control/reg_block_packet.sv
+rtl/control/reg_block_pipeline.sv
+rtl/control/reg_fabric.sv
+
+// ---- the SPEC 19 Phase 3 integration (issue #17) ------------------------
+// The synthetic sources, the three seams the assembled pipeline needs that no
+// single block owns, and the assembly itself. benchmark_core is the portable
+// design; the tops below and in quartus/ are wrappers around it and add no
+// processing.
+rtl/top/cfg_bundle_cdc.sv
+rtl/top/adc_source.sv
+rtl/top/history_rd_mux.sv
+rtl/top/bin_serializer.sv
+rtl/top/power_stage.sv
+rtl/top/cfar_bank.sv
+rtl/top/benchmark_core.sv
 
 // ---- simulation top (SPEC 4.1) -----------------------------------------
 sim/verilator/tops/benchmark_sim_top.sv

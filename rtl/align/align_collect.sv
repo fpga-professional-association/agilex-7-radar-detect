@@ -308,6 +308,29 @@ module align_collect
   logic [BIN_PAR-1:0]    l_present;
   logic [HIST_FLAGS_W-1:0] l_flag [BIN_PAR];
 
+  // ---------------------------------------------------------------------------
+  // Registered `cfg_enable` fanout  (issue #17, from DECISIONS.md issue #16
+  // finding 7)
+  //
+  // One local copy per lane, plus one for the allocator, rather than one
+  // register driving every lane's `lane_ready` and the allocation path as well.
+  // The reasoning, the measurement and the `dont_merge` argument are in
+  // rtl/align/align_net.sv's copy of this block; the two are deliberately
+  // separate one-stage replications rather than one chained through the module
+  // boundary, so that everything in the block sees the enable change on the SAME
+  // cycle.
+  // ---------------------------------------------------------------------------
+  localparam int unsigned EN_COPIES = BIN_PAR + 1;
+
+  (* preserve *) (* dont_merge *) logic [EN_COPIES-1:0] en_q;
+
+  always_ff @(posedge clk) begin
+    if (!rst_n) en_q <= '0;
+    else        en_q <= {EN_COPIES{cfg_enable}};
+  end
+
+  wire en_alloc = en_q[BIN_PAR];
+
   for (genvar l = 0; l < int'(BIN_PAR); l++) begin : g_lane
     wire [NET_DATA_W-1:0] w    = lane_data[l*NET_DATA_W +: NET_DATA_W];
     wire [VEC_W-1:0]      vec  = w[VEC_LSB  +: VEC_W];
@@ -325,7 +348,7 @@ module align_collect
     // it names is open and was opened for exactly this (group, frame offset).
     wire route_ok   = (w_lane == LANE_W'(l));
 
-    assign lane_ready[l] = cfg_enable && !cfg_lane_stall[l];
+    assign lane_ready[l] = en_q[l] && !cfg_lane_stall[l];
     assign l_fire[l]     = lane_valid[l] && lane_ready[l];
     assign l_open[l]     = l_fire[l] && route_ok && e_valid[w_gid];
     assign l_cand[l]     = l_open[l] && (e_gidx[w_gid] == w_gidx) &&
@@ -423,7 +446,7 @@ module align_collect
   // ---------------------------------------------------------------------------
   // Allocation
   // ---------------------------------------------------------------------------
-  assign alloc_ready = cfg_enable && (count_q < CNT_W'(GROUPS));
+  assign alloc_ready = en_alloc && (count_q < CNT_W'(GROUPS));
   wire   alloc_fire  = alloc_valid && alloc_ready;
 
   always_ff @(posedge clk) begin
@@ -633,6 +656,58 @@ module align_collect
     end
   end
 
+  // ---------------------------------------------------------------------------
+  // The verdict/count split  (issue #17, from DECISIONS.md issue #16 finding 6)
+  //
+  // The measured worst path of this block ran from the routing fabric's output
+  // register straight into `u_cnt_dup`'s adder — eleven levels of logic covering
+  // the identity comparison, the duplicate decision, the population count across
+  // lanes and the saturating counter's own add, in ONE combinational cone.
+  // 241 MHz, which is the number that limited the whole block in both
+  // architectures (the cone is in logic they share).
+  //
+  // The fix is this register stage, and it is legitimate for one specific
+  // reason: every signal crossing it is TELEMETRY. The entry-write path — which
+  // must stay same-cycle, because a response has to land in its entry on the
+  // cycle it arrives — is `l_write`/`wr_here` and does not pass through here.
+  // A count that lands one cycle later is indistinguishable from an on-time one
+  // to every consumer of `stat_*`, which are register-plane reads.
+  //
+  // COUNTS ARE UNCHANGED, not merely "close": `cfg_counter_clear` and
+  // `cfg_sticky_clear` are delayed by the SAME one cycle, so the interleaving of
+  // events and clears is preserved exactly. A clear that used to discard an
+  // event still discards it and one that used to follow it still follows it.
+  // sim/tests/test_align.cpp checks the counters after the run quiesces, and
+  // sim/tests/test_pipeline_continuous.cpp checks this property directly.
+  // ---------------------------------------------------------------------------
+  logic [MIS_W-1:0] dup_n_q, orph_n_q, miss_n_q;
+  logic             miss_ev_q, to_ev_q, emit_q, hist_ev_q;
+  logic             cnt_clear_q, stky_clear_q;
+
+  always_ff @(posedge clk) begin
+    if (!rst_n) begin
+      dup_n_q      <= '0;
+      orph_n_q     <= '0;
+      miss_n_q     <= '0;
+      miss_ev_q    <= 1'b0;
+      to_ev_q      <= 1'b0;
+      emit_q       <= 1'b0;
+      hist_ev_q    <= 1'b0;
+      cnt_clear_q  <= 1'b0;
+      stky_clear_q <= 1'b0;
+    end else begin
+      dup_n_q      <= dup_n;
+      orph_n_q     <= orph_n;
+      miss_n_q     <= miss_n;
+      miss_ev_q    <= miss_event;
+      to_ev_q      <= to_event;
+      emit_q       <= emit;
+      hist_ev_q    <= emit && (|e_hflag[head_q]);
+      cnt_clear_q  <= cfg_counter_clear;
+      stky_clear_q <= cfg_sticky_clear;
+    end
+  end
+
   // The observation ports no consumer here wants. Named `*_unused` because that
   // is what the linter's unused-signal regexp matches, which keeps `--Wall`
   // clean without a design-wide waiver on a rule that catches real wiring
@@ -648,40 +723,40 @@ module align_collect
 
   perf_counter #(.WIDTH(TELEM_W), .INCR_W(1), .SATURATE(1'b1)) u_cnt_beat (
       .clk (clk), .rst_n (rst_n), .enable (1'b1),
-      .event_i (emit), .incr (1'b1),
-      .clear (cfg_counter_clear), .snapshot (1'b0),
+      .event_i (emit_q), .incr (1'b1),
+      .clear (cnt_clear_q), .snapshot (1'b0),
       .count (c_beat), .snap (b_snap_unused), .snap_valid (b_snapv_unused),
       .wrap_pulse (b_wrapp_unused), .wrapped (b_wrapd_unused)
   );
 
   perf_counter #(.WIDTH(TELEM_W), .INCR_W(MIS_W), .SATURATE(1'b1)) u_cnt_miss (
       .clk (clk), .rst_n (rst_n), .enable (1'b1),
-      .event_i (miss_event), .incr (miss_n),
-      .clear (cfg_counter_clear), .snapshot (1'b0),
+      .event_i (miss_ev_q), .incr (miss_n_q),
+      .clear (cnt_clear_q), .snapshot (1'b0),
       .count (c_miss), .snap (m_snap_unused), .snap_valid (m_snapv_unused),
       .wrap_pulse (m_wrapp_unused), .wrapped (m_wrapd_unused)
   );
 
   perf_counter #(.WIDTH(TELEM_W), .INCR_W(MIS_W), .SATURATE(1'b1)) u_cnt_dup (
       .clk (clk), .rst_n (rst_n), .enable (1'b1),
-      .event_i (dup_n != '0), .incr (dup_n),
-      .clear (cfg_counter_clear), .snapshot (1'b0),
+      .event_i (dup_n_q != '0), .incr (dup_n_q),
+      .clear (cnt_clear_q), .snapshot (1'b0),
       .count (c_dup), .snap (d_snap_unused), .snap_valid (d_snapv_unused),
       .wrap_pulse (d_wrapp_unused), .wrapped (d_wrapd_unused)
   );
 
   perf_counter #(.WIDTH(TELEM_W), .INCR_W(MIS_W), .SATURATE(1'b1)) u_cnt_orph (
       .clk (clk), .rst_n (rst_n), .enable (1'b1),
-      .event_i (orph_n != '0), .incr (orph_n),
-      .clear (cfg_counter_clear), .snapshot (1'b0),
+      .event_i (orph_n_q != '0), .incr (orph_n_q),
+      .clear (cnt_clear_q), .snapshot (1'b0),
       .count (c_orph), .snap (o_snap_unused), .snap_valid (o_snapv_unused),
       .wrap_pulse (o_wrapp_unused), .wrapped (o_wrapd_unused)
   );
 
   perf_counter #(.WIDTH(TELEM_W), .INCR_W(1), .SATURATE(1'b1)) u_cnt_to (
       .clk (clk), .rst_n (rst_n), .enable (1'b1),
-      .event_i (to_event), .incr (1'b1),
-      .clear (cfg_counter_clear), .snapshot (1'b0),
+      .event_i (to_ev_q), .incr (1'b1),
+      .clear (cnt_clear_q), .snapshot (1'b0),
       .count (c_to), .snap (t_snap_unused), .snap_valid (t_snapv_unused),
       .wrap_pulse (t_wrapp_unused), .wrapped (t_wrapd_unused)
   );
@@ -697,13 +772,13 @@ module align_collect
   // ever happened; this does.
   logic [ALGN_FAULT_W-1:0] fault_q;
   always_ff @(posedge clk) begin
-    if (!rst_n || cfg_sticky_clear) begin
+    if (!rst_n || stky_clear_q) begin
       fault_q <= '0;
     end else begin
-      if (miss_event)          fault_q[ALGN_USER_MISSING]   <= 1'b1;
-      if (dup_n  != '0)        fault_q[ALGN_USER_DUPLICATE] <= 1'b1;
-      if (orph_n != '0)        fault_q[ALGN_USER_ORPHAN]    <= 1'b1;
-      if (emit && (|e_hflag[head_q])) fault_q[ALGN_USER_HIST] <= 1'b1;
+      if (miss_ev_q)      fault_q[ALGN_USER_MISSING]   <= 1'b1;
+      if (dup_n_q  != '0) fault_q[ALGN_USER_DUPLICATE] <= 1'b1;
+      if (orph_n_q != '0) fault_q[ALGN_USER_ORPHAN]    <= 1'b1;
+      if (hist_ev_q)      fault_q[ALGN_USER_HIST]      <= 1'b1;
     end
   end
   assign stat_fault = fault_q;

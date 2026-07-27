@@ -675,6 +675,61 @@ queues does; and the pass splits the sources, so what it measures is unambiguous
 LINK rather than the shared PORT. The distinction is recorded in ARCHITECTURE.md §3.6 as a
 property of the design, not hidden in the test.
 
+### 4.1.z Medium-configuration pipeline (SPEC §19 Phase 3, issue #17)
+
+Five tests over one DUT — `benchmark_sim_top` at `CONFIG=medium`, which contains
+`rtl/top/benchmark_core.sv` and therefore the whole SPEC §3 datapath. Three run in
+`make sim-medium`, and the two long-running ones are their own SPEC §16 entry
+points.
+
+**The method, stated once because all five share it.** Every stage's output is
+compared against the C++ model applied to that stage's **own observed input**, and
+the chain is compared end to end on top of that. A test that compared only the
+detection events could report that an eight-stage pipeline is wrong and nothing
+else; per-stage comparison names the stage, and the end-to-end pass still catches
+a set of individually-correct stages wired together in the wrong order.
+
+**Nothing assumes a latency.** Every comparison is keyed by SPEC §12.5 identity:
+
+| Stage | Key |
+|---|---|
+| sources, polyphase, transform | antenna, frame index, and the source's own beat counter |
+| corner turn | the response's **absolute** `frame_id` — the only field that survives rotation |
+| alignment network | the bin index the beat's own position implies |
+| beamformer, serializer, power | `seq`, which is continuous through all three at `BEAM_MUX = 1` |
+| detector | `stream_id` (the beam) and the per-beam `seq` |
+
+That is what lets the same session run at seven clock ratios and four
+backpressure profiles without one expected number changing.
+
+| Test | What it establishes |
+|---|---|
+| `test_pipeline_continuous` | Continuous frames end to end. Pass 1 the geometry echo; 2 an impulse chain-through whose spectrum must be FLAT (a per-stage check cannot catch a dropped stage, a flat spectrum can); 3 a tone that must land in the bin **and the beam** both the design and the model name, checked as a power ratio so the answer does not depend on a threshold; 4 an injected target that must be DETECTED at the right bin in the right beam, with every emitted event re-verified against its own `(cut_power, noise_sum, ref_count, alpha)` fields; 5 continuous pseudo-random frames with every stage bit-exact and the SPEC §9 counters against the harness's independent tally; 6 SPEC §13.2 backpressure invariance |
+| `test_pipeline_runtime_update` | A coefficient swap and a weight swap applied **while the pipeline runs**. Every frame must match ONE coefficient set exactly and every beat ONE weight matrix, and the set in force must change exactly once. A swap that landed one beat early or one frame late produces a frame that matches NEITHER, which is a named failure rather than a numerical drift. Also: a write to the ACTIVE bank is refused and flagged; writing the spare changes nothing |
+| `test_pipeline_metamorphic` | The SPEC §13.2 property set on the assembled pipeline — see §4.2 |
+| `test_pipeline_random` | SPEC §13.3 — see §4.3 |
+| `test_pipeline_stress` | SPEC §13.4 — see §4.4 |
+
+**Three test-methodology findings, recorded because each cost a debugging pass
+and each would recur.**
+
+* *The alignment tap must be sampled on `history_clk`.* `align_net` is a
+  single-clock block in `history_clk`; sampling its handshake on `core_clk` sees
+  each transfer an arbitrary number of times or not at all, depending on the
+  ratio, which looks exactly like a lost beat.
+* *Frame 0 is not comparable.* The polyphase delay line is a datapath array and
+  is deliberately not reset (SPEC §23), so after a reset it holds whatever ran
+  before it while the model starts empty. The two agree from frame 1, where both
+  hold the tail of frame 0. `check_front_end` leaves `bins[0]` empty rather than
+  filling it with an unchecked value, so the history and alignment checks skip it
+  too instead of matching against a number nobody verified.
+* *Bank programming needs a restart.* A swap takes effect at a start-of-frame
+  beat, a write to the active bank is refused, and both banks power up as zeros —
+  so no single pass can have frame 0 filtered by a programmed set. The tests load
+  bank 1, run briefly to retire the swap, load bank 0 with the same values, and
+  reset; coefficient storage survives a reset by design, which is what makes the
+  last step work rather than undo the first three.
+
 ### 4.2 Metamorphic tests (SPEC §13.2)
 
 Populated progressively by issues #10–#14; #10 and #12 have landed.
@@ -713,6 +768,50 @@ index still produces beams, still saturates plausibly and still passes every pro
 what it cannot do is commute with a permutation applied to both operands — see the fault
 injection under §4.1.
 
+**Implemented for the assembled pipeline (issue #17)**, in
+`test_pipeline_metamorphic`. Every pass here compares the design against ITSELF
+under a transformation — not against the reference model, which is what the other
+tests do — so these properties hold even where the model and the design would be
+wrong together.
+
+| Relation | Statement | Result at the medium geometry |
+|---|---|---|
+| zero in / zero out | the zero stimulus produces an identically zero spectrum and no detection at any alpha | peak 0, 0 detections |
+| impulse response | a pass-through filter and an impulse give a FLAT spectrum through eight stages | every bin identical |
+| scaling | halving an **unsaturated** input quarters the power | ratio 4.0000 |
+| delay invariance | starting the same stimulus 977 core cycles later leaves every bin of every beam unchanged | byte-identical |
+| permutation equivalence | steering the wavefront to beam `m` and reading beam `m` is the same experiment for every `m` — it permutes the antenna phases and the weights consistently | all four beams see the **identical integer**; every off-beam sees less than a thousandth |
+| reset repeatability | two full resets and the same stimulus | byte-identical spectra |
+| backpressure invariance | with and without a heavily stalled event consumer | byte-identical (`test_pipeline_continuous` pass 6) |
+| inactive bank has no effect | writing the spare bank changes nothing until the swap | `test_pipeline_runtime_update` pass 4 |
+| bank changes only at a legal boundary | one clean transition per requested swap | `test_pipeline_runtime_update` passes 2, 3 |
+
+Two of these needed their **precondition** stated before they held, and both are
+worth recording:
+
+* **Scaling needs an unsaturated input.** The pass first used a full-scale tone,
+  which on four antennas sums to four times full scale in the beamformer and
+  saturates; two saturated results have a ratio of one however the input was
+  scaled, and the pass reported `1.000000`. At an eighth of full scale it reports
+  `4.0000`. SPEC §13.2 says "scaling an UNSATURATED input", and the word is
+  load-bearing.
+* **Every two-run property needs a QUIESCED history.** With the sources running,
+  successive sweeps read different absolute frames, so two runs at different
+  speeds legitimately produce different values — which makes invariance
+  unmeasurable, because the thing that changed was which frame was read and not
+  what the pipeline did to it. Every property above sweeps a stopped history;
+  the continuous behaviour is `test_pipeline_continuous`'s subject instead.
+
+The permutation relation is the strongest available check on the **antenna axis**
+of the whole front end. A transposed antenna index still produces beams, still
+saturates plausibly and still passes every protocol check; what it cannot do is
+make four independently steered wavefronts land on their own beams with the same
+integer power.
+
+SPEC §13.2's packet-network port-isolation property is not applicable to this
+build: the SPEC §7.8 fabric exists (issue #18) but nothing in `benchmark_core`
+instantiates it, and binding the detection-event stream to it is issue #19's.
+
 ### 4.3 Random testing (SPEC §13.3)
 
 Deterministic seeds only; every failing seed is recorded and replayable.
@@ -731,9 +830,69 @@ byte-identical summaries apart from that line.
 
 Extended per block by the implementing issues.
 
+**Implemented for the assembled pipeline (issue #17)**, in
+`test_pipeline_random`, run by `make sim-random` and by `make sim-medium`. Each
+pass draws a whole configuration and then applies the SAME per-stage bit-exact
+comparison the directed regression uses — a randomized run is not a smoke test,
+it is the directed test at a point nobody chose.
+
+| Randomized | Drawn from |
+|---|---|
+| clock-phase relationship | the seven-entry sweep in `harness/clock_ratios.h`: 1:1 in phase, 1:1 offset, 2:1, 1:2, 7:3, 3:7 and 100:99 |
+| stimulus | mode (five), amplitude, tone frequency, per-antenna phase, LFSR seed |
+| coefficients | a fresh shaped set per pass, every tap distinct |
+| beam weights | steering or selector |
+| detector | guard, reference count, threshold and CA/GO mode, within the elaborated maxima |
+| output stalls | none / light / heavy / bursty |
+| history depth | a legal value in `[4, FRAMES_MAX]` |
+
+Amplitudes are drawn **below full scale** deliberately: a full-scale tone on
+`N_ANT` antennas saturates the beamformer, and a saturated output carries no
+information about the arithmetic. The saturation path has its own directed
+coverage in issue #12's suite.
+
+`RANDOM_PASSES` sets the passes per seed (default 4) and `SEEDS` the sweep;
+neither needs a rebuild. Every draw comes from a named substream, so adding a
+pass or a draw does not perturb an existing failure's reproduction.
+
 ### 4.4 Long stress test (SPEC §13.4)
 
-TODO — populated by issue #17.
+**Implemented (issue #17)**, in `test_pipeline_stress`, run by `make sim-stress`.
+One seed, `STRESS_CYCLES` core cycles (default 6 000 000) split evenly across the
+seven clock ratios, so "independently randomized clock phases" is a property of
+the run rather than of the seed — one ratio for six million cycles would test one
+relationship very thoroughly and the other six not at all.
+
+| SPEC §13.4 item | How it is met |
+|---|---|
+| millions of processing cycles | `STRESS_CYCLES`, default 6 000 000; a 3 000 004-cycle run took 2 min 57 s |
+| independently randomized clock phases | seven phases, one per entry of the shared ratio sweep, including the 100:99 drift |
+| sustained near-full throughput | the sources never stall, so the front end runs at its structural maximum for the whole run and the corner turn overwrites continuously |
+| random stalls | a randomly chosen backpressure profile on the event consumer per phase |
+| periodic coefficient updates | a bank load and swap every 20 000-60 000 cycles, slice lengths randomized so a swap never lands at the same point in a frame twice |
+| periodic weight updates | the same, on the weight bank |
+| counter-wrap testing | the 16-bit sequence numbers wrap every ~65 536 beats and `stream_protocol_checker`'s continuity property has to survive it. The test COUNTS the wraps and **fails if none occurred** — 8 at three million cycles. The 32-bit telemetry counters saturate rather than wrap and cannot be driven to their maximum in any tractable run; issue #8 covers their wrap on a deliberately narrow counter, which is the only way to reach it |
+| FIFO near-full events | the event consumer's stalls back-pressure the detectors' output buffers, the CFAR bank's ANDed `s_ready`, the power stage's credit and the history/core stream crossing, continuously |
+| no waveform unless failure | the fast build has no tracing compiled in at all, so this is structural rather than conditional |
+
+**What checks it.** Very little is asserted by the test itself, and that is the
+design: everything checkable cycle by cycle already is, by the RTL's own property
+sets — `stream_protocol_checker` on every stage boundary, plus the align, history,
+CFAR, covariance, beamformer and CDC sets. Verilator stops on the first violation,
+so a stress pass that RETURNS has proved several thousand properties several
+million times each. What the test adds is an end-of-phase audit of what a
+per-cycle assertion cannot see: that sequence numbers wrapped, that the sticky
+fault words are within their documented bounds, that the corner turn actually
+overwrote (it must, at half the ingest rate), and that the pipeline was still
+delivering events at the end rather than deadlocked for most of the run.
+
+Recording is off (`Session::set_recording`): a run this long would otherwise store
+tens of millions of beats to answer questions the directed tests answer better on
+six frames.
+
+**Measured, seed 1, 3 000 004 cycles:** 12 491 264 source beats, 720 640 alignment
+beats, 1 441 280 power beats, 85 525 detection events, 24 271 history overwrites,
+8 sequence wraps, 80 bank swaps, no assertion failure.
 
 ### 4.5 Full-scale smoke tests (SPEC §13.5)
 
@@ -1319,7 +1478,36 @@ coverage and writes `results/simulation/coverage_seed<N>.dat` per run — one fi
 rather than a shared `coverage.dat`, so the runs of a randomized regression cannot clobber
 each other.
 
-TODO — merge tooling, per-phase coverage targets and archival: issue #17.
+**Merge and report (issue #17).** `make sim-coverage` builds the coverage
+elaboration of `benchmark_sim_top` at `CONFIG=medium`, runs the medium regression
+under it once per seed with `+coverage=<dir>/<test>_seed<n>.dat`, and merges the
+result:
+
+```
+results/simulation/coverage/
+|-- <test>_seed<n>.dat     one per (test, seed)
+|-- coverage.dat           the merged point set
+|-- annotated/             verilator_coverage --annotate output
+|-- annotate.log
+`-- summary.txt            points_total / points_hit / percent
+```
+
+The percentage is computed from the merged file rather than from a tool that
+prints one, because `verilator_coverage` has no summary mode: a merged `.dat` has
+one `C` record per coverage point with its hit count, so the percentage is the
+count of records whose count is nonzero. That is line, branch, toggle and user
+coverage **together**, which is what `--coverage` collects — the number is
+therefore lower than a line-coverage figure would be and is not comparable to
+one. It is reported as measured rather than filtered to flatter it.
+
+Nothing under `results/simulation/coverage/` is committed (PLAN.md standing
+rule 3).
+
+**Per-phase targets.** None are set here, deliberately. A target chosen before
+the packet fabric, the telemetry aggregator and the full-scale elaboration are in
+the same build would be a target for a different design; issue #20 sets them once
+the design is complete. What this issue establishes is the mechanism and the
+baseline.
 
 ## 7. Failure handling and reproduction
 
@@ -1352,10 +1540,10 @@ error messages — the failure-minimisation metadata SPEC §12.2 asks for.
 | `make calibrate-cmult` | implemented (issue #9) — not a SPEC §16 entry point and not part of any regression: the SPEC §18 resource-calibration sweep, Windows side, about an hour and a half of Fitter time. `make calibrate-summary` rebuilds the JSON and the table from evidence already on disk |
 | `make regmap-check` | implemented (issue #7) — not a SPEC §16 entry point; a prerequisite of `lint` and `sim-tiny`, runnable alone while editing `control/regmap.json` |
 | `make cdc-inventory` | implemented (issue #6) — not a SPEC §16 entry point; a prerequisite of `sim-tiny`, runnable alone. Fails on any unclassified crossing |
-| `make sim-medium` | TODO(issue #17) |
-| `make sim-random` | TODO(issue #17) |
-| `make sim-stress` | TODO(issue #17) |
-| `make sim-coverage` | TODO(issue #17) |
+| `make sim-medium` | implemented (issue #17) — the fast build of `benchmark_sim_top` at `CONFIG=medium`, then `test_pipeline_continuous`, `test_pipeline_runtime_update`, `test_pipeline_metamorphic` and `test_pipeline_random` once per seed in `SEEDS`. About 6 minutes for three seeds |
+| `make sim-random` | implemented (issue #17) — `test_pipeline_random` alone, `RANDOM_PASSES` per seed over `SEEDS`, for a wider sweep than the medium gate runs |
+| `make sim-stress` | implemented (issue #17) — `test_pipeline_stress`, one `SEED`, `STRESS_CYCLES` core cycles over seven clock-ratio phases |
+| `make sim-coverage` | implemented (issue #17) — the coverage build of the medium regression, merged with `verilator_coverage` into `results/simulation/coverage/` with a summary |
 | `make sim-full-smoke` | TODO(issue #20) |
 
 Unimplemented targets still fail loudly with `TODO(issue #N)` and a non-zero exit.

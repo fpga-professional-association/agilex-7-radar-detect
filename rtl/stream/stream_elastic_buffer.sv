@@ -6,6 +6,46 @@
 // from 2 upward, in distributed registers rather than an M20K — the memory
 // FIFOs and the CDC crossings are issue #6's, and are a different cost class.
 //
+// Storage style (RAM_STYLE) — corrected in issue #17
+// --------------------------------------------------
+// This header used to claim distributed registers "by construction", with no
+// attribute, on the argument that DEPTH is small and the read is a mux. That
+// claim was WRONG at wide payloads and issue #10's SPEC 18 sweep measured it:
+// the eight-lane polyphase bank's output buffer — a 280-bit payload at depth 11
+// — came back as 7 M20K + 2 MLAB, because 3 Kb of storage is past the threshold
+// at which Quartus stops taking the hint from the shape of the code
+// (DECISIONS.md, issue #10 finding on the elastic buffer; carried into #17 by
+// the PR #35 review).
+//
+// The claim is now enforced rather than asserted. `RAM_STYLE` selects a LITERAL
+// `ramstyle` attribute in one named generate branch — the same device, and for
+// the same reason, as rtl/memory/history_bank.sv:
+//
+//   "regs"  (* ramstyle = "logic" *)            DEFAULT. Distributed registers,
+//                                               which is what this module has
+//                                               always documented itself as.
+//   "mlab"  (* ramstyle = "MLAB, no_rw_check" *) LUT RAM. The right answer for a
+//                                               wide payload at a depth where
+//                                               registers are wasteful and an
+//                                               M20K is the wrong shape.
+//   "m20k"  (* ramstyle = "M20K, no_rw_check" *) Block RAM, asked for
+//                                               deliberately.
+//   "auto"  no attribute                        The pre-#17 behaviour, kept so
+//                                               the old result is reproducible.
+//
+// "regs" is the default rather than "auto" because the module's own cost claim
+// is part of its contract: an instance placed to break a ready/valid feedback
+// path on a short pipeline must not silently become a hard-block access. An
+// instance that genuinely wants memory now has to say so, at the instantiation,
+// where the reviewer can see it — which is what issue #17's pipeline seams do
+// for their two widest buffers (see rtl/top/benchmark_core.sv).
+//
+// Behaviour is IDENTICAL for every value: the read stays combinational from
+// `mem[rd_ptr_q]`, so the module's 1-cycle latency and its occupancy contract do
+// not move. sim/tests/test_stream_primitives.cpp proves that at a 280-bit
+// payload — the exact width that produced the wrong result — by running the
+// same stimulus through all four styles and requiring byte-identical output.
+//
 // The ready feedback is broken completely: `s_ready` is a flip-flop output whose
 // input depends only on this buffer's own occupancy. Nothing downstream —
 // neither `m_ready` nor anything it is a function of — reaches `s_ready` in the
@@ -50,6 +90,12 @@ module stream_elastic_buffer #(
     // of storage are all that is wanted.
     parameter int unsigned DEPTH     = 4,
 
+    // Storage style. See the header. The value selects a LITERAL `ramstyle`
+    // attribute in one named generate branch rather than being substituted into
+    // one, because Quartus takes the attribute as a literal; same device, and
+    // same reason, as rtl/memory/history_bank.sv.
+    parameter string RAM_STYLE = "regs",
+
     // Optional field geometry for the protocol checker; see stream_skid_buffer.
     parameter int unsigned DATA_W      = 0,
     parameter int unsigned STREAM_ID_W = 0,
@@ -82,13 +128,26 @@ module stream_elastic_buffer #(
       $fatal(1, "stream_elastic_buffer: DEPTH=%0d is illegal; minimum is 2 (use stream_skid_buffer for two beats of storage)",
              DEPTH);
     end
+    if (RAM_STYLE != "regs" && RAM_STYLE != "mlab" && RAM_STYLE != "m20k" &&
+        RAM_STYLE != "auto") begin
+      $fatal(1, "stream_elastic_buffer: RAM_STYLE=\"%s\" is not one of regs, mlab, m20k, auto",
+             RAM_STYLE);
+    end
   end
 `endif
 
-  // Payload array. Distributed registers by construction: DEPTH is small and
-  // the read is a mux, so no synthesis attribute is needed to keep it out of an
-  // M20K. Deliberately not reset.
-  logic [PAYLOAD_W-1:0] mem [DEPTH];
+  // Payload array. The style is now DECLARED, not inferred — see the header.
+  // One named generate branch per style so the attribute is a literal.
+  // Deliberately not reset in any of them.
+  if (RAM_STYLE == "m20k") begin : g_store
+    (* ramstyle = "M20K, no_rw_check" *) logic [PAYLOAD_W-1:0] mem [DEPTH];
+  end else if (RAM_STYLE == "mlab") begin : g_store
+    (* ramstyle = "MLAB, no_rw_check" *) logic [PAYLOAD_W-1:0] mem [DEPTH];
+  end else if (RAM_STYLE == "auto") begin : g_store
+    logic [PAYLOAD_W-1:0] mem [DEPTH];
+  end else begin : g_store
+    (* ramstyle = "logic" *) logic [PAYLOAD_W-1:0] mem [DEPTH];
+  end
 
   logic [PTR_W-1:0] wr_ptr_q, wr_ptr_d;
   logic [PTR_W-1:0] rd_ptr_q, rd_ptr_d;
@@ -143,12 +202,12 @@ module stream_elastic_buffer #(
 
   // Payload state: never reset (SPEC 23).
   always_ff @(posedge clk) begin
-    if (wr_en) mem[wr_ptr_q] <= s_payload;
+    if (wr_en) g_store.mem[wr_ptr_q] <= s_payload;
   end
 
   assign s_ready   = rdy_q;
   assign m_valid   = (count_q != OCC_W'(0));
-  assign m_payload = mem[rd_ptr_q];
+  assign m_payload = g_store.mem[rd_ptr_q];
   assign occupancy = count_q;
 
   // ---------------------------------------------------------------------------

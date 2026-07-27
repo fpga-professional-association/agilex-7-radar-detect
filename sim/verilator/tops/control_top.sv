@@ -94,6 +94,8 @@ module control_top
     output wire [REGMAP_HISTORY_N_REGS*32-1:0]  obs_history_pulse,
     output wire [REGMAP_PACKET_N_REGS*32-1:0]   obs_packet_csr,
     output wire [REGMAP_PACKET_N_REGS*32-1:0]   obs_packet_pulse,
+    output wire [REGMAP_PIPELINE_N_REGS*32-1:0] obs_pipeline_csr,
+    output wire [REGMAP_PIPELINE_N_REGS*32-1:0] obs_pipeline_pulse,
 
     // ---- control outputs the blocks drive ----
     output wire [31:0]                          obs_block_enable,
@@ -625,6 +627,66 @@ module control_top
       .hw_pkt_out        (32'd0),
       .csr               (obs_packet_csr),
       .pulse             (obs_packet_pulse)
+  );
+
+  // ---------------------------------------------------------------------------
+  // The SPEC 19 Phase 3 integration window (issue #17), at 0xC000.
+  //
+  // Hardware inputs TIED OFF, the same arrangement and the same reason as every
+  // window above: this top exercises the register PLANE, and test_control_regs
+  // predicts every response from the generated tables alone. The live wiring —
+  // the synthetic sources' controls, the alignment network's sweep gate and the
+  // integration-level counters — is in rtl/top/benchmark_core.sv, which is where
+  // the blocks those fields configure actually are.
+  // ---------------------------------------------------------------------------
+  wire        pl_src_enable_unused, pl_src_run_unused, pl_src_reseed_unused;
+  wire [2:0]  pl_src_mode_unused;
+  wire [31:0] pl_src_gain_unused, pl_src_seed_unused;
+  wire [15:0] pl_src_tone_unused, pl_src_ant_unused;
+  wire        pl_algn_en_unused, pl_algn_run_unused;
+  wire        pl_algn_part_unused, pl_algn_unsafe_unused;
+  wire [15:0] pl_algn_foff_unused;
+  wire [7:0]  pl_algn_stall_unused;
+  wire        pl_cnt_clear_unused, pl_stky_clear_unused;
+
+  reg_block_pipeline #(
+      .IDX_W (IDX_W)
+  ) u_pipeline (
+      .clk   (clk),
+      .rst_n (rst_n),
+      .sel   (blk_sel[REGMAP_PIPELINE_INDEX]),
+      .write_enable (blk_write_enable),
+      .read_enable  (blk_read_enable),
+      .index        (blk_index),
+      .write_data   (blk_write_data),
+      .byte_enable  (blk_byte_enable),
+      .read_data    (blk_read_data[REGMAP_PIPELINE_INDEX*REG_DATA_W +: REG_DATA_W]),
+      .ready        (blk_ready[REGMAP_PIPELINE_INDEX]),
+      .error        (blk_error[REGMAP_PIPELINE_INDEX]),
+      .cfg_src_enable (pl_src_enable_unused), .cfg_src_run (pl_src_run_unused),
+      .cfg_src_mode (pl_src_mode_unused), .cfg_src_gain (pl_src_gain_unused),
+      .cfg_src_tone_step (pl_src_tone_unused), .cfg_src_ant_step (pl_src_ant_unused),
+      .cfg_src_seed (pl_src_seed_unused), .cfg_src_reseed (pl_src_reseed_unused),
+      .cfg_align_enable (pl_algn_en_unused), .cfg_align_run (pl_algn_run_unused),
+      .cfg_align_partial (pl_algn_part_unused),
+      .cfg_align_unsafe (pl_algn_unsafe_unused),
+      .cfg_align_frame_off (pl_algn_foff_unused),
+      .cfg_align_lane_stall (pl_algn_stall_unused),
+      .cfg_counter_clear (pl_cnt_clear_unused),
+      .cfg_status_clear (pl_stky_clear_unused),
+      .hw_src_beats (32'd0), .hw_src_frames (32'd0), .hw_src_stalls (32'd0),
+      .hw_align_beats (32'd0), .hw_align_stalls (32'd0),
+      .hw_align_missing (32'd0), .hw_align_dup (32'd0), .hw_align_orphan (32'd0),
+      .hw_align_timeout (32'd0), .hw_align_multi (32'd0), .hw_align_fault (4'd0),
+      .hw_net_sel (8'd0), .hw_net_latency (8'd0), .hw_block_latency (8'd0),
+      .hw_rdmux_grants (32'd0), .hw_rdmux_stalls (32'd0), .hw_events (32'd0),
+      .hw_bin_par (8'd0), .hw_align_groups (8'd0), .hw_lanes (8'd0),
+      .hw_rd_ports (8'd0),
+      .hw_lat_pfb_cycles (8'd0), .hw_lat_pfb_beats (8'd0),
+      .hw_lat_fft_beats (16'd0), .hw_lat_history (8'd0), .hw_lat_align (8'd0),
+      .hw_lat_beamformer (8'd0), .hw_lat_power (8'd0),
+      .csr   (obs_pipeline_csr),
+      .pulse (obs_pipeline_pulse)
   );
 
   // Invariants of the blocks with no writable and no pulse bits.

@@ -214,6 +214,15 @@ module fft_core
     assign lvl_bf_v    = '0;
     assign lvl_tw_f    = '0;
     assign lvl_tw_v    = '0;
+
+    // The flag sites are declared for the merge and there is no merge here, so
+    // nothing reads them. Named sinks rather than nothing, because `--Wall`
+    // otherwise reports four dead signals at P = 1 — which no build reached
+    // until issue #17 elaborated the pipeline at the SPEC 11 `tiny` size, where
+    // SAMPLES_PER_CYCLE is 1. No functional change: the values are constant zero
+    // on both sides of this assignment.
+    wire [LVL_ARR-1:0][1:0] unused_lvl_f = lvl_bf_f | lvl_tw_f;
+    wire [LVL_ARR-1:0]      unused_lvl_v = lvl_bf_v | lvl_tw_v;
   end else begin : g_merge
     fxp_complex_t m_lo, m_hi;
     fxp_flags_t   m_f_bf, m_f_tw;

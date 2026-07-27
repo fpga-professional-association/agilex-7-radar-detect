@@ -7,10 +7,10 @@ for the register and control plane ([SPEC.md](../SPEC.md) §9, issue #7). Edit t
 and re-run the generator; `make regmap-check` fails the build on any hand edit here or
 on a source change that was never regenerated.
 
-- Register-map version: **1.7.0** (schema 1)
+- Register-map version: **1.9.0** (schema 1)
 - Interface: 32-bit data, 16-bit byte address, 4 byte enables
 - Window per block: `0x1000` bytes
-- Blocks declared: 12 (11 implemented), registers implemented: 100
+- Blocks declared: 13 (12 implemented), registers implemented: 123
 
 ## Access types
 
@@ -41,6 +41,7 @@ the non-writable bits (`error=0`).
 | `covar` | `0x9000`–`0x9FFF` | 7 | implemented | Integration settings |
 | `history` | `0xA000`–`0xAFFF` | 13 | implemented | Active bank selection; Frame counts |
 | `packet` | `0xB000`–`0xBFFF` | 12 | implemented | Fault injection; Stall counters; FIFO high-water marks |
+| `pipeline` | `0xC000`–`0xCFFF` | 23 | implemented | Per-block enable and reset; Stream counters; Stall counters; Frame counts |
 
 Any address outside every implemented window, any address inside a window but beyond
 that block's last register, any unaligned address, a write with no byte enables set,
@@ -55,9 +56,9 @@ Fixed identification of the control plane itself. Every field is a constant fold
 | Offset | Address | Register | Access | Reset | Description |
 |---|---|---|---|---|---|
 | `0x000` | `0x0000` | `MAGIC` | RO | `0x52414441` | Constant marker. Reading 0x52414441 ('RADA') at block base proves a control plane is present and the address decode is alive. |
-| `0x004` | `0x0004` | `VERSION` | RO | `0x01070001` | Register-map version, from regmap_version in the source of truth. Static build data, deliberately not a git describe: the same source tree must produce the same register contents on any machine, and a VCS-derived value would make the generated artefacts depend on checkout state. |
-| `0x008` | `0x0008` | `GEOMETRY` | RO | `0x1020640C` | Shape of the register plane, so a discovery walk needs no compiled-in constants. |
-| `0x00C` | `0x000C` | `CAPABILITY` | RO | `0x00000EFF` | One bit per declared block, set when that block is implemented in this build. Bit i is block i in declaration order; a planned block reads 0 and its window returns error. |
+| `0x004` | `0x0004` | `VERSION` | RO | `0x01090001` | Register-map version, from regmap_version in the source of truth. Static build data, deliberately not a git describe: the same source tree must produce the same register contents on any machine, and a VCS-derived value would make the generated artefacts depend on checkout state. |
+| `0x008` | `0x0008` | `GEOMETRY` | RO | `0x10207B0D` | Shape of the register plane, so a discovery walk needs no compiled-in constants. |
+| `0x00C` | `0x000C` | `CAPABILITY` | RO | `0x00001EFF` | One bit per declared block, set when that block is implemented in this build. Bit i is block i in declaration order; a planned block reads 0 and its window returns error. |
 
 ### `ID.MAGIC` — `0x0000`
 
@@ -70,7 +71,7 @@ Fixed identification of the control plane itself. Every field is a constant fold
 | Bits | Field | Access | Reset | Source | Description |
 |---|---|---|---|---|---|
 | `31:24` | `MAJOR` | RO | `0x1` | — | Incompatible layout change. |
-| `23:16` | `MINOR` | RO | `0x7` | — | Registers or fields added. |
+| `23:16` | `MINOR` | RO | `0x9` | — | Registers or fields added. |
 | `15:8` | `PATCH` | RO | `0x0` | — | Documentation-only change. |
 | `7:0` | `SCHEMA` | RO | `0x1` | — | Source-of-truth schema version. |
 
@@ -78,8 +79,8 @@ Fixed identification of the control plane itself. Every field is a constant fold
 
 | Bits | Field | Access | Reset | Source | Description |
 |---|---|---|---|---|---|
-| `7:0` | `N_BLOCKS` | RO | `0xC` | — | Declared blocks, implemented and planned. |
-| `15:8` | `N_REGS` | RO | `0x64` | — | Implemented registers across all blocks. |
+| `7:0` | `N_BLOCKS` | RO | `0xD` | — | Declared blocks, implemented and planned. |
+| `15:8` | `N_REGS` | RO | `0x7B` | — | Implemented registers across all blocks. |
 | `23:16` | `DATA_W` | RO | `0x20` | — | Register data width in bits. |
 | `31:24` | `ADDR_W` | RO | `0x10` | — | Register address width in bits. |
 
@@ -87,7 +88,7 @@ Fixed identification of the control plane itself. Every field is a constant fold
 
 | Bits | Field | Access | Reset | Source | Description |
 |---|---|---|---|---|---|
-| `31:0` | `BLOCK_MASK` | RO | `0xEFF` | — | Implemented-block bitmap. |
+| `31:0` | `BLOCK_MASK` | RO | `0x1EFF` | — | Implemented-block bitmap. |
 
 ## `build_params` — `0x1000`
 
@@ -986,6 +987,196 @@ What this window does NOT contain is the CONTENT that rides over the network: th
 |---|---|---|---|---|---|
 | `4:0` | `PORT` | RW | `0x0` | — | Ingress and egress port index for PACKET_PKT_IN and PACKET_PKT_OUT. |
 | `11:8` | `STAGE` | RW | `0x0` | — | Switch stage index for PACKET_FLITS, PACKET_STALLS and PACKET_WATERMARK. |
+
+## `pipeline` — `0xC000`
+
+The SPEC 19 Phase 3 integration window (rtl/top/benchmark_core.sv, issue #17). It exists because two blocks in the assembled pipeline have no window of their own and both need one: the SPEC 3 synthetic ADC sources, which are design RTL rather than a testbench because benchmark_fabric_top has no pins to receive samples on, and the SPEC 7.4 alignment network, whose issue deliberately left its configuration on ports for the integration to bind. The window also carries the integration-level telemetry that belongs to no single block - the read-port multiplexer's arbitration counters, the delivered-event count, and the elaborated geometry and per-stage latency, so that the latency and throughput table in a pull request is a readback out of the design rather than a claim about it. CLOCK DOMAINS: every register here is in cfg_clk. The source and event counters are produced in core_clk and the alignment counters in history_clk; each group crosses back through one rtl/top/cfg_bundle_cdc.sv handshake carrying the whole group at once, so the counters within a group are always a consistent snapshot of each other and are at most one crossing stale. The window is at 0xC000 and not at 0x8000: that window is reserved for the snapshot and debug group, which issue #19 owns, and taking it here would force that issue to move.
+
+| Offset | Address | Register | Access | Reset | Description |
+|---|---|---|---|---|---|
+| `0x000` | `0xC000` | `PIPE_CTRL` | MIXED | `0x00000005` | Master controls for the two integration-level blocks that have no window of their own: the SPEC 3 synthetic ADC sources (rtl/top/adc_source.sv) and the SPEC 7.4 alignment network (rtl/align/align_net.sv). Every field here is in cfg_clk and reaches its consumer through rtl/top/cfg_bundle_cdc.sv, which crosses the whole word as ONE handshake payload rather than as independently synchronised bits (SPEC 8). |
+| `0x004` | `0xC004` | `PIPE_SRC_MODE` | RW | `0x00000004` | Stimulus selector for every antenna source. One mode for all of them: the antennas differ by their PHASE (PIPE_SRC_TONE.ANT_STEP), not by their kind of signal, because a beamformer's input is one wavefront seen from several positions. |
+| `0x008` | `0xC008` | `PIPE_SRC_GAIN` | RW | `0x00007FFF` | Amplitude applied to every generated sample, as a Q1.15 scale on each component independently (NOT a complex multiply - a complex gain would rotate the tone and correlate the two halves of the random mode). |
+| `0x00C` | `0xC00C` | `PIPE_SRC_TONE` | RW | `0x00000001` | Tone geometry, in units of FFT bins. Used only in TONE mode. A stimulus at step k produces a spectral line at bin (FFT_SIZE - k) mod FFT_SIZE, not at k: the generator's table and the transform's kernel are the same exp(-j2*pi*e/N), so the correlation peaks at the conjugate index. |
+| `0x010` | `0xC010` | `PIPE_SRC_SEED` | RW | `0x12345678` | Seed loaded into every source's 32-bit Galois LFSR by PIPE_CTRL.SRC_RESEED. Every antenna starts from the same seed and they diverge only through their own advance, which keeps a run reproducible from one number. |
+| `0x014` | `0xC014` | `PIPE_ALIGN_CFG` | RW | `0x00000000` | Alignment-network sweep parameters. FRAME_OFF is latched at the start of every sweep, so a frame is always assembled from ONE history offset even if software changes it mid-frame. |
+| `0x018` | `0xC018` | `PIPE_SRC_BEATS` | ROHW | `0x00000000` | Beats delivered by the synthetic sources, summed over antennas. |
+| `0x01C` | `0xC01C` | `PIPE_SRC_FRAMES` | ROHW | `0x00000000` | Frames completed by the synthetic sources, summed over antennas. |
+| `0x020` | `0xC020` | `PIPE_SRC_STALLS` | ROHW | `0x00000000` | Cycles in which a source wanted to deliver a beat and could not. |
+| `0x024` | `0xC024` | `PIPE_ALIGN_BEATS` | ROHW | `0x00000000` | Beamformer input beats emitted by the alignment network. |
+| `0x028` | `0xC028` | `PIPE_ALIGN_STALLS` | ROHW | `0x00000000` | Cycles the alignment scheduler could not issue a group. |
+| `0x02C` | `0xC02C` | `PIPE_ALIGN_MISSING` | ROHW | `0x00000000` | Lanes that never delivered a response and were resolved by timeout. |
+| `0x030` | `0xC030` | `PIPE_ALIGN_DUP` | ROHW | `0x00000000` | Responses that arrived for a lane already filled. |
+| `0x034` | `0xC034` | `PIPE_ALIGN_ORPHAN` | ROHW | `0x00000000` | Responses whose identity matched no open reassembly entry. |
+| `0x038` | `0xC038` | `PIPE_ALIGN_TIMEOUT` | ROHW | `0x00000000` | Reassembly entries resolved by the missing-sample timeout. |
+| `0x03C` | `0xC03C` | `PIPE_ALIGN_MULTI` | ROHW | `0x00000000` | Cycles the routing network delivered more than one lane at once. THE throughput statement SPEC 7.4's architecture comparison rests on: a run in which this stayed at zero never asked the network to do anything a bundle of wires could not do. |
+| `0x040` | `0xC040` | `PIPE_ALIGN_STATUS` | MIXED | `0x00000000` | Alignment-network sticky faults and its elaborated architecture, reported by hardware so a pull request's architecture claim is a readback rather than a comment. |
+| `0x044` | `0xC044` | `PIPE_RDMUX_GRANTS` | ROHW | `0x00000000` | Requests forwarded from the alignment network to the history read port. |
+| `0x048` | `0xC048` | `PIPE_RDMUX_STALLS` | ROHW | `0x00000000` | Cycles a pending alignment request was not granted the read port. |
+| `0x04C` | `0xC04C` | `PIPE_EVENTS` | ROHW | `0x00000000` | Detection events delivered out of the CFAR bank. |
+| `0x050` | `0xC050` | `PIPE_GEOMETRY` | ROHW | `0x00000000` | The elaborated integration geometry, reported by hardware. SPEC 7.5 requires any time multiplexing to be visible in reported throughput; these are the integration-level counterparts of the beamformer's own WEIGHT_PARALLELISM word. |
+| `0x054` | `0xC054` | `PIPE_LAT_FRONT` | ROHW | `0x00000000` | Front-end latency, reported by hardware from the same package functions the RTL elaborates from. Beat-measured and cycle-measured contributions are separate fields because the units are not interchangeable (ARCHITECTURE.md 8). |
+| `0x058` | `0xC058` | `PIPE_LAT_BACK` | ROHW | `0x00000000` | Back-end latency, in cycles, reported by hardware. |
+
+### `PIPELINE.PIPE_CTRL` — `0xC000`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `0` | `SRC_ENABLE` | RW | `0x1` | — | Enable the synthetic ADC sources. Resets set: a build with no software present must still produce traffic, or the Quartus benchmark optimises the datapath away. |
+| `1` | `SRC_RUN` | RW | `0x0` | — | Sweep gate for the sources. Clearing it stops them AT A FRAME BOUNDARY, never mid-frame: a truncated frame is a permanent bin shift in the history rather than a missing beat. RESETS TO ZERO, unlike SRC_ENABLE: a pipeline that started streaming before its coefficient bank, its beam weights and its detector threshold were programmed would spend its first frames filtering with a bank of zeros and detecting against an unprogrammed threshold, and would leave the transform's delay feedbacks holding samples nobody can account for. The block enable resets set so the datapath is alive and nothing is optimised away; the TAP resets closed so that what flows through it is what software asked for. |
+| `2` | `ALIGN_ENABLE` | RW | `0x1` | — | Enable the alignment network. Distinct from ALIGN_RUN and not interchangeable with it: clearing ENABLE also stops the block accepting history responses, so a block disabled with work in flight strands its own reassembly entries. |
+| `3` | `ALIGN_RUN` | RW | `0x0` | — | Sweep gate for the alignment network. Stops at the next frame boundary. Resets to zero for the same reason SRC_RUN does, and for one more of its own: a sweep issued against a corner turn with no complete frame is answered out-of-range on every response, which is correct behaviour that costs a sticky fault bit and a counter nobody asked for. |
+| `4` | `ALIGN_PARTIAL` | RW | `0x0` | — | Keep whatever arrived of an incomplete group instead of zeroing the absent lanes. A diagnosis mode; the beat is emitted and flagged either way. |
+| `5` | `ALIGN_FORCE_UNSAFE` | RW | `0x0` | — | SPEC 9 tag-collision injection in the alignment network. Edge armed; not a production mode. |
+| `8` | `COUNTER_CLEAR` | RWP | `0x0` | — | Zero every counter in this window. |
+| `9` | `STATUS_CLEAR` | RWP | `0x0` | — | Clear the alignment network's sticky fault vector. |
+| `10` | `SRC_RESEED` | RWP | `0x0` | — | Load PIPE_SRC_SEED into every source's LFSR. A zero seed is substituted with one, because zero is the LFSR's absorbing state and the register plane has no way to refuse a write. |
+
+### `PIPELINE.PIPE_SRC_MODE` — `0xC004`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `2:0` | `MODE` | RW | `0x4` | — | 0 ZERO, 1 IMPULSE, 2 CONST, 3 TONE, 4 LFSR. Resets to LFSR so an unprogrammed build exercises the whole datapath with reproducible pseudo-random traffic. |
+
+### `PIPELINE.PIPE_SRC_GAIN` — `0xC008`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `15:0` | `GAIN` | RW | `0x7FFF` | — | Q1.15 scale. 0x7FFF is unity to within one LSB; Q1.15 cannot represent 1.0 (NUMERICS.md). |
+| `31:16` | `GAIN_IM` | RW | `0x0` | — | Carried for symmetry with every other complex register word and deliberately unused by the source. See rtl/top/adc_source.sv. |
+
+### `PIPELINE.PIPE_SRC_TONE` — `0xC00C`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `15:0` | `TONE_STEP` | RW | `0x1` | — | Phase increment per sample, in bins. |
+| `31:16` | `ANT_STEP` | RW | `0x0` | — | Additional phase per antenna index, in bins. This is the plane-wave arrival angle: it is what makes the beamformer's job real, because a source giving every antenna the same samples would let a broken alignment network pass every beamforming test. |
+
+### `PIPELINE.PIPE_SRC_SEED` — `0xC010`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `31:0` | `SEED` | RW | `0x12345678` | — | LFSR seed. |
+
+### `PIPELINE.PIPE_ALIGN_CFG` — `0xC014`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `15:0` | `FRAME_OFF` | RW | `0x0` | — | Frames back from the newest complete frame. 0 is the newest. Out of range is reported by the history rather than truncated here. |
+| `23:16` | `LANE_STALL` | RW | `0x0` | — | Per-lane stall mask for the reassembly buffer. A test hook; zero in normal operation. |
+
+### `PIPELINE.PIPE_SRC_BEATS` — `0xC018`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `31:0` | `VALUE` | ROHW | `0x0` | — | Saturating count. Beats delivered by the synthetic sources, summed over antennas. |
+
+### `PIPELINE.PIPE_SRC_FRAMES` — `0xC01C`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `31:0` | `VALUE` | ROHW | `0x0` | — | Saturating count. Frames completed by the synthetic sources, summed over antennas. |
+
+### `PIPELINE.PIPE_SRC_STALLS` — `0xC020`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `31:0` | `VALUE` | ROHW | `0x0` | — | Saturating count. Cycles in which a source wanted to deliver a beat and could not. |
+
+### `PIPELINE.PIPE_ALIGN_BEATS` — `0xC024`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `31:0` | `VALUE` | ROHW | `0x0` | — | Saturating count. Beamformer input beats emitted by the alignment network. |
+
+### `PIPELINE.PIPE_ALIGN_STALLS` — `0xC028`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `31:0` | `VALUE` | ROHW | `0x0` | — | Saturating count. Cycles the alignment scheduler could not issue a group. |
+
+### `PIPELINE.PIPE_ALIGN_MISSING` — `0xC02C`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `31:0` | `VALUE` | ROHW | `0x0` | — | Saturating count. Lanes that never delivered a response and were resolved by timeout. |
+
+### `PIPELINE.PIPE_ALIGN_DUP` — `0xC030`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `31:0` | `VALUE` | ROHW | `0x0` | — | Saturating count. Responses that arrived for a lane already filled. |
+
+### `PIPELINE.PIPE_ALIGN_ORPHAN` — `0xC034`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `31:0` | `VALUE` | ROHW | `0x0` | — | Saturating count. Responses whose identity matched no open reassembly entry. |
+
+### `PIPELINE.PIPE_ALIGN_TIMEOUT` — `0xC038`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `31:0` | `VALUE` | ROHW | `0x0` | — | Saturating count. Reassembly entries resolved by the missing-sample timeout. |
+
+### `PIPELINE.PIPE_ALIGN_MULTI` — `0xC03C`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `31:0` | `VALUE` | ROHW | `0x0` | — | Saturating count. Cycles the routing network delivered more than one lane at once. THE throughput statement SPEC 7.4's architecture comparison rests on: a run in which this stayed at zero never asked the network to do anything a bundle of wires could not do. |
+
+### `PIPELINE.PIPE_ALIGN_STATUS` — `0xC040`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `3:0` | `FAULT` | W1C | `0x0` | — | Sticky, LSB first: MISSING, DUPLICATE, ORPHAN, HIST. The same four bits, in the same order, as the SPEC 5 `user` field of an output beat. |
+| `15:8` | `NET_SEL` | ROHW | `0x0` | — | 0 direct crossbar, 1 multistage omega. The measured default is 1 (DECISIONS.md, issue #16). |
+| `23:16` | `NET_LATENCY` | ROHW | `0x0` | — | Routing-fabric latency in cycles. |
+| `31:24` | `BLOCK_LATENCY` | ROHW | `0x0` | — | Whole-block latency in cycles. |
+
+### `PIPELINE.PIPE_RDMUX_GRANTS` — `0xC044`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `31:0` | `VALUE` | ROHW | `0x0` | — | Saturating count. Requests forwarded from the alignment network to the history read port. |
+
+### `PIPELINE.PIPE_RDMUX_STALLS` — `0xC048`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `31:0` | `VALUE` | ROHW | `0x0` | — | Saturating count. Cycles a pending alignment request was not granted the read port. |
+
+### `PIPELINE.PIPE_EVENTS` — `0xC04C`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `31:0` | `VALUE` | ROHW | `0x0` | — | Saturating count. Detection events delivered out of the CFAR bank. |
+
+### `PIPELINE.PIPE_GEOMETRY` — `0xC050`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `7:0` | `BIN_PAR` | ROHW | `0x0` | — | Bins per alignment beat, and the number of request ports the network drives. |
+| `15:8` | `ALIGN_GROUPS` | ROHW | `0x0` | — | Reassembly entries in the alignment network. |
+| `23:16` | `LANES` | ROHW | `0x0` | — | Samples per cycle per antenna at the front end. |
+| `31:24` | `RD_PORTS` | ROHW | `0x0` | — | History read ports actually present. One: the corner turn's banking cannot serve BIN_PAR CONSECUTIVE bins in parallel because consecutive bins share a memory lane, so the network's request ports are multiplexed onto it (rtl/top/history_rd_mux.sv). |
+
+### `PIPELINE.PIPE_LAT_FRONT` — `0xC054`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `7:0` | `PFB_CYCLES` | ROHW | `0x0` | — | Polyphase bank, in cycles. |
+| `15:8` | `PFB_BEATS` | ROHW | `0x0` | — | Polyphase bank, in beats. Zero for the TREE accumulation style, TAPS-1 for SYSTOLIC. |
+| `31:16` | `FFT_BEATS` | ROHW | `0x0` | — | Streaming FFT, in beats. |
+
+### `PIPELINE.PIPE_LAT_BACK` — `0xC058`
+
+| Bits | Field | Access | Reset | Source | Description |
+|---|---|---|---|---|---|
+| `7:0` | `HISTORY` | ROHW | `0x0` | — | History read path, request to response. |
+| `15:8` | `ALIGN` | ROHW | `0x0` | — | Alignment network, response to beamformer beat. |
+| `23:16` | `BEAMFORMER` | ROHW | `0x0` | — | Beamforming matrix. |
+| `31:24` | `POWER` | ROHW | `0x0` | — | Power stage, sample to power beat. |
 
 ## Regenerating
 

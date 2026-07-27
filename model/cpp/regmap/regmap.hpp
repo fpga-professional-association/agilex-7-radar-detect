@@ -24,12 +24,12 @@ inline constexpr unsigned kDataWidth = 32;
 inline constexpr unsigned kStrobeWidth = 4;
 inline constexpr std::uint32_t kWindowBytes = 0x1000u;
 inline constexpr std::uint32_t kAddrMask = 0xFFFFu;
-inline constexpr unsigned kBlockCount = 12;
-inline constexpr unsigned kBlockCountImplemented = 11;
-inline constexpr unsigned kRegisterCount = 100;
-inline constexpr std::uint32_t kBlockMask = 0x00000EFFu;
+inline constexpr unsigned kBlockCount = 13;
+inline constexpr unsigned kBlockCountImplemented = 12;
+inline constexpr unsigned kRegisterCount = 123;
+inline constexpr std::uint32_t kBlockMask = 0x00001EFFu;
 inline constexpr unsigned kVersionMajor = 1;
-inline constexpr unsigned kVersionMinor = 7;
+inline constexpr unsigned kVersionMinor = 9;
 inline constexpr unsigned kVersionPatch = 0;
 
 // Per-bit access classification, matching rtl/control/reg_csr_block.sv.
@@ -78,7 +78,7 @@ inline constexpr unsigned ID_MAGIC_MAGIC_LSB = 0;
 inline constexpr unsigned ID_MAGIC_MAGIC_WIDTH = 32;
 inline constexpr std::uint32_t ID_MAGIC_MAGIC_MASK = 0xFFFFFFFFu;
 inline constexpr std::uint32_t ID_VERSION_ADDR = 0x0004u;
-inline constexpr std::uint32_t ID_VERSION_RESET = 0x01070001u;
+inline constexpr std::uint32_t ID_VERSION_RESET = 0x01090001u;
 inline constexpr unsigned ID_VERSION_MAJOR_LSB = 24;
 inline constexpr unsigned ID_VERSION_MAJOR_WIDTH = 8;
 inline constexpr std::uint32_t ID_VERSION_MAJOR_MASK = 0xFF000000u;
@@ -92,7 +92,7 @@ inline constexpr unsigned ID_VERSION_SCHEMA_LSB = 0;
 inline constexpr unsigned ID_VERSION_SCHEMA_WIDTH = 8;
 inline constexpr std::uint32_t ID_VERSION_SCHEMA_MASK = 0x000000FFu;
 inline constexpr std::uint32_t ID_GEOMETRY_ADDR = 0x0008u;
-inline constexpr std::uint32_t ID_GEOMETRY_RESET = 0x1020640Cu;
+inline constexpr std::uint32_t ID_GEOMETRY_RESET = 0x10207B0Du;
 inline constexpr unsigned ID_GEOMETRY_N_BLOCKS_LSB = 0;
 inline constexpr unsigned ID_GEOMETRY_N_BLOCKS_WIDTH = 8;
 inline constexpr std::uint32_t ID_GEOMETRY_N_BLOCKS_MASK = 0x000000FFu;
@@ -106,7 +106,7 @@ inline constexpr unsigned ID_GEOMETRY_ADDR_W_LSB = 24;
 inline constexpr unsigned ID_GEOMETRY_ADDR_W_WIDTH = 8;
 inline constexpr std::uint32_t ID_GEOMETRY_ADDR_W_MASK = 0xFF000000u;
 inline constexpr std::uint32_t ID_CAPABILITY_ADDR = 0x000Cu;
-inline constexpr std::uint32_t ID_CAPABILITY_RESET = 0x00000EFFu;
+inline constexpr std::uint32_t ID_CAPABILITY_RESET = 0x00001EFFu;
 inline constexpr unsigned ID_CAPABILITY_BLOCK_MASK_LSB = 0;
 inline constexpr unsigned ID_CAPABILITY_BLOCK_MASK_WIDTH = 32;
 inline constexpr std::uint32_t ID_CAPABILITY_BLOCK_MASK_MASK = 0xFFFFFFFFu;
@@ -1062,12 +1062,196 @@ inline constexpr unsigned PACKET_PACKET_OBSERVE_STAGE_LSB = 8;
 inline constexpr unsigned PACKET_PACKET_OBSERVE_STAGE_WIDTH = 4;
 inline constexpr std::uint32_t PACKET_PACKET_OBSERVE_STAGE_MASK = 0x00000F00u;
 
+// pipeline: The SPEC 19 Phase 3 integration window (rtl/top/benchmark_core.
+inline constexpr std::uint32_t PIPELINE_BASE = 0xC000u;
+inline constexpr std::uint32_t PIPELINE_PIPE_CTRL_ADDR = 0xC000u;
+inline constexpr std::uint32_t PIPELINE_PIPE_CTRL_RESET = 0x00000005u;
+inline constexpr unsigned PIPELINE_PIPE_CTRL_SRC_ENABLE_LSB = 0;
+inline constexpr unsigned PIPELINE_PIPE_CTRL_SRC_ENABLE_WIDTH = 1;
+inline constexpr std::uint32_t PIPELINE_PIPE_CTRL_SRC_ENABLE_MASK = 0x00000001u;
+inline constexpr unsigned PIPELINE_PIPE_CTRL_SRC_RUN_LSB = 1;
+inline constexpr unsigned PIPELINE_PIPE_CTRL_SRC_RUN_WIDTH = 1;
+inline constexpr std::uint32_t PIPELINE_PIPE_CTRL_SRC_RUN_MASK = 0x00000002u;
+inline constexpr unsigned PIPELINE_PIPE_CTRL_ALIGN_ENABLE_LSB = 2;
+inline constexpr unsigned PIPELINE_PIPE_CTRL_ALIGN_ENABLE_WIDTH = 1;
+inline constexpr std::uint32_t PIPELINE_PIPE_CTRL_ALIGN_ENABLE_MASK = 0x00000004u;
+inline constexpr unsigned PIPELINE_PIPE_CTRL_ALIGN_RUN_LSB = 3;
+inline constexpr unsigned PIPELINE_PIPE_CTRL_ALIGN_RUN_WIDTH = 1;
+inline constexpr std::uint32_t PIPELINE_PIPE_CTRL_ALIGN_RUN_MASK = 0x00000008u;
+inline constexpr unsigned PIPELINE_PIPE_CTRL_ALIGN_PARTIAL_LSB = 4;
+inline constexpr unsigned PIPELINE_PIPE_CTRL_ALIGN_PARTIAL_WIDTH = 1;
+inline constexpr std::uint32_t PIPELINE_PIPE_CTRL_ALIGN_PARTIAL_MASK = 0x00000010u;
+inline constexpr unsigned PIPELINE_PIPE_CTRL_ALIGN_FORCE_UNSAFE_LSB = 5;
+inline constexpr unsigned PIPELINE_PIPE_CTRL_ALIGN_FORCE_UNSAFE_WIDTH = 1;
+inline constexpr std::uint32_t PIPELINE_PIPE_CTRL_ALIGN_FORCE_UNSAFE_MASK = 0x00000020u;
+inline constexpr unsigned PIPELINE_PIPE_CTRL_COUNTER_CLEAR_LSB = 8;
+inline constexpr unsigned PIPELINE_PIPE_CTRL_COUNTER_CLEAR_WIDTH = 1;
+inline constexpr std::uint32_t PIPELINE_PIPE_CTRL_COUNTER_CLEAR_MASK = 0x00000100u;
+inline constexpr unsigned PIPELINE_PIPE_CTRL_STATUS_CLEAR_LSB = 9;
+inline constexpr unsigned PIPELINE_PIPE_CTRL_STATUS_CLEAR_WIDTH = 1;
+inline constexpr std::uint32_t PIPELINE_PIPE_CTRL_STATUS_CLEAR_MASK = 0x00000200u;
+inline constexpr unsigned PIPELINE_PIPE_CTRL_SRC_RESEED_LSB = 10;
+inline constexpr unsigned PIPELINE_PIPE_CTRL_SRC_RESEED_WIDTH = 1;
+inline constexpr std::uint32_t PIPELINE_PIPE_CTRL_SRC_RESEED_MASK = 0x00000400u;
+inline constexpr std::uint32_t PIPELINE_PIPE_SRC_MODE_ADDR = 0xC004u;
+inline constexpr std::uint32_t PIPELINE_PIPE_SRC_MODE_RESET = 0x00000004u;
+inline constexpr unsigned PIPELINE_PIPE_SRC_MODE_MODE_LSB = 0;
+inline constexpr unsigned PIPELINE_PIPE_SRC_MODE_MODE_WIDTH = 3;
+inline constexpr std::uint32_t PIPELINE_PIPE_SRC_MODE_MODE_MASK = 0x00000007u;
+inline constexpr std::uint32_t PIPELINE_PIPE_SRC_GAIN_ADDR = 0xC008u;
+inline constexpr std::uint32_t PIPELINE_PIPE_SRC_GAIN_RESET = 0x00007FFFu;
+inline constexpr unsigned PIPELINE_PIPE_SRC_GAIN_GAIN_LSB = 0;
+inline constexpr unsigned PIPELINE_PIPE_SRC_GAIN_GAIN_WIDTH = 16;
+inline constexpr std::uint32_t PIPELINE_PIPE_SRC_GAIN_GAIN_MASK = 0x0000FFFFu;
+inline constexpr unsigned PIPELINE_PIPE_SRC_GAIN_GAIN_IM_LSB = 16;
+inline constexpr unsigned PIPELINE_PIPE_SRC_GAIN_GAIN_IM_WIDTH = 16;
+inline constexpr std::uint32_t PIPELINE_PIPE_SRC_GAIN_GAIN_IM_MASK = 0xFFFF0000u;
+inline constexpr std::uint32_t PIPELINE_PIPE_SRC_TONE_ADDR = 0xC00Cu;
+inline constexpr std::uint32_t PIPELINE_PIPE_SRC_TONE_RESET = 0x00000001u;
+inline constexpr unsigned PIPELINE_PIPE_SRC_TONE_TONE_STEP_LSB = 0;
+inline constexpr unsigned PIPELINE_PIPE_SRC_TONE_TONE_STEP_WIDTH = 16;
+inline constexpr std::uint32_t PIPELINE_PIPE_SRC_TONE_TONE_STEP_MASK = 0x0000FFFFu;
+inline constexpr unsigned PIPELINE_PIPE_SRC_TONE_ANT_STEP_LSB = 16;
+inline constexpr unsigned PIPELINE_PIPE_SRC_TONE_ANT_STEP_WIDTH = 16;
+inline constexpr std::uint32_t PIPELINE_PIPE_SRC_TONE_ANT_STEP_MASK = 0xFFFF0000u;
+inline constexpr std::uint32_t PIPELINE_PIPE_SRC_SEED_ADDR = 0xC010u;
+inline constexpr std::uint32_t PIPELINE_PIPE_SRC_SEED_RESET = 0x12345678u;
+inline constexpr unsigned PIPELINE_PIPE_SRC_SEED_SEED_LSB = 0;
+inline constexpr unsigned PIPELINE_PIPE_SRC_SEED_SEED_WIDTH = 32;
+inline constexpr std::uint32_t PIPELINE_PIPE_SRC_SEED_SEED_MASK = 0xFFFFFFFFu;
+inline constexpr std::uint32_t PIPELINE_PIPE_ALIGN_CFG_ADDR = 0xC014u;
+inline constexpr std::uint32_t PIPELINE_PIPE_ALIGN_CFG_RESET = 0x00000000u;
+inline constexpr unsigned PIPELINE_PIPE_ALIGN_CFG_FRAME_OFF_LSB = 0;
+inline constexpr unsigned PIPELINE_PIPE_ALIGN_CFG_FRAME_OFF_WIDTH = 16;
+inline constexpr std::uint32_t PIPELINE_PIPE_ALIGN_CFG_FRAME_OFF_MASK = 0x0000FFFFu;
+inline constexpr unsigned PIPELINE_PIPE_ALIGN_CFG_LANE_STALL_LSB = 16;
+inline constexpr unsigned PIPELINE_PIPE_ALIGN_CFG_LANE_STALL_WIDTH = 8;
+inline constexpr std::uint32_t PIPELINE_PIPE_ALIGN_CFG_LANE_STALL_MASK = 0x00FF0000u;
+inline constexpr std::uint32_t PIPELINE_PIPE_SRC_BEATS_ADDR = 0xC018u;
+inline constexpr std::uint32_t PIPELINE_PIPE_SRC_BEATS_RESET = 0x00000000u;
+inline constexpr unsigned PIPELINE_PIPE_SRC_BEATS_VALUE_LSB = 0;
+inline constexpr unsigned PIPELINE_PIPE_SRC_BEATS_VALUE_WIDTH = 32;
+inline constexpr std::uint32_t PIPELINE_PIPE_SRC_BEATS_VALUE_MASK = 0xFFFFFFFFu;
+inline constexpr std::uint32_t PIPELINE_PIPE_SRC_FRAMES_ADDR = 0xC01Cu;
+inline constexpr std::uint32_t PIPELINE_PIPE_SRC_FRAMES_RESET = 0x00000000u;
+inline constexpr unsigned PIPELINE_PIPE_SRC_FRAMES_VALUE_LSB = 0;
+inline constexpr unsigned PIPELINE_PIPE_SRC_FRAMES_VALUE_WIDTH = 32;
+inline constexpr std::uint32_t PIPELINE_PIPE_SRC_FRAMES_VALUE_MASK = 0xFFFFFFFFu;
+inline constexpr std::uint32_t PIPELINE_PIPE_SRC_STALLS_ADDR = 0xC020u;
+inline constexpr std::uint32_t PIPELINE_PIPE_SRC_STALLS_RESET = 0x00000000u;
+inline constexpr unsigned PIPELINE_PIPE_SRC_STALLS_VALUE_LSB = 0;
+inline constexpr unsigned PIPELINE_PIPE_SRC_STALLS_VALUE_WIDTH = 32;
+inline constexpr std::uint32_t PIPELINE_PIPE_SRC_STALLS_VALUE_MASK = 0xFFFFFFFFu;
+inline constexpr std::uint32_t PIPELINE_PIPE_ALIGN_BEATS_ADDR = 0xC024u;
+inline constexpr std::uint32_t PIPELINE_PIPE_ALIGN_BEATS_RESET = 0x00000000u;
+inline constexpr unsigned PIPELINE_PIPE_ALIGN_BEATS_VALUE_LSB = 0;
+inline constexpr unsigned PIPELINE_PIPE_ALIGN_BEATS_VALUE_WIDTH = 32;
+inline constexpr std::uint32_t PIPELINE_PIPE_ALIGN_BEATS_VALUE_MASK = 0xFFFFFFFFu;
+inline constexpr std::uint32_t PIPELINE_PIPE_ALIGN_STALLS_ADDR = 0xC028u;
+inline constexpr std::uint32_t PIPELINE_PIPE_ALIGN_STALLS_RESET = 0x00000000u;
+inline constexpr unsigned PIPELINE_PIPE_ALIGN_STALLS_VALUE_LSB = 0;
+inline constexpr unsigned PIPELINE_PIPE_ALIGN_STALLS_VALUE_WIDTH = 32;
+inline constexpr std::uint32_t PIPELINE_PIPE_ALIGN_STALLS_VALUE_MASK = 0xFFFFFFFFu;
+inline constexpr std::uint32_t PIPELINE_PIPE_ALIGN_MISSING_ADDR = 0xC02Cu;
+inline constexpr std::uint32_t PIPELINE_PIPE_ALIGN_MISSING_RESET = 0x00000000u;
+inline constexpr unsigned PIPELINE_PIPE_ALIGN_MISSING_VALUE_LSB = 0;
+inline constexpr unsigned PIPELINE_PIPE_ALIGN_MISSING_VALUE_WIDTH = 32;
+inline constexpr std::uint32_t PIPELINE_PIPE_ALIGN_MISSING_VALUE_MASK = 0xFFFFFFFFu;
+inline constexpr std::uint32_t PIPELINE_PIPE_ALIGN_DUP_ADDR = 0xC030u;
+inline constexpr std::uint32_t PIPELINE_PIPE_ALIGN_DUP_RESET = 0x00000000u;
+inline constexpr unsigned PIPELINE_PIPE_ALIGN_DUP_VALUE_LSB = 0;
+inline constexpr unsigned PIPELINE_PIPE_ALIGN_DUP_VALUE_WIDTH = 32;
+inline constexpr std::uint32_t PIPELINE_PIPE_ALIGN_DUP_VALUE_MASK = 0xFFFFFFFFu;
+inline constexpr std::uint32_t PIPELINE_PIPE_ALIGN_ORPHAN_ADDR = 0xC034u;
+inline constexpr std::uint32_t PIPELINE_PIPE_ALIGN_ORPHAN_RESET = 0x00000000u;
+inline constexpr unsigned PIPELINE_PIPE_ALIGN_ORPHAN_VALUE_LSB = 0;
+inline constexpr unsigned PIPELINE_PIPE_ALIGN_ORPHAN_VALUE_WIDTH = 32;
+inline constexpr std::uint32_t PIPELINE_PIPE_ALIGN_ORPHAN_VALUE_MASK = 0xFFFFFFFFu;
+inline constexpr std::uint32_t PIPELINE_PIPE_ALIGN_TIMEOUT_ADDR = 0xC038u;
+inline constexpr std::uint32_t PIPELINE_PIPE_ALIGN_TIMEOUT_RESET = 0x00000000u;
+inline constexpr unsigned PIPELINE_PIPE_ALIGN_TIMEOUT_VALUE_LSB = 0;
+inline constexpr unsigned PIPELINE_PIPE_ALIGN_TIMEOUT_VALUE_WIDTH = 32;
+inline constexpr std::uint32_t PIPELINE_PIPE_ALIGN_TIMEOUT_VALUE_MASK = 0xFFFFFFFFu;
+inline constexpr std::uint32_t PIPELINE_PIPE_ALIGN_MULTI_ADDR = 0xC03Cu;
+inline constexpr std::uint32_t PIPELINE_PIPE_ALIGN_MULTI_RESET = 0x00000000u;
+inline constexpr unsigned PIPELINE_PIPE_ALIGN_MULTI_VALUE_LSB = 0;
+inline constexpr unsigned PIPELINE_PIPE_ALIGN_MULTI_VALUE_WIDTH = 32;
+inline constexpr std::uint32_t PIPELINE_PIPE_ALIGN_MULTI_VALUE_MASK = 0xFFFFFFFFu;
+inline constexpr std::uint32_t PIPELINE_PIPE_ALIGN_STATUS_ADDR = 0xC040u;
+inline constexpr std::uint32_t PIPELINE_PIPE_ALIGN_STATUS_RESET = 0x00000000u;
+inline constexpr unsigned PIPELINE_PIPE_ALIGN_STATUS_FAULT_LSB = 0;
+inline constexpr unsigned PIPELINE_PIPE_ALIGN_STATUS_FAULT_WIDTH = 4;
+inline constexpr std::uint32_t PIPELINE_PIPE_ALIGN_STATUS_FAULT_MASK = 0x0000000Fu;
+inline constexpr unsigned PIPELINE_PIPE_ALIGN_STATUS_NET_SEL_LSB = 8;
+inline constexpr unsigned PIPELINE_PIPE_ALIGN_STATUS_NET_SEL_WIDTH = 8;
+inline constexpr std::uint32_t PIPELINE_PIPE_ALIGN_STATUS_NET_SEL_MASK = 0x0000FF00u;
+inline constexpr unsigned PIPELINE_PIPE_ALIGN_STATUS_NET_LATENCY_LSB = 16;
+inline constexpr unsigned PIPELINE_PIPE_ALIGN_STATUS_NET_LATENCY_WIDTH = 8;
+inline constexpr std::uint32_t PIPELINE_PIPE_ALIGN_STATUS_NET_LATENCY_MASK = 0x00FF0000u;
+inline constexpr unsigned PIPELINE_PIPE_ALIGN_STATUS_BLOCK_LATENCY_LSB = 24;
+inline constexpr unsigned PIPELINE_PIPE_ALIGN_STATUS_BLOCK_LATENCY_WIDTH = 8;
+inline constexpr std::uint32_t PIPELINE_PIPE_ALIGN_STATUS_BLOCK_LATENCY_MASK = 0xFF000000u;
+inline constexpr std::uint32_t PIPELINE_PIPE_RDMUX_GRANTS_ADDR = 0xC044u;
+inline constexpr std::uint32_t PIPELINE_PIPE_RDMUX_GRANTS_RESET = 0x00000000u;
+inline constexpr unsigned PIPELINE_PIPE_RDMUX_GRANTS_VALUE_LSB = 0;
+inline constexpr unsigned PIPELINE_PIPE_RDMUX_GRANTS_VALUE_WIDTH = 32;
+inline constexpr std::uint32_t PIPELINE_PIPE_RDMUX_GRANTS_VALUE_MASK = 0xFFFFFFFFu;
+inline constexpr std::uint32_t PIPELINE_PIPE_RDMUX_STALLS_ADDR = 0xC048u;
+inline constexpr std::uint32_t PIPELINE_PIPE_RDMUX_STALLS_RESET = 0x00000000u;
+inline constexpr unsigned PIPELINE_PIPE_RDMUX_STALLS_VALUE_LSB = 0;
+inline constexpr unsigned PIPELINE_PIPE_RDMUX_STALLS_VALUE_WIDTH = 32;
+inline constexpr std::uint32_t PIPELINE_PIPE_RDMUX_STALLS_VALUE_MASK = 0xFFFFFFFFu;
+inline constexpr std::uint32_t PIPELINE_PIPE_EVENTS_ADDR = 0xC04Cu;
+inline constexpr std::uint32_t PIPELINE_PIPE_EVENTS_RESET = 0x00000000u;
+inline constexpr unsigned PIPELINE_PIPE_EVENTS_VALUE_LSB = 0;
+inline constexpr unsigned PIPELINE_PIPE_EVENTS_VALUE_WIDTH = 32;
+inline constexpr std::uint32_t PIPELINE_PIPE_EVENTS_VALUE_MASK = 0xFFFFFFFFu;
+inline constexpr std::uint32_t PIPELINE_PIPE_GEOMETRY_ADDR = 0xC050u;
+inline constexpr std::uint32_t PIPELINE_PIPE_GEOMETRY_RESET = 0x00000000u;
+inline constexpr unsigned PIPELINE_PIPE_GEOMETRY_BIN_PAR_LSB = 0;
+inline constexpr unsigned PIPELINE_PIPE_GEOMETRY_BIN_PAR_WIDTH = 8;
+inline constexpr std::uint32_t PIPELINE_PIPE_GEOMETRY_BIN_PAR_MASK = 0x000000FFu;
+inline constexpr unsigned PIPELINE_PIPE_GEOMETRY_ALIGN_GROUPS_LSB = 8;
+inline constexpr unsigned PIPELINE_PIPE_GEOMETRY_ALIGN_GROUPS_WIDTH = 8;
+inline constexpr std::uint32_t PIPELINE_PIPE_GEOMETRY_ALIGN_GROUPS_MASK = 0x0000FF00u;
+inline constexpr unsigned PIPELINE_PIPE_GEOMETRY_LANES_LSB = 16;
+inline constexpr unsigned PIPELINE_PIPE_GEOMETRY_LANES_WIDTH = 8;
+inline constexpr std::uint32_t PIPELINE_PIPE_GEOMETRY_LANES_MASK = 0x00FF0000u;
+inline constexpr unsigned PIPELINE_PIPE_GEOMETRY_RD_PORTS_LSB = 24;
+inline constexpr unsigned PIPELINE_PIPE_GEOMETRY_RD_PORTS_WIDTH = 8;
+inline constexpr std::uint32_t PIPELINE_PIPE_GEOMETRY_RD_PORTS_MASK = 0xFF000000u;
+inline constexpr std::uint32_t PIPELINE_PIPE_LAT_FRONT_ADDR = 0xC054u;
+inline constexpr std::uint32_t PIPELINE_PIPE_LAT_FRONT_RESET = 0x00000000u;
+inline constexpr unsigned PIPELINE_PIPE_LAT_FRONT_PFB_CYCLES_LSB = 0;
+inline constexpr unsigned PIPELINE_PIPE_LAT_FRONT_PFB_CYCLES_WIDTH = 8;
+inline constexpr std::uint32_t PIPELINE_PIPE_LAT_FRONT_PFB_CYCLES_MASK = 0x000000FFu;
+inline constexpr unsigned PIPELINE_PIPE_LAT_FRONT_PFB_BEATS_LSB = 8;
+inline constexpr unsigned PIPELINE_PIPE_LAT_FRONT_PFB_BEATS_WIDTH = 8;
+inline constexpr std::uint32_t PIPELINE_PIPE_LAT_FRONT_PFB_BEATS_MASK = 0x0000FF00u;
+inline constexpr unsigned PIPELINE_PIPE_LAT_FRONT_FFT_BEATS_LSB = 16;
+inline constexpr unsigned PIPELINE_PIPE_LAT_FRONT_FFT_BEATS_WIDTH = 16;
+inline constexpr std::uint32_t PIPELINE_PIPE_LAT_FRONT_FFT_BEATS_MASK = 0xFFFF0000u;
+inline constexpr std::uint32_t PIPELINE_PIPE_LAT_BACK_ADDR = 0xC058u;
+inline constexpr std::uint32_t PIPELINE_PIPE_LAT_BACK_RESET = 0x00000000u;
+inline constexpr unsigned PIPELINE_PIPE_LAT_BACK_HISTORY_LSB = 0;
+inline constexpr unsigned PIPELINE_PIPE_LAT_BACK_HISTORY_WIDTH = 8;
+inline constexpr std::uint32_t PIPELINE_PIPE_LAT_BACK_HISTORY_MASK = 0x000000FFu;
+inline constexpr unsigned PIPELINE_PIPE_LAT_BACK_ALIGN_LSB = 8;
+inline constexpr unsigned PIPELINE_PIPE_LAT_BACK_ALIGN_WIDTH = 8;
+inline constexpr std::uint32_t PIPELINE_PIPE_LAT_BACK_ALIGN_MASK = 0x0000FF00u;
+inline constexpr unsigned PIPELINE_PIPE_LAT_BACK_BEAMFORMER_LSB = 16;
+inline constexpr unsigned PIPELINE_PIPE_LAT_BACK_BEAMFORMER_WIDTH = 8;
+inline constexpr std::uint32_t PIPELINE_PIPE_LAT_BACK_BEAMFORMER_MASK = 0x00FF0000u;
+inline constexpr unsigned PIPELINE_PIPE_LAT_BACK_POWER_LSB = 24;
+inline constexpr unsigned PIPELINE_PIPE_LAT_BACK_POWER_WIDTH = 8;
+inline constexpr std::uint32_t PIPELINE_PIPE_LAT_BACK_POWER_MASK = 0xFF000000u;
+
 // ---- planned windows (declared, not implemented in this build) ----------
 // debug 0x8000: planned by #19. Accesses return error=1.
 inline constexpr std::uint32_t DEBUG_BASE = 0x8000u;
 
 // ---- tables --------------------------------------------------------------
-inline constexpr BlockInfo kBlocks[12] = {
+inline constexpr BlockInfo kBlocks[13] = {
     {"id", 0x0000u, 0x1000u, true, 4},
     {"build_params", 0x1000u, 0x1000u, true, 12},
     {"ctrl", 0x2000u, 0x1000u, true, 4},
@@ -1080,13 +1264,14 @@ inline constexpr BlockInfo kBlocks[12] = {
     {"covar", 0x9000u, 0x1000u, true, 7},
     {"history", 0xA000u, 0x1000u, true, 13},
     {"packet", 0xB000u, 0x1000u, true, 12},
+    {"pipeline", 0xC000u, 0x1000u, true, 23},
 };
 
-inline constexpr RegInfo kRegisters[100] = {
+inline constexpr RegInfo kRegisters[123] = {
     {"id", "MAGIC", 0x0000u, 0, 0, Access::kRo, 0x52414441u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u},
-    {"id", "VERSION", 0x0004u, 0, 1, Access::kRo, 0x01070001u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u},
-    {"id", "GEOMETRY", 0x0008u, 0, 2, Access::kRo, 0x1020640Cu, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u},
-    {"id", "CAPABILITY", 0x000Cu, 0, 3, Access::kRo, 0x00000EFFu, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u},
+    {"id", "VERSION", 0x0004u, 0, 1, Access::kRo, 0x01090001u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u},
+    {"id", "GEOMETRY", 0x0008u, 0, 2, Access::kRo, 0x10207B0Du, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u},
+    {"id", "CAPABILITY", 0x000Cu, 0, 3, Access::kRo, 0x00001EFFu, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u},
     {"build_params", "N_ANTENNAS", 0x1000u, 1, 0, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
     {"build_params", "SAMPLES_PER_CYCLE", 0x1004u, 1, 1, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
     {"build_params", "FFT_SIZE", 0x1008u, 1, 2, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
@@ -1183,19 +1368,42 @@ inline constexpr RegInfo kRegisters[100] = {
     {"packet", "PACKET_PKT_IN", 0xB024u, 10, 9, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
     {"packet", "PACKET_PKT_OUT", 0xB028u, 10, 10, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
     {"packet", "PACKET_OBSERVE", 0xB02Cu, 10, 11, Access::kRw, 0x00000000u, 0x00000F1Fu, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000F1Fu},
+    {"pipeline", "PIPE_CTRL", 0xC000u, 11, 0, Access::kMixed, 0x00000005u, 0x0000003Fu, 0x00000000u, 0x00000700u, 0x00000000u, 0x0000073Fu},
+    {"pipeline", "PIPE_SRC_MODE", 0xC004u, 11, 1, Access::kRw, 0x00000004u, 0x00000007u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000007u},
+    {"pipeline", "PIPE_SRC_GAIN", 0xC008u, 11, 2, Access::kRw, 0x00007FFFu, 0xFFFFFFFFu, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu},
+    {"pipeline", "PIPE_SRC_TONE", 0xC00Cu, 11, 3, Access::kRw, 0x00000001u, 0xFFFFFFFFu, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu},
+    {"pipeline", "PIPE_SRC_SEED", 0xC010u, 11, 4, Access::kRw, 0x12345678u, 0xFFFFFFFFu, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu},
+    {"pipeline", "PIPE_ALIGN_CFG", 0xC014u, 11, 5, Access::kRw, 0x00000000u, 0x00FFFFFFu, 0x00000000u, 0x00000000u, 0x00000000u, 0x00FFFFFFu},
+    {"pipeline", "PIPE_SRC_BEATS", 0xC018u, 11, 6, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"pipeline", "PIPE_SRC_FRAMES", 0xC01Cu, 11, 7, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"pipeline", "PIPE_SRC_STALLS", 0xC020u, 11, 8, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"pipeline", "PIPE_ALIGN_BEATS", 0xC024u, 11, 9, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"pipeline", "PIPE_ALIGN_STALLS", 0xC028u, 11, 10, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"pipeline", "PIPE_ALIGN_MISSING", 0xC02Cu, 11, 11, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"pipeline", "PIPE_ALIGN_DUP", 0xC030u, 11, 12, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"pipeline", "PIPE_ALIGN_ORPHAN", 0xC034u, 11, 13, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"pipeline", "PIPE_ALIGN_TIMEOUT", 0xC038u, 11, 14, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"pipeline", "PIPE_ALIGN_MULTI", 0xC03Cu, 11, 15, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"pipeline", "PIPE_ALIGN_STATUS", 0xC040u, 11, 16, Access::kMixed, 0x00000000u, 0x00000000u, 0x0000000Fu, 0x00000000u, 0xFFFFFF00u, 0x0000000Fu},
+    {"pipeline", "PIPE_RDMUX_GRANTS", 0xC044u, 11, 17, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"pipeline", "PIPE_RDMUX_STALLS", 0xC048u, 11, 18, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"pipeline", "PIPE_EVENTS", 0xC04Cu, 11, 19, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"pipeline", "PIPE_GEOMETRY", 0xC050u, 11, 20, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"pipeline", "PIPE_LAT_FRONT", 0xC054u, 11, 21, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
+    {"pipeline", "PIPE_LAT_BACK", 0xC058u, 11, 22, Access::kRoHw, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0x00000000u},
 };
 
-inline constexpr FieldInfo kFields[253] = {
+inline constexpr FieldInfo kFields[298] = {
     {"id", "MAGIC", "MAGIC", 0, 32, 0xFFFFFFFFu, Access::kRo, 0x52414441u},
     {"id", "VERSION", "MAJOR", 24, 8, 0xFF000000u, Access::kRo, 0x00000001u},
-    {"id", "VERSION", "MINOR", 16, 8, 0x00FF0000u, Access::kRo, 0x00000007u},
+    {"id", "VERSION", "MINOR", 16, 8, 0x00FF0000u, Access::kRo, 0x00000009u},
     {"id", "VERSION", "PATCH", 8, 8, 0x0000FF00u, Access::kRo, 0x00000000u},
     {"id", "VERSION", "SCHEMA", 0, 8, 0x000000FFu, Access::kRo, 0x00000001u},
-    {"id", "GEOMETRY", "N_BLOCKS", 0, 8, 0x000000FFu, Access::kRo, 0x0000000Cu},
-    {"id", "GEOMETRY", "N_REGS", 8, 8, 0x0000FF00u, Access::kRo, 0x00000064u},
+    {"id", "GEOMETRY", "N_BLOCKS", 0, 8, 0x000000FFu, Access::kRo, 0x0000000Du},
+    {"id", "GEOMETRY", "N_REGS", 8, 8, 0x0000FF00u, Access::kRo, 0x0000007Bu},
     {"id", "GEOMETRY", "DATA_W", 16, 8, 0x00FF0000u, Access::kRo, 0x00000020u},
     {"id", "GEOMETRY", "ADDR_W", 24, 8, 0xFF000000u, Access::kRo, 0x00000010u},
-    {"id", "CAPABILITY", "BLOCK_MASK", 0, 32, 0xFFFFFFFFu, Access::kRo, 0x00000EFFu},
+    {"id", "CAPABILITY", "BLOCK_MASK", 0, 32, 0xFFFFFFFFu, Access::kRo, 0x00001EFFu},
     {"build_params", "N_ANTENNAS", "VALUE", 0, 32, 0xFFFFFFFFu, Access::kRoHw, 0x00000000u},
     {"build_params", "SAMPLES_PER_CYCLE", "VALUE", 0, 32, 0xFFFFFFFFu, Access::kRoHw, 0x00000000u},
     {"build_params", "FFT_SIZE", "VALUE", 0, 32, 0xFFFFFFFFu, Access::kRoHw, 0x00000000u},
@@ -1439,6 +1647,51 @@ inline constexpr FieldInfo kFields[253] = {
     {"packet", "PACKET_PKT_OUT", "VALUE", 0, 32, 0xFFFFFFFFu, Access::kRoHw, 0x00000000u},
     {"packet", "PACKET_OBSERVE", "PORT", 0, 5, 0x0000001Fu, Access::kRw, 0x00000000u},
     {"packet", "PACKET_OBSERVE", "STAGE", 8, 4, 0x00000F00u, Access::kRw, 0x00000000u},
+    {"pipeline", "PIPE_CTRL", "SRC_ENABLE", 0, 1, 0x00000001u, Access::kRw, 0x00000001u},
+    {"pipeline", "PIPE_CTRL", "SRC_RUN", 1, 1, 0x00000002u, Access::kRw, 0x00000000u},
+    {"pipeline", "PIPE_CTRL", "ALIGN_ENABLE", 2, 1, 0x00000004u, Access::kRw, 0x00000001u},
+    {"pipeline", "PIPE_CTRL", "ALIGN_RUN", 3, 1, 0x00000008u, Access::kRw, 0x00000000u},
+    {"pipeline", "PIPE_CTRL", "ALIGN_PARTIAL", 4, 1, 0x00000010u, Access::kRw, 0x00000000u},
+    {"pipeline", "PIPE_CTRL", "ALIGN_FORCE_UNSAFE", 5, 1, 0x00000020u, Access::kRw, 0x00000000u},
+    {"pipeline", "PIPE_CTRL", "COUNTER_CLEAR", 8, 1, 0x00000100u, Access::kRwp, 0x00000000u},
+    {"pipeline", "PIPE_CTRL", "STATUS_CLEAR", 9, 1, 0x00000200u, Access::kRwp, 0x00000000u},
+    {"pipeline", "PIPE_CTRL", "SRC_RESEED", 10, 1, 0x00000400u, Access::kRwp, 0x00000000u},
+    {"pipeline", "PIPE_SRC_MODE", "MODE", 0, 3, 0x00000007u, Access::kRw, 0x00000004u},
+    {"pipeline", "PIPE_SRC_GAIN", "GAIN", 0, 16, 0x0000FFFFu, Access::kRw, 0x00007FFFu},
+    {"pipeline", "PIPE_SRC_GAIN", "GAIN_IM", 16, 16, 0xFFFF0000u, Access::kRw, 0x00000000u},
+    {"pipeline", "PIPE_SRC_TONE", "TONE_STEP", 0, 16, 0x0000FFFFu, Access::kRw, 0x00000001u},
+    {"pipeline", "PIPE_SRC_TONE", "ANT_STEP", 16, 16, 0xFFFF0000u, Access::kRw, 0x00000000u},
+    {"pipeline", "PIPE_SRC_SEED", "SEED", 0, 32, 0xFFFFFFFFu, Access::kRw, 0x12345678u},
+    {"pipeline", "PIPE_ALIGN_CFG", "FRAME_OFF", 0, 16, 0x0000FFFFu, Access::kRw, 0x00000000u},
+    {"pipeline", "PIPE_ALIGN_CFG", "LANE_STALL", 16, 8, 0x00FF0000u, Access::kRw, 0x00000000u},
+    {"pipeline", "PIPE_SRC_BEATS", "VALUE", 0, 32, 0xFFFFFFFFu, Access::kRoHw, 0x00000000u},
+    {"pipeline", "PIPE_SRC_FRAMES", "VALUE", 0, 32, 0xFFFFFFFFu, Access::kRoHw, 0x00000000u},
+    {"pipeline", "PIPE_SRC_STALLS", "VALUE", 0, 32, 0xFFFFFFFFu, Access::kRoHw, 0x00000000u},
+    {"pipeline", "PIPE_ALIGN_BEATS", "VALUE", 0, 32, 0xFFFFFFFFu, Access::kRoHw, 0x00000000u},
+    {"pipeline", "PIPE_ALIGN_STALLS", "VALUE", 0, 32, 0xFFFFFFFFu, Access::kRoHw, 0x00000000u},
+    {"pipeline", "PIPE_ALIGN_MISSING", "VALUE", 0, 32, 0xFFFFFFFFu, Access::kRoHw, 0x00000000u},
+    {"pipeline", "PIPE_ALIGN_DUP", "VALUE", 0, 32, 0xFFFFFFFFu, Access::kRoHw, 0x00000000u},
+    {"pipeline", "PIPE_ALIGN_ORPHAN", "VALUE", 0, 32, 0xFFFFFFFFu, Access::kRoHw, 0x00000000u},
+    {"pipeline", "PIPE_ALIGN_TIMEOUT", "VALUE", 0, 32, 0xFFFFFFFFu, Access::kRoHw, 0x00000000u},
+    {"pipeline", "PIPE_ALIGN_MULTI", "VALUE", 0, 32, 0xFFFFFFFFu, Access::kRoHw, 0x00000000u},
+    {"pipeline", "PIPE_ALIGN_STATUS", "FAULT", 0, 4, 0x0000000Fu, Access::kW1c, 0x00000000u},
+    {"pipeline", "PIPE_ALIGN_STATUS", "NET_SEL", 8, 8, 0x0000FF00u, Access::kRoHw, 0x00000000u},
+    {"pipeline", "PIPE_ALIGN_STATUS", "NET_LATENCY", 16, 8, 0x00FF0000u, Access::kRoHw, 0x00000000u},
+    {"pipeline", "PIPE_ALIGN_STATUS", "BLOCK_LATENCY", 24, 8, 0xFF000000u, Access::kRoHw, 0x00000000u},
+    {"pipeline", "PIPE_RDMUX_GRANTS", "VALUE", 0, 32, 0xFFFFFFFFu, Access::kRoHw, 0x00000000u},
+    {"pipeline", "PIPE_RDMUX_STALLS", "VALUE", 0, 32, 0xFFFFFFFFu, Access::kRoHw, 0x00000000u},
+    {"pipeline", "PIPE_EVENTS", "VALUE", 0, 32, 0xFFFFFFFFu, Access::kRoHw, 0x00000000u},
+    {"pipeline", "PIPE_GEOMETRY", "BIN_PAR", 0, 8, 0x000000FFu, Access::kRoHw, 0x00000000u},
+    {"pipeline", "PIPE_GEOMETRY", "ALIGN_GROUPS", 8, 8, 0x0000FF00u, Access::kRoHw, 0x00000000u},
+    {"pipeline", "PIPE_GEOMETRY", "LANES", 16, 8, 0x00FF0000u, Access::kRoHw, 0x00000000u},
+    {"pipeline", "PIPE_GEOMETRY", "RD_PORTS", 24, 8, 0xFF000000u, Access::kRoHw, 0x00000000u},
+    {"pipeline", "PIPE_LAT_FRONT", "PFB_CYCLES", 0, 8, 0x000000FFu, Access::kRoHw, 0x00000000u},
+    {"pipeline", "PIPE_LAT_FRONT", "PFB_BEATS", 8, 8, 0x0000FF00u, Access::kRoHw, 0x00000000u},
+    {"pipeline", "PIPE_LAT_FRONT", "FFT_BEATS", 16, 16, 0xFFFF0000u, Access::kRoHw, 0x00000000u},
+    {"pipeline", "PIPE_LAT_BACK", "HISTORY", 0, 8, 0x000000FFu, Access::kRoHw, 0x00000000u},
+    {"pipeline", "PIPE_LAT_BACK", "ALIGN", 8, 8, 0x0000FF00u, Access::kRoHw, 0x00000000u},
+    {"pipeline", "PIPE_LAT_BACK", "BEAMFORMER", 16, 8, 0x00FF0000u, Access::kRoHw, 0x00000000u},
+    {"pipeline", "PIPE_LAT_BACK", "POWER", 24, 8, 0xFF000000u, Access::kRoHw, 0x00000000u},
 };
 
 inline constexpr std::size_t kBlockTableSize = sizeof(kBlocks) / sizeof(kBlocks[0]);

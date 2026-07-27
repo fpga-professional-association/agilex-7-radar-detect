@@ -140,7 +140,13 @@ module align_net
     parameter int unsigned GROUPS  = 4,
 
     // ---- the SPEC 7.4 architecture selector ----
-    parameter int unsigned NET_SEL    = 0,   // 0 = crossbar, 1 = omega
+    // MEASURED DEFAULT (issue #16 SPEC 18 sweep; changed from 0 to 1 by issue
+    // #17 when this block was instantiated in the pipeline, exactly as
+    // DECISIONS.md issue #16's recommendation asked). At the full-scale routing
+    // width the omega network is 24.6% fewer ALMs, 31.4% fewer registers and
+    // clears 400 MHz where the crossbar measured 296.5; the crossbar remains
+    // buildable and verified so the SPEC 7.4 comparison stays reproducible.
+    parameter int unsigned NET_SEL    = 1,   // 0 = crossbar, 1 = omega
     parameter int unsigned MUX_STAGES = 2,   // crossbar mux levels
 
     // Missing-sample timeout, in cycles of PROGRESS (align_collect section 2).
@@ -356,8 +362,47 @@ module align_net
   // `cfg_run`; only the decision to begin a NEW frame consults it. That single
   // term is the whole frame-boundary stop — no state, no handshake, and no way
   // for a frame to be left open.
+  // ---------------------------------------------------------------------------
+  // Registered `cfg_enable` fanout  (issue #17, from DECISIONS.md issue #16
+  // finding 7)
+  //
+  // The omega build's measured worst path was `en_q` into a stage-2 switch
+  // register: 0.581 ns of cell delay against 5.469 ns of ROUTING. A 9:1
+  // routing-to-logic ratio is not a logic path, it is one register driving most
+  // of the block — the SPEC 23 "avoid one chip-wide clock enable" case, and the
+  // same net exists in the crossbar build (masked there by finding 6's detector
+  // path). Peak long-haul interconnect demand of 137% is the router's view of
+  // the same fact.
+  //
+  // The fix is the one issue #15 demonstrated with `hist_addr_pipe`: a LOCAL
+  // COPY per consumer instead of one register per block. `cfg_enable` is
+  // quasi-static — it comes from a register-plane write — so a one-cycle-delayed
+  // local copy is semantically identical, and every copy has the SAME one-cycle
+  // delay, which is what keeps `issue`, `rsp_ready` and align_collect's
+  // `lane_ready`/`alloc_ready` consistent with each other on every cycle. There
+  // is no cycle in which one part of the block believes it is enabled and
+  // another does not.
+  //
+  // `dont_merge`/`preserve` because the whole point is duplication: without them
+  // synthesis is free to notice the copies are identical and rebuild the single
+  // net this replaces. align_collect carries its own copy of this block for its
+  // own consumers and is deliberately fed the RAW `cfg_enable`, so that it sees
+  // exactly one register stage too rather than two.
+  // ---------------------------------------------------------------------------
+  localparam int unsigned EN_COPIES = BIN_PAR + 2;
+
+  (* preserve *) (* dont_merge *) logic [EN_COPIES-1:0] en_q;
+
+  always_ff @(posedge clk) begin
+    if (!rst_n) en_q <= '0;
+    else        en_q <= {EN_COPIES{cfg_enable}};
+  end
+
+  wire en_issue = en_q[BIN_PAR];
+  wire en_tel   = en_q[BIN_PAR + 1];
+
   wire                   run_gate   = cfg_run || (gidx_q != '0);
-  wire                   issue      = cfg_enable && run_gate && ports_free &&
+  wire                   issue      = en_issue && run_gate && ports_free &&
                                       alloc_ready;
 
   // Every issued group opens an entry. The injection changes the LABEL, not the
@@ -462,9 +507,13 @@ module align_net
     // The routed word: identity above the vector (align_pkg, "The routed word").
     wire [NET_DATA_W-1:0] word = {r_flag, r_fid, r_foff, r_bin, r_vec};
 
-    wire load = ing_free[p] && rsp_valid[p] && cfg_enable;
+    // Local copy of the enable, one register per response port (see the fanout
+    // block above), never the block-wide net.
+    wire en_p = en_q[p];
 
-    assign rsp_ready[p] = ing_free[p] && cfg_enable;
+    wire load = ing_free[p] && rsp_valid[p] && en_p;
+
+    assign rsp_ready[p] = ing_free[p] && en_p;
 
     always_ff @(posedge clk) begin
       if (!rst_n) begin
@@ -572,7 +621,7 @@ module align_net
   // not. A cycle in which it is deliberately idle — `cfg_run` low at a frame
   // boundary — is not a stall, and counting it as one would make the throughput
   // figure a function of how long the test left the tap closed.
-  wire stall_event = cfg_enable && run_gate && !issue;
+  wire stall_event = en_issue && run_gate && !issue;
 
   // Lane delivery census. `lane_fire` is the set of lanes that handed a word to
   // the reassembly buffer this cycle; more than one at a time is the network
@@ -696,7 +745,7 @@ module align_net
   ) u_assertions (
       .clk        (clk),
       .rst_n      (rst_n),
-      .enable     (cfg_enable),
+      .enable     (en_tel),
       .in_valid   (ing_valid_q),
       .in_ready   (sw_in_ready),
       .in_dst     (sw_in_dst),

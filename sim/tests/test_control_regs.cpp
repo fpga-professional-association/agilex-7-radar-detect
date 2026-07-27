@@ -850,6 +850,8 @@ int harness::sim_test_main(const SimArgs& args) {
          "history window, no register"},
         {regmap::PACKET_BASE + 0x100u, false, true, 0xF,
          "packet window, no register"},
+        {regmap::PIPELINE_BASE + 0x100u, false, true, 0xF,
+         "pipeline window, no register"},
         // Inside an implemented window, past the block's last register.
         {regmap::ID_BASE + 0x100u, false, true, 0xF, "id window, no register"},
         {regmap::SCRATCH_BASE + 0x0F0u, true, false, 0xF, "scratch window, no register"},
