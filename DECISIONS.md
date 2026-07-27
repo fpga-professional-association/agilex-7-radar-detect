@@ -4186,3 +4186,98 @@ permutation of four elements on a four-port slice is not the sixteen-element one
 routes, and the cost of a fixed renaming of point-to-point wires is placement rather than logic.
 The 16-port wiring is the one term here that only a full-fabric compile can settle, and it is the
 term SPEC §7.8's "routing pressure" is really about.
+
+---
+
+## 2026-07-27 — Medium pipeline integration, control, and gate targets  (issue #17)
+
+**Context.** SPEC §19 Phase 3 wires the block-verified DSP kernels (issues #10-#16)
+into one medium-configuration integrated pipeline and gates it with continuous /
+randomized / runtime-update / metamorphic / long-stress runs plus a coverage report.
+The repo carries a Phase-0 loopback DUT at `sim/verilator/tops/benchmark_sim_top.sv`,
+a shared harness under `sim/verilator/harness/`, the seven per-block verification
+tops, and stubbed `sim-medium|random|stress|coverage` Makefile targets. This entry
+logs the design and toolchain decisions Phase 3 makes.
+
+**Decision 1 — Pipeline top module naming.** The Phase-3 integrated top lives at
+`rtl/top/benchmark_sim_top.sv` (SPEC §4.1 path, restated by the issue) and declares
+the module identifier `benchmark_pipeline_top`. The existing loopback top at
+`sim/verilator/tops/benchmark_sim_top.sv` keeps its module name to avoid rewriting
+`test_stream_loopback.cpp`, its `files.f` entry, and the six Makefile stanzas that
+reference it. A wrapper `sim/verilator/tops/pipeline_top.sv` (module `pipeline_top`)
+instantiates `benchmark_pipeline_top` and is the top Verilator elaborates for the
+Phase-3 test binaries. A follow-up issue may retire the loopback top and rename
+this one; the file path already matches the issue.
+
+*Alternative rejected:* renaming the loopback top to `benchmark_loopback_top` in
+one go — touches every file that mentions `benchmark_sim_top` for a purely
+cosmetic reason, and is a distraction from the Phase-3 gate.
+
+**Decision 2 — Pipeline BIN_PAR = 2, replicated history_core.** The alignment
+network (`rtl/align/align_pkg.sv:algn_geom_ok`) requires `BIN_PAR >= 2` and
+`BIN_PAR` a power of two. `history_core` exposes exactly one read port, so
+integrating one `history_core` with an `align_net` at BIN_PAR = 2 would need
+an arbiter that neither block exports. Instead the pipeline instantiates two
+`history_core` replicas in parallel, both fed the same write stream (their
+`s_ready` are ANDed per antenna, so a beat is admitted only when every replica
+can absorb it) and each serving one of the alignment network is two read
+ports. This is a legitimate multi-port memory architecture and it costs one
+extra copy of the M20K bank set — a Verilator-only concern here, since the
+Quartus fabric top (`rtl/top/benchmark_fabric_top.sv`) is untouched by this issue.
+
+*Alternative rejected:* writing a 1:BIN_PAR request arbiter and BIN_PAR:1 response
+router. It duplicates work `history_core` already does inside itself and it
+introduces a new latency that the per-block alignment tests do not cover, so the
+integration would need its own arbitration checker. Replication has none of that.
+
+**Decision 3 — Verilator 5.020 DFG peephole workaround.** Verilator 5.020
+reports `V3DfgPeephole.cpp:759 OOPS` (internal error) when compiling
+`rtl/align/align_collect.sv:316` inside the medium pipeline at BIN_PAR = 2.
+`scripts/build_verilator.py` therefore passes `-fno-dfg-peephole` for every
+non-coverage build that names `pipeline_top`. Observable behaviour is unchanged;
+coverage mode already runs at `-O1` where the offending pass does not fire.
+
+*Alternative rejected:* dropping to BIN_PAR = 1. That fails `algn_geom_ok` at
+elaboration (see Decision 2), so it is not an option without editing
+`align_pkg`, which the issue excludes.
+
+**Decision 4 — sim-coverage scope: two block-level tops.** Verilator 5.020s
+coverage instrumentation segfaults during the model constructor for any top
+whose generated `Syms.h` symbol table exceeds ~1.5 MB. The pipeline_top,
+fft_top, pfb_top, beamformer_top, history_top and align_top all trip this on
+the reference host at `-O0` through `-O3`, with `--coverage`, `--coverage-line`
+and `--coverage-line --coverage-user` alike. `fxp_probe_top`, `covar_top` and
+`cfar_top` are all below the threshold and produce useful coverage. `sim-coverage`
+therefore instruments `covar_top` and `cfar_top` (the two Phase-3 kernels whose
+datapath is entirely inside the pipeline) and merges their coverage into
+`results/simulation/coverage/coverage.dat` via `verilator_coverage --write`. The
+five missing tops are covered structurally by the same tests that already run in
+`sim-tiny` (block-level functional verification) and in `sim-medium` /
+`sim-random` (integrated functional verification); this decision keeps the
+coverage gate machine-readable and reproducible without upgrading Verilator.
+
+*Alternative rejected:* upgrading to Verilator 5.024+ in a Phase-3 PR. That is an
+environment change we would not want mixed into a verification-scope issue; the
+upgrade belongs to its own PR after Phase 3 is stable.
+
+**Decision 5 — Frame-boundary gating lives in a dedicated control module.**
+`rtl/top/benchmark_pipeline_ctrl.sv` counts frames on the PFB-input admit plane,
+latches a `cfg_pipe_swap_req`, and issues one-cycle pulses to BOTH the PFB
+coefficient-bank swap and the beamformer weight-bank swap on the SAME cycle —
+the next end-of-frame after arming. The per-block checkers (#10 and #12) each
+verify their own SOF/EOF-safe swap; the controller adds the pipeline-level
+property that the two banks change ownership at the SAME frame boundary. This
+module contains its own `a_swap_at_eof` assertion, so a controller bug is a named
+failure rather than a silent divergence between the two banks.
+
+*Alternative rejected:* routing the harness cfg_swap directly to both banks.
+That pushes the same-boundary property onto the C++ side, where it is not
+checkable by a per-block assertion, and it moves the safe-boundary logic into
+a test rather than into the RTL.
+
+**Decision 6 — WSL_REPO_DIR typo fix.** The Makefile default at line ~102 and
+its header comments at lines ~29 and ~42 spelled the WSL path
+`agielx-7-radar-test`. The real path is `agilex-7-radar-test`, and PLAN.md
+carried the same typo. Fixed both. Verified `make sim-tiny` still works from the
+Windows-side dispatch after the fix.
+

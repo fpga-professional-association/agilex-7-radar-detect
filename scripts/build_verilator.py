@@ -338,13 +338,25 @@ def generate_config(config_name: str, quiet: bool) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def cpp_sources(test: str) -> list[str]:
+def cpp_sources(test: str, top: str = TOP_MODULE) -> list[str]:
     """Harness sources + entry point + the selected test, in a stable order.
 
     Absolute paths: Verilator's generated makefile runs with the --Mdir as its
     working directory, so a repo-relative user source would not resolve.
+
+    Top-specific harness modules (e.g. ``pipeline_tb.cpp``) include a
+    ``V<top>.h`` header and are only added when the top matches. That keeps
+    ``pipeline_tb.cpp`` out of every non-pipeline build, exactly as
+    ``packet_tb.h`` is confined to the packet builds (it is header-only, so
+    ``glob("*.cpp")`` never picks it up).
     """
-    srcs = sorted(str(p) for p in (REPO_ROOT / HARNESS_DIR).glob("*.cpp"))
+    all_cpp = sorted(str(p) for p in (REPO_ROOT / HARNESS_DIR).glob("*.cpp"))
+    srcs: list[str] = []
+    for p in all_cpp:
+        base = Path(p).name
+        if base == "pipeline_tb.cpp" and top != "pipeline_top":
+            continue
+        srcs.append(p)
     srcs.append(str(REPO_ROOT / SIM_MAIN))
     test_path = REPO_ROOT / TESTS_DIR / f"{test}.cpp"
     if not test_path.is_file():
@@ -380,6 +392,14 @@ def verilator_command(args, cfg_name: str) -> list[str]:
         str(args.files),
         str(WAIVERS),
     ]
+
+    # The medium-config pipeline exercises a Verilator 5.020 internal error
+    # (V3DfgPeephole OOPS at rtl/align/align_collect.sv:316) when compiled at
+    # BIN_PAR = 2 through the alignment network. Disabling the DFG peephole
+    # optimizer avoids the crash without changing observable behaviour.
+    # DECISIONS.md 2026-07-27 "Verilator 5.020 DFG peephole workaround".
+    if args.top == "pipeline_top" and args.mode != "coverage":
+        cmd += ["-fno-dfg-peephole"]
 
     if args.mode == "lint":
         # No --Wno-fatal: an unwaived warning must fail the gate.
@@ -427,7 +447,11 @@ def verilator_command(args, cfg_name: str) -> list[str]:
         cmd += ["-O3", "--x-assign", "unique", "--x-initial", "unique"]
         cmd += ["-MAKEFLAGS", "OPT_FAST=-O3"]
     elif args.mode == "coverage":
-        cflags += ["-O2"]
+        # VM_COVERAGE=1 must be defined on the USER source compile line, not
+        # just on the Verilator-generated files, or sim_main.cpp's
+        # `#if VM_COVERAGE` guard around the .dat write is compiled out and
+        # the per-run coverage file lands zero-length (issue #17).
+        cflags += ["-O2", "-DVM_COVERAGE=1"]
         cmd += ["--coverage", "-O2", "-MAKEFLAGS", "OPT_FAST=-O2"]
     elif args.mode == "debug":
         cflags += ["-O0", "-g", "-DSIM_TRACE_ENABLED"]
@@ -443,7 +467,7 @@ def verilator_command(args, cfg_name: str) -> list[str]:
 
     cmd += ["-CFLAGS", " ".join(cflags)]
     cmd += ["-j", str(args.jobs), "--build-jobs", str(args.jobs)]
-    cmd += cpp_sources(args.test)
+    cmd += cpp_sources(args.test, args.top)
     return cmd
 
 

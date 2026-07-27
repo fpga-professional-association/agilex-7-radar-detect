@@ -1352,10 +1352,85 @@ error messages — the failure-minimisation metadata SPEC §12.2 asks for.
 | `make calibrate-cmult` | implemented (issue #9) — not a SPEC §16 entry point and not part of any regression: the SPEC §18 resource-calibration sweep, Windows side, about an hour and a half of Fitter time. `make calibrate-summary` rebuilds the JSON and the table from evidence already on disk |
 | `make regmap-check` | implemented (issue #7) — not a SPEC §16 entry point; a prerequisite of `lint` and `sim-tiny`, runnable alone while editing `control/regmap.json` |
 | `make cdc-inventory` | implemented (issue #6) — not a SPEC §16 entry point; a prerequisite of `sim-tiny`, runnable alone. Fails on any unclassified crossing |
-| `make sim-medium` | TODO(issue #17) |
-| `make sim-random` | TODO(issue #17) |
-| `make sim-stress` | TODO(issue #17) |
-| `make sim-coverage` | TODO(issue #17) |
+| `make sim-medium` | implemented (issue #17) — builds `pipeline_top` at `PIPE_CONFIG=medium` and runs `test_pipeline_continuous`, `test_pipeline_random`, `test_pipeline_runtime_update` and `test_pipeline_metamorphic` once per seed in `SEEDS` |
+| `make sim-random` | implemented (issue #17) — same fast build as `sim-medium`, runs `test_pipeline_random` at three backpressure profiles (light / heavy / bursty) with a randomized input gap |
+| `make sim-stress` | implemented (issue #17) — SPEC §13.4 long stress, `STRESS_CYCLES=2000000` core cycles by default (env-tunable), sustained near-full throughput, periodic coefficient and weight-bank swaps every ~200 frames, no waveform on a passing run |
+| `make sim-coverage` | implemented (issue #17) — builds `covar_top` and `cfar_top` with `--coverage`, merges the per-run `*.dat` into `results/simulation/coverage/coverage.dat` via `verilator_coverage --write`, and drops a `summary.csv` listing the merged runs. See DECISIONS.md 2026-07-27 for why the other five block tops are not included |
 | `make sim-full-smoke` | TODO(issue #20) |
 
 Unimplemented targets still fail loudly with `TODO(issue #N)` and a non-zero exit.
+
+## 9. Phase 3 — Medium pipeline integration (issue #17)
+
+The Phase-3 tests wire the seven block-verified DSP kernels
+(PFB #10, FFT #11, history #15, alignment #16, beamformer #12, power/covariance
+#13 and CFAR #14) into one pipeline elaborated as
+`rtl/top/benchmark_sim_top.sv` (module `benchmark_pipeline_top`) and driven
+through the SPEC §5 stream interfaces. `rtl/top/benchmark_pipeline_ctrl.sv`
+gates PFB coefficient-bank and beamformer weight-bank swaps to the same
+end-of-frame boundary on the PFB input; SPEC §13.2 "bank changes affect only
+permitted frame boundaries" is a per-block property (verified in #10 and #12)
+and the SAME-boundary rule is the pipeline-level property this controller
+adds.
+
+### Tests
+
+`sim/tests/test_pipeline_continuous.cpp` — SPEC §13.1. Continuous frames,
+end-to-end sequence-ID checking on the CFAR output, no backpressure profile.
+The per-block `stream_protocol_checker` instances (bound inside every block
+by the existing `ifndef SYNTHESIS` blocks) provide the per-hop seq
+continuity; the test just asserts that every driven frame appears on the
+CFAR output.
+
+`sim/tests/test_pipeline_random.cpp` — SPEC §13.3. Same continuous
+stimulus, but at three backpressure profiles (`light`, `heavy`, `bursty`
+from `harness/random.h`) at the CFAR output side, plus a randomized
+per-antenna input-gap ratio drawn from `[0, 0.30]`. The seed is printed by
+`sim_main.cpp` (SPEC §13.3 "every test must print a reproducible seed"), so
+a failing run replays with `+seed=<n>`.
+
+`sim/tests/test_pipeline_runtime_update.cpp` — SPEC §7.1, §7.5, §13.2. Two
+frames on bank 0, one inactive-bank program of both the PFB coefficients and
+the beamformer weights, one `cfg_pipe_swap_req` pulse, two more frames on
+bank 1. Passes if `stat_pipe_swap_count >= 1`, `stat_pipe_swap_overrun == 0`
+and no assertion fires. The per-block `coeff_bank_checker` and
+`beamformer_assertions` provide the mid-frame-corruption check (verified
+in #10 and #12); the pipeline `a_swap_at_eof` inside
+`benchmark_pipeline_ctrl.sv` provides the SAME-boundary check.
+
+`sim/tests/test_pipeline_metamorphic.cpp` — SPEC §13.2 at pipeline level.
+Runs five independent sessions on the same seed:
+- **zero-in / zero-out**: driving all-zero samples yields
+  `stat_cfar_det_count == 0`;
+- **backpressure invariance**: light vs heavy profile give the same
+  detection count on the same stimulus;
+- **reset repeatability**: two runs from reset with the same stimulus give
+  the same detection count;
+- **antenna permutation**: swapping antennas 0 and 1 in the stimulus
+  preserves the detection count (uniform weights so beam sums are
+  symmetric — the numerical antenna-permutation equivalence is proved at
+  the beamformer level in #12).
+
+Zero-in / zero-out is checked against `stat_cfar_det_count` (SPEC §7.7
+event count), not against `m_valid` — the CFAR emits per-frame markers
+regardless, and only actual detections are counted.
+
+`sim/tests/test_pipeline_stress.cpp` — SPEC §13.4. Runs `STRESS_CYCLES`
+core cycles (default 2M, env-tunable) with sustained near-full throughput
+(5 % gap probability on the input), heavy backpressure on the CFAR output,
+periodic coefficient and weight-bank swaps every ~200 frames, counter-wrap
+coverage from the long run, and no waveform dump on a passing run.
+
+A passing run reads `stat_pipe_swap_count >= 1`, drains cleanly, and
+produces no assertion failure.
+
+### Coverage
+
+`sim-coverage` builds `covar_top` and `cfar_top` with `--coverage` (line +
+toggle + user), runs the per-block regression once each, and merges the
+`.dat` files into `results/simulation/coverage/coverage.dat` via
+`verilator_coverage --write`. Structural coverage of the other five blocks
+comes from `sim-tiny` — the same block-level tests at `--config tiny`,
+which is where each block is unit-verified anyway. See DECISIONS.md
+2026-07-27 for why the pipeline top and the larger block tops do not run
+under `--coverage`.
