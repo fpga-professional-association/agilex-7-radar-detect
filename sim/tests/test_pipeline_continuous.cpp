@@ -75,18 +75,28 @@ int sim_test_main(const SimArgs& args) {
 
   const bool drained = sess.run_until_idle(n_frames * 20000ULL);
 
-  // Sequence-ID accounting on the output side. Exact accounting: not >=.
+  // Sequence-ID accounting on the output side. Per Phase 6 (issue #21) each
+  // input frame produces one m_eof per beam on the CFAR boundary (per-beam
+  // CFAR + round-robin arbiter -- see DECISIONS.md 2026-07-28 issue #21).
+  // Exact accounting still: frames_observed must equal
+  // kNBeams * frames_driven exactly, not >=.
   const std::uint64_t frames_driven   = sess.frames_driven();
   const std::uint64_t frames_observed = sess.frames_observed();
   const std::uint64_t seq_violations  = sess.m_seq_violations();
+  const std::uint64_t expected_out =
+      static_cast<std::uint64_t>(pipeline_tb::Session::frames_per_input_frame())
+      * frames_driven;
 
   bool pass = drained && sess.errors().count() == 0;
 
-  if (frames_driven != frames_observed) {
+  if (expected_out != frames_observed) {
     std::fprintf(stderr,
                  "[test_pipeline_continuous] FRAME ACCOUNTING MISMATCH: "
-                 "driven=%llu observed=%llu (exact equality required)\n",
+                 "driven=%llu expected=%llu (N_BEAMS=%u * driven) observed=%llu "
+                 "(exact equality required)\n",
                  static_cast<unsigned long long>(frames_driven),
+                 static_cast<unsigned long long>(expected_out),
+                 pipeline_tb::Session::frames_per_input_frame(),
                  static_cast<unsigned long long>(frames_observed));
     pass = false;
   }

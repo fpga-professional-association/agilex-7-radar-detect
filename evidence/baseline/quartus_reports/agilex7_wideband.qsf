@@ -1,0 +1,234 @@
+# ---------------------------------------------------------------------------
+# Agilex 7 Wideband Processing Benchmark — Quartus Prime Pro settings file
+#
+# Governing spec: SPEC.md 15 (Quartus Project), 17 (Reporting), 24 (Constraints
+# integrity). Created by issue #3 (Phase 0).
+#
+# This file is HAND MAINTAINED and deliberately minimal. Do not open the
+# project in the GUI and save it: the GUI appends tool bookkeeping
+# that makes compile-to-compile diffs unreviewable. The Quartus version is
+# detected at compile time by quartus/scripts/compile.tcl and recorded in the
+# exported JSON (SPEC.md 17); it is intentionally NOT hardcoded here.
+#
+# All paths are relative to this directory (quartus/project/), so the project
+# is position independent and works from a clean checkout on any host.
+# ---------------------------------------------------------------------------
+
+# --- device (SPEC.md 2, 15) -------------------------------------------------
+set_global_assignment -name FAMILY "Agilex 7"
+set_global_assignment -name DEVICE AGMF039R47B1E1VC
+set_global_assignment -name TOP_LEVEL_ENTITY benchmark_fabric_top
+
+# --- SystemVerilog macros ---------------------------------------------------
+# Every simulation-only block in the RTL is guarded by `ifndef SYNTHESIS`;
+# define it here so Quartus skips those blocks (assertions, shadow queues,
+# elaboration $fatal checks, sim-only checker instantiations). Verilator
+# does not need this -- it never defines SYNTHESIS.
+set_global_assignment -name VERILOG_MACRO "SYNTHESIS=1"
+
+# Include search path so `include "cdc_sva.svh"` inside `ifndef SYNTHESIS`
+# blocks resolves cleanly on tool versions that eagerly resolve file-scope
+# `include tokens before evaluating `ifdef` conditions.
+set_global_assignment -name SEARCH_PATH ../../sim/assertions
+
+# Operating conditions used for timing models. Full commercial range.
+set_global_assignment -name MIN_CORE_JUNCTION_TEMP 0
+set_global_assignment -name MAX_CORE_JUNCTION_TEMP 100
+
+# --- project output ---------------------------------------------------------
+set_global_assignment -name PROJECT_OUTPUT_DIRECTORY output_files
+set_global_assignment -name NUM_PARALLEL_PROCESSORS ALL
+
+# --- design source (SPEC.md 10 layout) --------------------------------------
+# Phase 5 (issue #20): benchmark_fabric_top now wraps benchmark_pipeline_top,
+# so the whole file list must be included. Order matches
+# sim/verilator/files_pipeline.f: packages first, then RTL bottom-up.
+
+# ---- shared packages ----
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/packages/fxp_pkg.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/packages/stream_pkg.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/packages/cdc_pkg.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/packages/pfb_pkg.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/packages/covar_pkg.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/packages/cfar_pkg.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/packages/history_pkg.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/packages/packet_pkg.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/beamformer/beamformer_pkg.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/align/align_pkg.sv
+
+# ---- issue #19 abstract memory ----
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/memory/mem_req_rsp_if.sv
+
+# ---- generated Phase-5 configuration package ----
+# The generated config_pkg.sv is written by scripts/build_verilator.py from
+# config/full_agmf039.json. Copy to sim/verilator/generated/ before compile.
+set_global_assignment -name SYSTEMVERILOG_FILE ../../sim/verilator/generated/config_pkg.sv
+
+# ---- stream primitives (SPEC 5) ----
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/stream/stream_skid_buffer.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/stream/stream_elastic_buffer.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/stream/stream_pipe.sv
+
+# ---- SPEC 8 CDC primitives ----
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/cdc/cdc_sync2.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/cdc/cdc_pulse.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/cdc/cdc_handshake.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/cdc/async_fifo.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/cdc/stream_cdc.sv
+
+# ---- SPEC 6/9 common RTL ----
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/common/fxp_sticky_flags.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/common/perf_counter.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/common/seq_checker.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/common/complex_multiplier.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/common/sync_fifo.sv
+
+# ---- kernels ----
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/pfb/delay_line.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/pfb/coeff_bank.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/pfb/fir_lane.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/pfb/pfb_bank.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/fft/generated/fft_twiddle_pkg.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/fft/fft_pkg.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/fft/fft_delay_line.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/fft/fft_bf2.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/fft/fft_twiddle_rom.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/fft/fft_radix22_stage.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/fft/fft_sdf_path.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/fft/fft_dit_merge.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/fft/fft_reorder.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/fft/fft_core.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/fft/streaming_fft.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/memory/history_bank.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/memory/history_core.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/align/align_xbar.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/align/align_clos.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/align/align_switch.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/align/align_collect.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/align/align_net.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/beamformer/bf_dot.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/beamformer/weight_bank.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/beamformer/beamformer.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/covariance/power_calc.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/covariance/integrator.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/covariance/covar_engine.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/cfar/cfar_window.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/cfar/cfar_core.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/packet/pkt_rr_arb.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/packet/pkt_ingress.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/packet/pkt_switch_stage.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/packet/pkt_egress.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/packet/pkt_fabric.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/memory/mem_arbiter.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/memory/behavioral_mem_model.sv
+
+# ---- pipeline top and Phase-5 fabric wrapper ----
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/top/benchmark_pipeline_ctrl.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/top/benchmark_sim_top.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/top/benchmark_fabric_top.sv
+
+# --- timing constraints (SPEC.md 15) ----------------------------------------
+# Read in this order: clocks first, then IO, then exceptions. exceptions.sdc is
+# intentionally empty (SPEC.md 24) and must stay that way unless every added
+# exception carries the five required documentation fields.
+set_global_assignment -name SDC_FILE ../constraints/clocks.sdc
+set_global_assignment -name SDC_FILE ../constraints/io.sdc
+set_global_assignment -name SDC_FILE ../constraints/exceptions.sdc
+
+# ---------------------------------------------------------------------------
+# Virtual pins (Phase 5, issue #20: complete pipeline synthesis)
+# ---------------------------------------------------------------------------
+# This is a FABRIC benchmark, not a pinout exercise. The R47B package has 4700
+# balls, but nothing about the benchmark depends on real IO placement, and
+# letting the Fitter place hundreds of real IO buffers would (a) inject IO
+# timing that has nothing to do with the fabric result and (b) constrain
+# placement of the logic under test.
+#
+# Every data/handshake/telemetry port is therefore a virtual pin. Wildcards
+# match the config-driven bus widths (N_ANTENNAS varies by config from 2 up
+# to 16), so widening a parameter does not require editing this list.
+# Clocks and resets stay real pins so they get genuine global networks.
+
+# Input stream (SPEC 5, per antenna)
+set_instance_assignment -name VIRTUAL_PIN ON -to "s_valid[*]"
+set_instance_assignment -name VIRTUAL_PIN ON -to "s_ready[*]"
+set_instance_assignment -name VIRTUAL_PIN ON -to "s_sof[*]"
+set_instance_assignment -name VIRTUAL_PIN ON -to "s_eof[*]"
+set_instance_assignment -name VIRTUAL_PIN ON -to "s_data[*]"
+set_instance_assignment -name VIRTUAL_PIN ON -to "s_seq[*]"
+
+# CFAR detection output
+set_instance_assignment -name VIRTUAL_PIN ON -to m_valid
+set_instance_assignment -name VIRTUAL_PIN ON -to m_ready
+set_instance_assignment -name VIRTUAL_PIN ON -to "m_event_data[*]"
+set_instance_assignment -name VIRTUAL_PIN ON -to "m_event_full[*]"
+set_instance_assignment -name VIRTUAL_PIN ON -to m_sof
+set_instance_assignment -name VIRTUAL_PIN ON -to m_eof
+set_instance_assignment -name VIRTUAL_PIN ON -to "m_seq[*]"
+set_instance_assignment -name VIRTUAL_PIN ON -to "m_id[*]"
+set_instance_assignment -name VIRTUAL_PIN ON -to "m_beam_id[*]"
+set_instance_assignment -name VIRTUAL_PIN ON -to "m_bin_par_id[*]"
+
+# DMA readback / memory arbiter external port
+set_instance_assignment -name VIRTUAL_PIN ON -to dma_mem_req_valid
+set_instance_assignment -name VIRTUAL_PIN ON -to dma_mem_req_ready
+set_instance_assignment -name VIRTUAL_PIN ON -to "dma_mem_req[*]"
+# mem_req_t and mem_rsp_t are packed structs; Quartus expands them as
+# dma_mem_req.<field>[bit], so a bracketed-only wildcard misses them.
+# The `-to * -match "*dma_mem_req*"` form covers the field expansion.
+set_instance_assignment -name VIRTUAL_PIN ON -to "dma_mem_req.*"
+set_instance_assignment -name VIRTUAL_PIN ON -to dma_mem_rsp_valid
+set_instance_assignment -name VIRTUAL_PIN ON -to dma_mem_rsp_ready
+set_instance_assignment -name VIRTUAL_PIN ON -to "dma_mem_rsp[*]"
+set_instance_assignment -name VIRTUAL_PIN ON -to "dma_mem_rsp.*"
+
+# Coefficient / weight programming plane
+set_instance_assignment -name VIRTUAL_PIN ON -to cfg_pfb_wr_valid
+set_instance_assignment -name VIRTUAL_PIN ON -to cfg_pfb_wr_ready
+set_instance_assignment -name VIRTUAL_PIN ON -to cfg_pfb_wr_bank
+set_instance_assignment -name VIRTUAL_PIN ON -to "cfg_pfb_wr_addr[*]"
+set_instance_assignment -name VIRTUAL_PIN ON -to "cfg_pfb_wr_data[*]"
+set_instance_assignment -name VIRTUAL_PIN ON -to cfg_bf_wr_valid
+set_instance_assignment -name VIRTUAL_PIN ON -to cfg_bf_wr_ready
+set_instance_assignment -name VIRTUAL_PIN ON -to cfg_bf_wr_bank
+set_instance_assignment -name VIRTUAL_PIN ON -to "cfg_bf_wr_addr[*]"
+set_instance_assignment -name VIRTUAL_PIN ON -to "cfg_bf_wr_data[*]"
+set_instance_assignment -name VIRTUAL_PIN ON -to cfg_pipe_swap_req
+
+# History / align / CFAR control
+set_instance_assignment -name VIRTUAL_PIN ON -to cfg_hist_enable
+set_instance_assignment -name VIRTUAL_PIN ON -to "cfg_hist_depth[*]"
+set_instance_assignment -name VIRTUAL_PIN ON -to cfg_hist_depth_apply
+set_instance_assignment -name VIRTUAL_PIN ON -to cfg_hist_counter_clear
+set_instance_assignment -name VIRTUAL_PIN ON -to cfg_hist_sticky_clear
+set_instance_assignment -name VIRTUAL_PIN ON -to cfg_align_enable
+set_instance_assignment -name VIRTUAL_PIN ON -to cfg_align_run
+set_instance_assignment -name VIRTUAL_PIN ON -to "cfg_align_frame_off[*]"
+set_instance_assignment -name VIRTUAL_PIN ON -to cfg_align_partial_pass
+set_instance_assignment -name VIRTUAL_PIN ON -to cfg_align_counter_clear
+set_instance_assignment -name VIRTUAL_PIN ON -to cfg_align_sticky_clear
+set_instance_assignment -name VIRTUAL_PIN ON -to cfg_cfar_enable
+set_instance_assignment -name VIRTUAL_PIN ON -to "cfg_cfar_mode[*]"
+set_instance_assignment -name VIRTUAL_PIN ON -to cfg_cfar_out_mode
+set_instance_assignment -name VIRTUAL_PIN ON -to "cfg_cfar_guard_lead[*]"
+set_instance_assignment -name VIRTUAL_PIN ON -to "cfg_cfar_guard_lag[*]"
+set_instance_assignment -name VIRTUAL_PIN ON -to "cfg_cfar_ref_lead[*]"
+set_instance_assignment -name VIRTUAL_PIN ON -to "cfg_cfar_ref_lag[*]"
+set_instance_assignment -name VIRTUAL_PIN ON -to "cfg_cfar_alpha[*]"
+set_instance_assignment -name VIRTUAL_PIN ON -to cfg_cfar_status_clear
+
+# Telemetry / status
+set_instance_assignment -name VIRTUAL_PIN ON -to "stat_pipe_frame_count[*]"
+set_instance_assignment -name VIRTUAL_PIN ON -to "stat_pipe_swap_count[*]"
+set_instance_assignment -name VIRTUAL_PIN ON -to "stat_cfar_det_count[*]"
+set_instance_assignment -name VIRTUAL_PIN ON -to "stat_cfar_frame_count[*]"
+set_instance_assignment -name VIRTUAL_PIN ON -to "stat_dma_events_delivered[*]"
+set_instance_assignment -name VIRTUAL_PIN ON -to "stat_dma_mem_req_count[*]"
+set_instance_assignment -name VIRTUAL_PIN ON -to stat_covar_sat_any
+
+# The three additional clocks (history, cfg) also as real for global networks.
+# (No VIRTUAL_PIN required -- default is real.)
+set_global_assignment -name PWRMGT_VOLTAGE_OUTPUT_FORMAT "LINEAR FORMAT"
+set_global_assignment -name PWRMGT_LINEAR_FORMAT_N "-12"
+set_global_assignment -name AUTO_OPEN_DRAIN_PINS OFF
+set_global_assignment -name LAST_QUARTUS_VERSION "26.1.0 Pro Edition"

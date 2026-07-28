@@ -1,0 +1,55 @@
+==============================================================================
+  Constraints integrity report (SPEC.md 24)
+==============================================================================
+
+SDC files scanned:
+  * quartus\constraints\clocks.sdc
+  * quartus\constraints\exceptions.sdc
+  * quartus\constraints\io.sdc
+
+Summary counts (SDC directive occurrences):
+  false path                   0
+  multicycle path              0
+  clock group                  0
+  max delay                    0
+  min delay                    0
+  disabled timing arc          0
+
+Constraints integrity from Quartus record:
+  clock_groups                 0
+  disabled_arcs                0
+  ignored_sdc_constraints      0
+
+------------------------------------------------------------------------------
+Per-file directive detail
+------------------------------------------------------------------------------
+
+FILE: quartus\constraints\clocks.sdc
+
+  (no tracked directives)
+
+FILE: quartus\constraints\exceptions.sdc
+
+  (no tracked directives)
+
+FILE: quartus\constraints\io.sdc
+
+  (no tracked directives)
+
+------------------------------------------------------------------------------
+Clock constraints per record
+------------------------------------------------------------------------------
+
+  clock 'core_clk':
+    constraint_mhz               450.045
+    fmax_mhz                     39.67
+    restricted_fmax_mhz          39.67
+    wns_ns                       -22.987
+    tns_ns                       -1146299.488
+    failing_paths_setup          10000
+    failing_paths_hold           10000
+    failing_paths_recovery       0
+    failing_paths_removal        0
+    logic_depth                  68
+
+==============================================================================

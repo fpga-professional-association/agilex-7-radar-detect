@@ -165,6 +165,25 @@ std::vector<std::string> json_array_objects(const std::string& body, const std::
 }  // namespace
 
 int cfar_bin_for_fft_bin(int fft_bin, unsigned bin_par) {
+  // Phase 6 (issue #21): per-beam CFAR + BIN_PAR-cycle serializer feeds
+  // each per-beam cfar_core with cells in FFT-bin order (bin_par 0 first,
+  // then bin_par 1, then next beat's bin_par 0, ...). Each cfar_core's
+  // frame has FFT_SIZE cells, so CFAR bin index = FFT bin index directly.
+  // Every FFT bin -- even and odd -- reaches SOME cfar_core cell; there is
+  // no "untapped parity" restriction anymore.
+  //
+  // Phase 5 behaviour (superseded): the single-CFAR tap at (beam 0, bin_par
+  // 0) mapped fft_bin -> fft_bin/bin_par on even fft_bins and -1 on odd
+  // ones. Callers that need the OLD behaviour for a reference-chain-only
+  // scenario should call cfar_bin_for_fft_bin_p5() instead (kept for the
+  // `three_targets_even` reference verification path in
+  // range_doppler.py -- see the harness header).
+  (void)bin_par;
+  if (fft_bin < 0) return -1;
+  return fft_bin;
+}
+
+int cfar_bin_for_fft_bin_p5(int fft_bin, unsigned bin_par) {
   if (bin_par == 0) return -1;
   if ((fft_bin % static_cast<int>(bin_par)) != 0) return -1;  // untapped
   return fft_bin / static_cast<int>(bin_par);

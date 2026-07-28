@@ -1,0 +1,107 @@
+Fitter Finalize Stage Report for agilex7_wideband
+Tue Jul 28 13:48:10 2026
+Quartus Prime Version 26.1.0 Build 110 03/26/2026 SC Pro Edition
+
+
+---------------------
+; Table of Contents ;
+---------------------
+  1. Legal Notice
+  2. Routing Usage Summary
+  3. Finalize Messages
+
+
+
+----------------
+; Legal Notice ;
+----------------
+Copyright (C) 2026  Altera Corporation. All rights reserved.
+Your use of Altera Corporation's design tools, logic functions 
+and other software and tools, and any partner logic 
+functions, and any output files from any of the foregoing 
+(including device programming or simulation files), and any 
+associated documentation or information are expressly subject 
+to the terms and conditions of the Altera Program License 
+Subscription Agreement, the Altera Quartus Prime License Agreement,
+the Altera IP License Agreement, or other applicable license
+agreement, including, without limitation, that your use is for
+the sole purpose of programming logic devices manufactured by
+Altera and sold by Altera or its authorized distributors.  Please
+refer to the Altera Software License Subscription Agreements 
+on the Quartus Prime software download page.
+
+
+
++------------------------------------------------------------------------+
+; Routing Usage Summary                                                  ;
++--------------------------------------+---------------------------------+
+; Routing Resource Type                ; Usage                           ;
++--------------------------------------+---------------------------------+
+; Block Input Mux Wrapbacks            ; 16,429 / 1,377,600 ( 1 % )      ;
+; Block Input Muxes                    ; 2,667,474 / 15,088,000 ( 18 % ) ;
+; Block interconnects                  ; 2,308,758 / 17,712,000 ( 13 % ) ;
+; C1 interconnects                     ; 1,469,787 / 7,396,000 ( 20 % )  ;
+; C4 interconnects                     ; 770,854 / 7,052,000 ( 11 % )    ;
+; C8 interconnects                     ; 39,599 / 705,200 ( 6 % )        ;
+; DCM_muxes                            ; 3 / 1,392 ( < 1 % )             ;
+; DELAY_CHAINs                         ; 0 / 46,380 ( 0 % )              ;
+; Direct links                         ; 136,123 / 17,712,000 ( < 1 % )  ;
+; HIO Buffers                          ; 0 / 91,840 ( 0 % )              ;
+; IO75XDDRFMXCKTREE_CLKDRV_BIG_VCO_REs ; 0 / 32 ( 0 % )                  ;
+; IO75XDDRFMXCKTREE_CLKDRV_GM0_REs     ; 0 / 32 ( 0 % )                  ;
+; IO75XDDRFMXCKTREE_CLKDRV_VCO_INPUTs  ; 0 / 16 ( 0 % )                  ;
+; IO75XDDRFMXCKTREE_CLKDRV_VCO_OUTPUTs ; 0 / 16 ( 0 % )                  ;
+; IO75XDDRFMXCKTREE_FB_MUX31_REs       ; 0 / 96 ( 0 % )                  ;
+; IOFBRADAPT_C2P_BUF_INPUTs            ; 0 / 264 ( 0 % )                 ;
+; IOFBRADAPT_C2P_BUF_OUTPUTs           ; 0 / 264 ( 0 % )                 ;
+; IOFBRADAPT_FRZ_BUFS_REs              ; 0 / 1,232 ( 0 % )               ;
+; IOFBRADAPT_P2C_BUF_INPUTs            ; 0 / 568 ( 0 % )                 ;
+; IOFBRADAPT_P2C_BUF_OUTPUTs           ; 0 / 568 ( 0 % )                 ;
+; NOC HPS segment routings             ; 9 / 32,768 ( < 1 % )            ;
+; NOC IO96B0 segment routings          ; 0 / 29,782 ( 0 % )              ;
+; NOC IO96B1 segment routings          ; 0 / 65,536 ( 0 % )              ;
+; NOC IO96B2 segment routings          ; 0 / 32,768 ( 0 % )              ;
+; NOC IO96B3 segment routings          ; 0 / 65,536 ( 0 % )              ;
+; NOC IO96B4 segment routings          ; 0 / 26,644 ( 0 % )              ;
+; NOC SDM segment routings             ; 0 / 20,799 ( 0 % )              ;
+; NOC SSM PLL segment routings         ; 0 / 8,220 ( 0 % )               ;
+; NOC UIB0 segment routings            ; 0 / 63,604 ( 0 % )              ;
+; NOC UIB1 segment routings            ; 0 / 64,606 ( 0 % )              ;
+; NOC UIB2 segment routings            ; 0 / 63,604 ( 0 % )              ;
+; Programmable Invert Buffers          ; 0 / 640 ( 0 % )                 ;
+; Programmable Invert Inputs           ; 70,204 / 1,312,380 ( 5 % )      ;
+; Programmable Inverts                 ; 70,204 / 1,312,380 ( 5 % )      ;
+; R0 interconnects                     ; 1,547,354 / 12,341,000 ( 13 % ) ;
+; R1 interconnects                     ; 1,054,531 / 7,052,000 ( 15 % )  ;
+; R12 interconnects                    ; 57,463 / 1,057,800 ( 5 % )      ;
+; R2 interconnects                     ; 415,821 / 3,534,200 ( 12 % )    ;
+; R4 interconnects                     ; 336,793 / 3,550,600 ( 9 % )     ;
+; R6 interconnects                     ; 432,171 / 3,558,800 ( 12 % )    ;
+; Redundancy Muxes                     ; 0 / 182,296 ( 0 % )             ;
+; Row Clock Tap-Offs                   ; 69,832 / 1,057,800 ( 7 % )      ;
+; Switchbox_clock_muxes                ; 371 / 31,680 ( 1 % )            ;
+; VIO Buffers                          ; 3 / 25,600 ( < 1 % )            ;
+; Vertical_seam_tap_muxes              ; 390 / 17,280 ( 2 % )            ;
++--------------------------------------+---------------------------------+
+
+
++-------------------+
+; Finalize Messages ;
++-------------------+
+Info (20030): Parallel compilation is enabled and will use 16 of the 16 processors detected
+Info: *******************************************************************
+Info: Running Quartus Prime Fitter
+    Info: Version 26.1.0 Build 110 03/26/2026 SC Pro Edition
+    Info: Processing started: Tue Jul 28 12:15:06 2026
+    Info: System process ID: 32176
+Info: Command: quartus_fit --read_settings_files=on --write_settings_files=off agilex7_wideband -c agilex7_wideband --dni --seed=1 --write_settings_files=off
+Info: qfit2_default_script.tcl version: #1
+Info: Project  = agilex7_wideband
+Info: Revision = agilex7_wideband
+Info (21077): Low junction temperature is 0 degrees C
+Info (21077): High junction temperature is 100 degrees C
+Info (18258): Fitter Physical Synthesis operations beginning
+Info (18259): Fitter Physical Synthesis operations ending: elapsed time is 00:01:03
+Info (16557): Fitter post-fit operations ending: elapsed time is 00:17:03
+
+

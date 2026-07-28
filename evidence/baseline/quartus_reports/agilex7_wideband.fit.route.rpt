@@ -1,0 +1,552 @@
+Fitter Route Stage Report for agilex7_wideband
+Tue Jul 28 13:24:28 2026
+Quartus Prime Version 26.1.0 Build 110 03/26/2026 SC Pro Edition
+
+
+---------------------
+; Table of Contents ;
+---------------------
+  1. Legal Notice
+  2. Nets with Highest Wire Count
+  3. Delay Chain Summary
+  4. Routing Usage Summary
+  5. Route Messages
+  6. Estimated Delay Added for Hold Timing Summary
+  7. Estimated Delay Added for Hold Timing Details
+  8. Global Router Congestion Hotspot Summary
+  9. Global Router Wire Utilization Map
+ 10. Peak Wire Demand Summary
+ 11. Peak Wire Demand Details
+ 12. Peak Total Grid Crossings
+
+
+
+----------------
+; Legal Notice ;
+----------------
+Copyright (C) 2026  Altera Corporation. All rights reserved.
+Your use of Altera Corporation's design tools, logic functions 
+and other software and tools, and any partner logic 
+functions, and any output files from any of the foregoing 
+(including device programming or simulation files), and any 
+associated documentation or information are expressly subject 
+to the terms and conditions of the Altera Program License 
+Subscription Agreement, the Altera Quartus Prime License Agreement,
+the Altera IP License Agreement, or other applicable license
+agreement, including, without limitation, that your use is for
+the sole purpose of programming logic devices manufactured by
+Altera and sold by Altera or its authorized distributors.  Please
+refer to the Altera Software License Subscription Agreements 
+on the Quartus Prime software download page.
+
+
+
++---------------------------------------------------------------------------------------+
+; Nets with Highest Wire Count                                                          ;
++-------------------------------------------------------+----------------------+--------+
+; Net                                                   ; Number of Wires Used ; Fanout ;
++-------------------------------------------------------+----------------------+--------+
+; u_pipe|u_bf|u_weights|u_store|bank_sel                ; 5311                 ; 8202   ;
+; u_pipe|u_dma_mem|req_count_q[31]~xsyn                 ; 4543                 ; 1849   ;
+; core_rst_n~input                                      ; 3385                 ; 2502   ;
+; u_pipe|u_bf|u_weights|u_store|u_wr_cdc|dst_data_q[0]  ; 1477                 ; 513    ;
+; u_pipe|u_bf|u_weights|u_store|u_wr_cdc|dst_data_q[13] ; 1458                 ; 513    ;
+; u_pipe|u_bf|u_weights|u_store|u_wr_cdc|dst_data_q[28] ; 1443                 ; 513    ;
+; u_pipe|u_bf|u_weights|u_store|u_wr_cdc|dst_data_q[8]  ; 1430                 ; 513    ;
+; u_pipe|u_bf|u_weights|u_store|u_wr_cdc|dst_data_q[2]  ; 1428                 ; 513    ;
+; u_pipe|u_bf|u_weights|u_store|u_wr_cdc|dst_data_q[22] ; 1428                 ; 513    ;
+; u_pipe|u_bf|u_weights|u_store|u_wr_cdc|dst_data_q[27] ; 1427                 ; 513    ;
++-------------------------------------------------------+----------------------+--------+
+
+
++----------------------------------------------------------------------------------------------------------------------------------------------------------------+
+; Delay Chain Summary                                                                                                                                            ;
++---------------+----------+---------------------+--------------------+----------------+-----------------------------------+-------------------------------------+
+; Name          ; Pin Type ; Input Delay Chain 0 ; Output Delay Chain ; OE Delay Chain ; IO_12_LANE Input Data Delay Chain ; IO_12_LANE Input Strobe Delay Chain ;
++---------------+----------+---------------------+--------------------+----------------+-----------------------------------+-------------------------------------+
+; core_clk      ; Input    ; 0                   ; --                 ; --             ; --                                ; --                                  ;
+; core_rst_n    ; Input    ; 0                   ; --                 ; --             ; --                                ; --                                  ;
+; cfg_rst_n     ; Input    ; 0                   ; --                 ; --             ; --                                ; --                                  ;
+; cfg_clk       ; Input    ; 0                   ; --                 ; --             ; --                                ; --                                  ;
+; history_rst_n ; Input    ; 0                   ; --                 ; --             ; --                                ; --                                  ;
+; history_clk   ; Input    ; 0                   ; --                 ; --             ; --                                ; --                                  ;
++---------------+----------+---------------------+--------------------+----------------+-----------------------------------+-------------------------------------+
+
+
++------------------------------------------------------------------------+
+; Routing Usage Summary                                                  ;
++--------------------------------------+---------------------------------+
+; Routing Resource Type                ; Usage                           ;
++--------------------------------------+---------------------------------+
+; Block Input Mux Wrapbacks            ; 16,489 / 1,377,600 ( 1 % )      ;
+; Block Input Muxes                    ; 2,667,577 / 15,088,000 ( 18 % ) ;
+; Block interconnects                  ; 2,308,155 / 17,712,000 ( 13 % ) ;
+; C1 interconnects                     ; 1,463,310 / 7,396,000 ( 20 % )  ;
+; C4 interconnects                     ; 759,661 / 7,052,000 ( 11 % )    ;
+; C8 interconnects                     ; 28,848 / 705,200 ( 4 % )        ;
+; DCM_muxes                            ; 3 / 1,392 ( < 1 % )             ;
+; DELAY_CHAINs                         ; 0 / 46,380 ( 0 % )              ;
+; Direct links                         ; 136,425 / 17,712,000 ( < 1 % )  ;
+; HIO Buffers                          ; 0 / 91,840 ( 0 % )              ;
+; IO75XDDRFMXCKTREE_CLKDRV_BIG_VCO_REs ; 0 / 32 ( 0 % )                  ;
+; IO75XDDRFMXCKTREE_CLKDRV_GM0_REs     ; 0 / 32 ( 0 % )                  ;
+; IO75XDDRFMXCKTREE_CLKDRV_VCO_INPUTs  ; 0 / 16 ( 0 % )                  ;
+; IO75XDDRFMXCKTREE_CLKDRV_VCO_OUTPUTs ; 0 / 16 ( 0 % )                  ;
+; IO75XDDRFMXCKTREE_FB_MUX31_REs       ; 0 / 96 ( 0 % )                  ;
+; IOFBRADAPT_C2P_BUF_INPUTs            ; 0 / 264 ( 0 % )                 ;
+; IOFBRADAPT_C2P_BUF_OUTPUTs           ; 0 / 264 ( 0 % )                 ;
+; IOFBRADAPT_FRZ_BUFS_REs              ; 0 / 1,232 ( 0 % )               ;
+; IOFBRADAPT_P2C_BUF_INPUTs            ; 0 / 568 ( 0 % )                 ;
+; IOFBRADAPT_P2C_BUF_OUTPUTs           ; 0 / 568 ( 0 % )                 ;
+; NOC HPS segment routings             ; 9 / 32,768 ( < 1 % )            ;
+; NOC IO96B0 segment routings          ; 0 / 29,782 ( 0 % )              ;
+; NOC IO96B1 segment routings          ; 0 / 65,536 ( 0 % )              ;
+; NOC IO96B2 segment routings          ; 0 / 32,768 ( 0 % )              ;
+; NOC IO96B3 segment routings          ; 0 / 65,536 ( 0 % )              ;
+; NOC IO96B4 segment routings          ; 0 / 26,644 ( 0 % )              ;
+; NOC SDM segment routings             ; 0 / 20,799 ( 0 % )              ;
+; NOC SSM PLL segment routings         ; 0 / 8,220 ( 0 % )               ;
+; NOC UIB0 segment routings            ; 0 / 63,604 ( 0 % )              ;
+; NOC UIB1 segment routings            ; 0 / 64,606 ( 0 % )              ;
+; NOC UIB2 segment routings            ; 0 / 63,604 ( 0 % )              ;
+; Programmable Invert Buffers          ; 0 / 640 ( 0 % )                 ;
+; Programmable Invert Inputs           ; 70,111 / 1,312,380 ( 5 % )      ;
+; Programmable Inverts                 ; 70,111 / 1,312,380 ( 5 % )      ;
+; R0 interconnects                     ; 1,526,004 / 12,341,000 ( 12 % ) ;
+; R1 interconnects                     ; 1,049,819 / 7,052,000 ( 15 % )  ;
+; R12 interconnects                    ; 41,679 / 1,057,800 ( 4 % )      ;
+; R2 interconnects                     ; 413,994 / 3,534,200 ( 12 % )    ;
+; R4 interconnects                     ; 331,781 / 3,550,600 ( 9 % )     ;
+; R6 interconnects                     ; 423,547 / 3,558,800 ( 12 % )    ;
+; Redundancy Muxes                     ; 0 / 182,296 ( 0 % )             ;
+; Row Clock Tap-Offs                   ; 69,791 / 1,057,800 ( 7 % )      ;
+; Switchbox_clock_muxes                ; 371 / 31,680 ( 1 % )            ;
+; VIO Buffers                          ; 3 / 25,600 ( < 1 % )            ;
+; Vertical_seam_tap_muxes              ; 390 / 17,280 ( 2 % )            ;
++--------------------------------------+---------------------------------+
+
+
++----------------+
+; Route Messages ;
++----------------+
+Info (20030): Parallel compilation is enabled and will use 16 of the 16 processors detected
+Info: *******************************************************************
+Info: Running Quartus Prime Fitter
+    Info: Version 26.1.0 Build 110 03/26/2026 SC Pro Edition
+    Info: Processing started: Tue Jul 28 12:15:06 2026
+    Info: System process ID: 32176
+Info: Command: quartus_fit --read_settings_files=on --write_settings_files=off agilex7_wideband -c agilex7_wideband --dni --seed=1 --write_settings_files=off
+Info: qfit2_default_script.tcl version: #1
+Info: Project  = agilex7_wideband
+Info: Revision = agilex7_wideband
+Info (22300): Design uses Placement Effort Multiplier = 0.8.
+Info (170193): Fitter routing operations beginning
+Info (20215): Router estimated peak short interconnect demand : 95% of up directional wire in region X156_Y312 to X167_Y319
+    Info (20265): Estimated peak short right directional wire demand : 83% in region X72_Y360 to X83_Y367
+    Info (20265): Estimated peak short left directional wire demand : 46% in region X132_Y344 to X143_Y351
+    Info (20265): Estimated peak short up directional wire demand : 95% in region X156_Y312 to X167_Y319
+    Info (20265): Estimated peak short down directional wire demand : 79% in region X132_Y368 to X143_Y375
+Info (20215): Router estimated peak long high speed interconnect demand : 165% of down directional wire in region X432_Y408 to X443_Y415
+    Info (20265): Estimated peak long high speed right directional wire demand : 96% in region X384_Y208 to X395_Y215
+    Info (20265): Estimated peak long high speed left directional wire demand : 99% in region X144_Y296 to X155_Y303
+    Info (20265): Estimated peak long high speed up directional wire demand : 125% in region X432_Y400 to X443_Y407
+    Info (20265): Estimated peak long high speed down directional wire demand : 165% in region X432_Y408 to X443_Y415
+    Info (20315): Note that the router may use short wires to implement long connections at higher delay
+Info (170239): Router is attempting to preserve 0.00 percent of routes from an earlier compilation, a user specified Routing Constraints File, or internal routing requirements.
+Info (21077): Low junction temperature is 0 degrees C
+Info (21077): High junction temperature is 100 degrees C
+Info (11888): Total time spent on timing analysis during Routing is 177.83 seconds.
+Info (16607): Fitter routing operations ending: elapsed time is 00:20:20
+
+
++------------------------------------------------------------+
+; Estimated Delay Added for Hold Timing Summary              ;
++-----------------+----------------------+-------------------+
+; Source Clock(s) ; Destination Clock(s) ; Delay Added in ns ;
++-----------------+----------------------+-------------------+
+; core_clk        ; core_clk             ; 729.8             ;
++-----------------+----------------------+-------------------+
+Note: For more information on problematic transfers, consider running the Fitter again with the Optimize hold timing option (Settings Menu) turned off.
+This will disable optimization of problematic paths and expose them for further analysis using the Timing Analyzer.
+
+
++-----------------------------------------------------------------------------------------------------------------------------------------------------+
+; Estimated Delay Added for Hold Timing Details                                                                                                       ;
++---------------------------------------------------------------------+-----------------------------------------------------------+-------------------+
+; Source Register                                                     ; Destination Register                                      ; Delay Added in ns ;
++---------------------------------------------------------------------+-----------------------------------------------------------+-------------------+
+; u_pipe|g_cfar_per_beam[8].u_cfar|u_window|cell_q[12][35]            ; u_pipe|g_cfar_per_beam[8].u_cfar|u_window|cell_q[13][35]  ; 0.780             ;
+; u_pipe|g_cfar_per_beam[14].u_cfar|u_window|cell_q[14][31]           ; u_pipe|g_cfar_per_beam[14].u_cfar|u_window|cell_q[15][31] ; 0.779             ;
+; u_pipe|g_cfar_per_beam[10].u_cfar|u_window|cell_q[14][35]           ; u_pipe|g_cfar_per_beam[10].u_cfar|u_window|cell_q[15][35] ; 0.778             ;
+; u_pipe|g_cfar_per_beam[10].u_cfar|u_window|cell_q[14][33]           ; u_pipe|g_cfar_per_beam[10].u_cfar|u_window|cell_q[15][33] ; 0.777             ;
+; u_pipe|g_cfar_per_beam[13].u_cfar|u_window|cell_q[14][29]           ; u_pipe|g_cfar_per_beam[13].u_cfar|u_window|cell_q[15][29] ; 0.775             ;
+; u_pipe|g_cfar_per_beam[14].u_cfar|u_window|cell_q[15][23]           ; u_pipe|g_cfar_per_beam[14].u_cfar|u_window|cell_q[16][23] ; 0.774             ;
+; u_pipe|g_cfar_per_beam[14].u_cfar|u_window|cell_q[14][27]           ; u_pipe|g_cfar_per_beam[14].u_cfar|u_window|cell_q[15][27] ; 0.774             ;
+; u_pipe|g_cfar_per_beam[13].u_cfar|u_window|cell_q[14][27]           ; u_pipe|g_cfar_per_beam[13].u_cfar|u_window|cell_q[15][27] ; 0.770             ;
+; u_pipe|g_cfar_per_beam[13].u_cfar|u_window|cell_q[13][35]           ; u_pipe|g_cfar_per_beam[13].u_cfar|u_window|cell_q[14][35] ; 0.769             ;
+; u_pipe|g_cfar_per_beam[9].u_cfar|u_window|cell_q[13][29]            ; u_pipe|g_cfar_per_beam[9].u_cfar|u_window|cell_q[14][29]  ; 0.768             ;
+; u_pipe|g_cfar_per_beam[14].u_cfar|u_window|cell_q[14][23]           ; u_pipe|g_cfar_per_beam[14].u_cfar|u_window|cell_q[15][23] ; 0.764             ;
+; u_pipe|g_cfar_per_beam[5].u_cfar|u_window|cell_q[14][23]            ; u_pipe|g_cfar_per_beam[5].u_cfar|u_window|cell_q[15][23]  ; 0.763             ;
+; u_pipe|g_cfar_per_beam[10].u_cfar|u_window|cell_q[15][29]           ; u_pipe|g_cfar_per_beam[10].u_cfar|u_window|cell_q[16][29] ; 0.757             ;
+; u_pipe|g_cfar_per_beam[9].u_cfar|u_window|cell_q[54][21]            ; u_pipe|g_cfar_per_beam[9].u_cfar|u_window|cell_q[55][21]  ; 0.757             ;
+; u_pipe|g_cfar_per_beam[10].u_cfar|u_window|cell_q[15][27]           ; u_pipe|g_cfar_per_beam[10].u_cfar|u_window|cell_q[16][27] ; 0.755             ;
+; u_pipe|g_cfar_per_beam[14].u_cfar|u_window|cell_q[53][19]           ; u_pipe|g_cfar_per_beam[14].u_cfar|u_window|cell_q[54][19] ; 0.752             ;
+; u_pipe|g_cfar_per_beam[2].u_cfar|u_window|cell_q[52][7]             ; u_pipe|g_cfar_per_beam[2].u_cfar|u_window|cell_q[53][7]   ; 0.751             ;
+; u_pipe|g_cfar_per_beam[5].u_cfar|u_window|cell_q[16][27]            ; u_pipe|g_cfar_per_beam[5].u_cfar|u_window|cell_q[17][27]  ; 0.748             ;
+; u_pipe|g_cfar_per_beam[14].u_cfar|u_window|cell_q[58][7]            ; u_pipe|g_cfar_per_beam[14].u_cfar|u_window|cell_q[59][7]  ; 0.747             ;
+; u_pipe|g_cfar_per_beam[14].u_cfar|u_window|cell_q[18][23]           ; u_pipe|g_cfar_per_beam[14].u_cfar|u_window|cell_q[19][23] ; 0.745             ;
+; u_pipe|g_cfar_per_beam[12].u_cfar|u_window|cell_q[18][5]            ; u_pipe|g_cfar_per_beam[12].u_cfar|u_window|cell_q[19][5]  ; 0.743             ;
+; u_pipe|g_cfar_per_beam[14].u_cfar|u_window|cell_q[58][5]            ; u_pipe|g_cfar_per_beam[14].u_cfar|u_window|cell_q[59][5]  ; 0.743             ;
+; u_pipe|g_cfar_per_beam[12].u_cfar|u_window|cell_q[17][35]           ; u_pipe|g_cfar_per_beam[12].u_cfar|u_window|cell_q[18][35] ; 0.740             ;
+; u_pipe|g_cfar_per_beam[12].u_cfar|u_window|cell_q[17][5]            ; u_pipe|g_cfar_per_beam[12].u_cfar|u_window|cell_q[18][5]  ; 0.739             ;
+; u_pipe|g_cfar_per_beam[8].u_cfar|u_window|cell_q[18][15]            ; u_pipe|g_cfar_per_beam[8].u_cfar|u_window|cell_q[19][15]  ; 0.737             ;
+; u_pipe|g_cfar_per_beam[14].u_cfar|u_window|cell_q[18][5]            ; u_pipe|g_cfar_per_beam[14].u_cfar|u_window|cell_q[19][5]  ; 0.736             ;
+; u_pipe|g_cfar_per_beam[9].u_cfar|u_window|cell_q[14][11]            ; u_pipe|g_cfar_per_beam[9].u_cfar|u_window|cell_q[15][11]  ; 0.734             ;
+; u_pipe|g_cfar_per_beam[13].u_cfar|u_window|cell_q[54][37]           ; u_pipe|g_cfar_per_beam[13].u_cfar|u_window|cell_q[55][37] ; 0.733             ;
+; u_pipe|g_cfar_per_beam[12].u_cfar|u_window|cell_q[17][3]            ; u_pipe|g_cfar_per_beam[12].u_cfar|u_window|cell_q[18][3]  ; 0.731             ;
+; u_pipe|g_cfar_per_beam[11].u_cfar|u_window|cell_q[18][31]           ; u_pipe|g_cfar_per_beam[11].u_cfar|u_window|cell_q[19][31] ; 0.731             ;
+; u_pipe|g_cfar_per_beam[9].u_cfar|u_window|cell_q[12][29]            ; u_pipe|g_cfar_per_beam[9].u_cfar|u_window|cell_q[13][29]  ; 0.727             ;
+; u_pipe|g_cfar_per_beam[14].u_cfar|u_window|cell_q[19][23]           ; u_pipe|g_cfar_per_beam[14].u_cfar|u_window|cell_q[20][23] ; 0.725             ;
+; u_pipe|g_cfar_per_beam[15].u_cfar|u_window|cell_q[17][23]           ; u_pipe|g_cfar_per_beam[15].u_cfar|u_window|cell_q[18][23] ; 0.725             ;
+; u_pipe|g_cfar_per_beam[6].u_cfar|u_window|cell_q[57][11]            ; u_pipe|g_cfar_per_beam[6].u_cfar|u_window|cell_q[58][11]  ; 0.723             ;
+; u_pipe|g_cfar_per_beam[14].u_cfar|u_window|cell_q[18][9]            ; u_pipe|g_cfar_per_beam[14].u_cfar|u_window|cell_q[19][9]  ; 0.723             ;
+; u_pipe|g_cfar_per_beam[14].u_cfar|u_window|cell_q[21][1]            ; u_pipe|g_cfar_per_beam[14].u_cfar|u_window|cell_q[22][1]  ; 0.718             ;
+; u_pipe|g_cfar_per_beam[3].u_cfar|u_window|cell_q[19][21]            ; u_pipe|g_cfar_per_beam[3].u_cfar|u_window|cell_q[20][21]  ; 0.717             ;
+; u_pipe|g_cfar_per_beam[8].u_cfar|u_window|cell_q[18][31]            ; u_pipe|g_cfar_per_beam[8].u_cfar|u_window|cell_q[19][31]  ; 0.716             ;
+; u_pipe|g_cfar_per_beam[9].u_cfar|u_window|cell_q[17][29]            ; u_pipe|g_cfar_per_beam[9].u_cfar|u_window|cell_q[18][29]  ; 0.715             ;
+; u_pipe|g_cfar_per_beam[7].u_cfar|u_window|cell_q[54][37]            ; u_pipe|g_cfar_per_beam[7].u_cfar|u_window|cell_q[55][37]  ; 0.713             ;
+; u_pipe|g_cfar_per_beam[3].u_cfar|u_window|cell_q[19][33]            ; u_pipe|g_cfar_per_beam[3].u_cfar|u_window|cell_q[20][33]  ; 0.712             ;
+; u_pipe|g_cfar_per_beam[8].u_cfar|u_window|cell_q[55][5]             ; u_pipe|g_cfar_per_beam[8].u_cfar|u_window|cell_q[56][5]   ; 0.710             ;
+; u_pipe|g_cfar_per_beam[10].u_cfar|u_window|cell_q[20][13]           ; u_pipe|g_cfar_per_beam[10].u_cfar|u_window|cell_q[21][13] ; 0.700             ;
+; u_pipe|g_cfar_per_beam[10].u_cfar|u_window|cell_q[20][15]           ; u_pipe|g_cfar_per_beam[10].u_cfar|u_window|cell_q[21][15] ; 0.700             ;
+; u_pipe|g_cfar_per_beam[5].u_cfar|u_window|cell_q[58][1]             ; u_pipe|g_cfar_per_beam[5].u_cfar|u_window|cell_q[59][1]   ; 0.699             ;
+; u_pipe|g_cfar_per_beam[0].u_cfar|u_window|cell_q[53][19]            ; u_pipe|g_cfar_per_beam[0].u_cfar|u_window|cell_q[54][19]  ; 0.697             ;
+; u_pipe|g_cfar_per_beam[15].u_cfar|u_window|cell_q[20][19]           ; u_pipe|g_cfar_per_beam[15].u_cfar|u_window|cell_q[21][19] ; 0.697             ;
+; u_pipe|g_cfar_per_beam[7].u_cfar|u_window|cell_q[20][3]             ; u_pipe|g_cfar_per_beam[7].u_cfar|u_window|cell_q[21][3]   ; 0.696             ;
+; u_pipe|g_cfar_per_beam[1].u_cfar|u_window|cell_q[12][37]            ; u_pipe|g_cfar_per_beam[1].u_cfar|u_window|cell_q[13][37]  ; 0.695             ;
+; u_pipe|g_cfar_per_beam[0].u_cfar|u_window|cell_q[58][5]             ; u_pipe|g_cfar_per_beam[0].u_cfar|u_window|cell_q[59][5]   ; 0.692             ;
+; u_pipe|g_cfar_per_beam[12].u_cfar|u_window|cell_q[19][31]           ; u_pipe|g_cfar_per_beam[12].u_cfar|u_window|cell_q[20][31] ; 0.692             ;
+; u_pipe|g_cfar_per_beam[0].u_cfar|u_window|cell_q[20][29]            ; u_pipe|g_cfar_per_beam[0].u_cfar|u_window|cell_q[21][29]  ; 0.691             ;
+; u_pipe|g_cfar_per_beam[9].u_cfar|u_window|cell_q[58][23]            ; u_pipe|g_cfar_per_beam[9].u_cfar|u_window|cell_q[59][23]  ; 0.687             ;
+; u_pipe|g_cfar_per_beam[6].u_cfar|u_window|cell_q[23][1]             ; u_pipe|g_cfar_per_beam[6].u_cfar|u_window|cell_q[24][1]   ; 0.687             ;
+; u_pipe|g_cfar_per_beam[11].u_cfar|u_window|cell_q[54][23]           ; u_pipe|g_cfar_per_beam[11].u_cfar|u_window|cell_q[55][23] ; 0.683             ;
+; u_pipe|g_cfar_per_beam[1].u_cfar|u_window|cell_q[24][3]             ; u_pipe|g_cfar_per_beam[1].u_cfar|u_window|cell_q[25][3]   ; 0.675             ;
+; u_pipe|g_cfar_per_beam[3].u_cfar|u_window|cell_q[12][21]            ; u_pipe|g_cfar_per_beam[3].u_cfar|u_window|cell_q[13][21]  ; 0.674             ;
+; u_pipe|g_cfar_per_beam[10].u_cfar|u_window|cell_q[55][13]           ; u_pipe|g_cfar_per_beam[10].u_cfar|u_window|cell_q[56][13] ; 0.669             ;
+; u_pipe|g_cfar_per_beam[8].u_cfar|u_window|cell_q[23][11]            ; u_pipe|g_cfar_per_beam[8].u_cfar|u_window|cell_q[24][11]  ; 0.661             ;
+; u_pipe|g_cfar_per_beam[8].u_cfar|u_window|cell_q[16][37]            ; u_pipe|g_cfar_per_beam[8].u_cfar|u_window|cell_q[17][37]  ; 0.658             ;
+; u_pipe|g_cfar_per_beam[15].u_cfar|u_window|cell_q[50][5]            ; u_pipe|g_cfar_per_beam[15].u_cfar|u_window|cell_q[51][5]  ; 0.656             ;
+; u_pipe|g_cfar_per_beam[3].u_cfar|u_window|cell_q[55][37]            ; u_pipe|g_cfar_per_beam[3].u_cfar|u_window|cell_q[56][37]  ; 0.651             ;
+; u_pipe|g_cfar_per_beam[2].u_cfar|u_window|cell_q[23][5]             ; u_pipe|g_cfar_per_beam[2].u_cfar|u_window|cell_q[24][5]   ; 0.645             ;
+; u_pipe|g_cfar_per_beam[8].u_cfar|u_window|cell_q[23][13]            ; u_pipe|g_cfar_per_beam[8].u_cfar|u_window|cell_q[24][13]  ; 0.644             ;
+; u_pipe|g_cfar_per_beam[12].u_cfar|u_window|cell_q[55][15]           ; u_pipe|g_cfar_per_beam[12].u_cfar|u_window|cell_q[56][15] ; 0.643             ;
+; u_pipe|g_cfar_per_beam[8].u_cfar|u_window|cell_q[23][9]             ; u_pipe|g_cfar_per_beam[8].u_cfar|u_window|cell_q[24][9]   ; 0.642             ;
+; u_pipe|g_cfar_per_beam[5].u_cfar|u_window|cell_q[51][37]            ; u_pipe|g_cfar_per_beam[5].u_cfar|u_window|cell_q[52][37]  ; 0.636             ;
+; u_pipe|g_cfar_per_beam[8].u_cfar|u_window|cell_q[52][37]            ; u_pipe|g_cfar_per_beam[8].u_cfar|u_window|cell_q[53][37]  ; 0.635             ;
+; u_pipe|g_cfar_per_beam[8].u_cfar|u_window|cell_q[23][15]            ; u_pipe|g_cfar_per_beam[8].u_cfar|u_window|cell_q[24][15]  ; 0.629             ;
+; u_pipe|g_cfar_per_beam[8].u_cfar|u_window|cell_q[52][13]            ; u_pipe|g_cfar_per_beam[8].u_cfar|u_window|cell_q[53][13]  ; 0.627             ;
+; u_pipe|g_cfar_per_beam[3].u_cfar|u_window|cell_q[25][7]             ; u_pipe|g_cfar_per_beam[3].u_cfar|u_window|cell_q[26][7]   ; 0.621             ;
+; u_pipe|g_cfar_per_beam[15].u_cfar|u_window|cell_q[54][19]           ; u_pipe|g_cfar_per_beam[15].u_cfar|u_window|cell_q[55][19] ; 0.617             ;
+; u_pipe|g_cfar_per_beam[4].u_cfar|u_window|cell_q[26][3]             ; u_pipe|g_cfar_per_beam[4].u_cfar|u_window|cell_q[27][3]   ; 0.606             ;
+; u_pipe|g_cfar_per_beam[3].u_cfar|u_window|cell_q[56][21]            ; u_pipe|g_cfar_per_beam[3].u_cfar|u_window|cell_q[57][21]  ; 0.605             ;
+; u_pipe|g_cfar_per_beam[3].u_cfar|u_window|cell_q[56][35]            ; u_pipe|g_cfar_per_beam[3].u_cfar|u_window|cell_q[57][35]  ; 0.603             ;
+; u_pipe|g_cfar_per_beam[0].u_cfar|u_window|cell_q[25][15]            ; u_pipe|g_cfar_per_beam[0].u_cfar|u_window|cell_q[26][15]  ; 0.602             ;
+; u_pipe|g_cfar_per_beam[3].u_cfar|u_window|cell_q[56][31]            ; u_pipe|g_cfar_per_beam[3].u_cfar|u_window|cell_q[57][31]  ; 0.595             ;
+; u_pipe|g_cfar_per_beam[8].u_cfar|u_window|cell_q[12][5]             ; u_pipe|g_cfar_per_beam[8].u_cfar|u_window|cell_q[13][5]   ; 0.590             ;
+; u_pipe|g_cfar_per_beam[8].u_cfar|u_window|cell_q[12][3]             ; u_pipe|g_cfar_per_beam[8].u_cfar|u_window|cell_q[13][3]   ; 0.583             ;
+; u_pipe|g_cfar_per_beam[0].u_cfar|u_window|cell_q[24][15]            ; u_pipe|g_cfar_per_beam[0].u_cfar|u_window|cell_q[25][15]  ; 0.581             ;
+; u_pipe|g_cfar_per_beam[2].u_cfar|u_window|cell_q[28][3]             ; u_pipe|g_cfar_per_beam[2].u_cfar|u_window|cell_q[29][3]   ; 0.557             ;
+; u_pipe|g_cfar_per_beam[4].u_cfar|u_window|cell_q[26][9]             ; u_pipe|g_cfar_per_beam[4].u_cfar|u_window|cell_q[27][9]   ; 0.552             ;
+; u_pipe|g_cfar_per_beam[13].u_cfar|u_window|cell_q[65][17]           ; u_pipe|g_cfar_per_beam[13].u_cfar|u_window|cell_q[66][17] ; 0.545             ;
+; u_pipe|g_cfar_per_beam[6].u_cfar|u_window|cell_q[23][11]            ; u_pipe|g_cfar_per_beam[6].u_cfar|u_window|cell_q[24][11]  ; 0.545             ;
+; u_pipe|g_cfar_per_beam[8].u_cfar|u_window|cell_q[28][5]             ; u_pipe|g_cfar_per_beam[8].u_cfar|u_window|cell_q[29][5]   ; 0.526             ;
+; u_pipe|g_cfar_per_beam[15].u_cfar|u_window|cell_q[49][5]            ; u_pipe|g_cfar_per_beam[15].u_cfar|u_window|cell_q[50][5]  ; 0.523             ;
+; u_pipe|g_cfar_per_beam[15].u_cfar|u_window|cell_q[49][1]            ; u_pipe|g_cfar_per_beam[15].u_cfar|u_window|cell_q[50][1]  ; 0.520             ;
+; u_pipe|g_cfar_per_beam[14].u_cfar|u_window|cell_q[63][35]           ; u_pipe|g_cfar_per_beam[14].u_cfar|u_window|cell_q[64][35] ; 0.519             ;
+; u_pipe|g_cfar_per_beam[5].u_cfar|u_window|cell_q[54][35]            ; u_pipe|g_cfar_per_beam[5].u_cfar|u_window|cell_q[55][35]  ; 0.518             ;
+; u_pipe|g_cfar_per_beam[2].u_cfar|u_window|cell_q[63][7]             ; u_pipe|g_cfar_per_beam[2].u_cfar|u_window|cell_q[64][7]   ; 0.518             ;
+; u_pipe|g_cfar_per_beam[15].u_cfar|u_window|cell_q[10][27]           ; u_pipe|g_cfar_per_beam[15].u_cfar|u_window|cell_q[11][27] ; 0.499             ;
+; u_pipe|g_cfar_per_beam[5].u_cfar|u_window|cell_q[21][37]            ; u_pipe|g_cfar_per_beam[5].u_cfar|u_window|cell_q[22][37]  ; 0.490             ;
+; u_pipe|g_cfar_per_beam[0].u_cfar|u_window|cell_q[61][21]            ; u_pipe|g_cfar_per_beam[0].u_cfar|u_window|cell_q[62][21]  ; 0.486             ;
+; u_pipe|g_cfar_per_beam[12].u_cfar|u_window|cell_q[10][27]           ; u_pipe|g_cfar_per_beam[12].u_cfar|u_window|cell_q[11][27] ; 0.480             ;
+; u_pipe|g_cfar_per_beam[11].u_cfar|u_window|cell_q[29][5]            ; u_pipe|g_cfar_per_beam[11].u_cfar|u_window|cell_q[30][5]  ; 0.470             ;
+; u_pipe|g_cfar_per_beam[12].u_cfar|u_window|cell_q[10][23]           ; u_pipe|g_cfar_per_beam[12].u_cfar|u_window|cell_q[11][23] ; 0.467             ;
+; u_pipe|g_cfar_per_beam[11].u_cfar|act_r_lead_q[0]~_Duplicate0RTM_60 ; u_pipe|g_cfar_per_beam[11].u_cfar|ok1_q                   ; 0.466             ;
+; u_pipe|g_cfar_per_beam[6].u_cfar|u_window|cell_q[10][21]            ; u_pipe|g_cfar_per_beam[6].u_cfar|u_window|cell_q[11][21]  ; 0.466             ;
+; u_pipe|g_cfar_per_beam[11].u_cfar|u_window|cell_q[9][31]            ; u_pipe|g_cfar_per_beam[11].u_cfar|u_window|cell_q[10][31] ; 0.463             ;
+; u_pipe|g_cfar_per_beam[15].u_cfar|u_window|cell_q[27][11]           ; u_pipe|g_cfar_per_beam[15].u_cfar|u_window|cell_q[28][11] ; 0.462             ;
++---------------------------------------------------------------------+-----------------------------------------------------------+-------------------+
+Note: This table only shows the top 100 path(s) that have the largest delay added for hold.
+
+
+--------------------------------------------
+; Global Router Congestion Hotspot Summary ;
+--------------------------------------------
+No congestion hotspots found where global router short wire usage exceeded 100%.
+If the design is hard to route, use other techniques to analyze congestion. Refer to the Estimated Delay Added for Hold Timing section in the Fitter report and routing utilization in the Chip Planner.
+
+
+--------------------------------------
+; Global Router Wire Utilization Map ;
+--------------------------------------
+This report is unavailable in plain text report export.
+
+
++-------------------------------------------------------------------------------+
+; Peak Wire Demand Summary                                                      ;
++-----------------+-----------+-----------------------------------+-------------+
+; Wire            ; Direction ; Grid [(Xmin, Ymin), (Xmax, Ymax)] ; Peak Demand ;
++-----------------+-----------+-----------------------------------+-------------+
+; short           ; right     ; [(72, 360), (83, 367)]            ; 83.542 %    ;
+; short           ; left      ; [(132, 344), (143, 351)]          ; 46.429 %    ;
+; short           ; up        ; [(156, 312), (167, 319)]          ; 95.972 %    ;
+; short           ; down      ; [(132, 368), (143, 375)]          ; 79.444 %    ;
+; long high speed ; right     ; [(384, 208), (395, 215)]          ; 96.528 %    ;
+; long high speed ; left      ; [(144, 296), (155, 303)]          ; 99.671 %    ;
+; long high speed ; up        ; [(324, 392), (335, 399)]          ; 100.541 %   ;
+; long high speed ; down      ; [(324, 400), (335, 407)]          ; 102.198 %   ;
++-----------------+-----------+-----------------------------------+-------------+
+
+
++----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+; Peak Wire Demand Details                                                                                                                                                         ;
++-----------------+-----------+-----------------------------------+-------------+--------------------------------------------------------------------------------------------------+
+; Wire            ; Direction ; Grid [(Xmin, Ymin), (Xmax, Ymax)] ; Peak Demand ; Net Names                                                                                        ;
++-----------------+-----------+-----------------------------------+-------------+--------------------------------------------------------------------------------------------------+
+; short           ; right     ; [(72, 360), (83, 367)]            ; 83.542 %    ;    High Routing Fan-Out                                                                          ;
+;     --          ;           ;                                   ;             ; u_pipe|u_bf|u_weights|u_store|bank_sel                                                           ;
+;     --          ;           ;                                   ;             ; u_pipe|g_hist_rep[1].u_history|g_ant[3].g_lane[0].u_bank|g_rd_in_reg.rd_addr_q[9]                ;
+;     --          ;           ;                                   ;             ; u_pipe|g_hist_rep[1].u_history|g_ant[3].g_lane[0].u_bank|g_rd_in_reg.rd_addr_q[3]                ;
+;     --          ;           ;                                   ;             ; u_pipe|u_bf|u_weights|u_store|u_wr_cdc|dst_data_q[28]                                            ;
+;     --          ;           ;                                   ;             ; u_pipe|u_bf|u_weights|u_store|u_wr_cdc|dst_data_q[25]                                            ;
+;     --          ;           ;                                   ;             ; u_pipe|u_bf|u_weights|u_store|u_wr_cdc|dst_data_q[26]                                            ;
+;     --          ;           ;                                   ;             ; u_pipe|u_bf|u_weights|u_store|u_wr_cdc|dst_data_q[6]                                             ;
+;     --          ;           ;                                   ;             ; u_pipe|u_bf|u_weights|u_store|u_wr_cdc|dst_data_q[0]                                             ;
+;     --          ;           ;                                   ;             ; u_pipe|u_bf|u_weights|u_store|u_wr_cdc|dst_data_q[10]                                            ;
+;     --          ;           ;                                   ;             ; u_pipe|u_bf|u_weights|u_store|u_wr_cdc|dst_data_q[30]                                            ;
+; short           ; right     ; [(72, 360), (83, 367)]            ; 83.542 %    ;    Long Distance                                                                                 ;
+;     --          ;           ;                                   ;             ; u_pipe|g_hist_rep[1].u_history|r1_addr_q[0][4]                                                   ;
+;     --          ;           ;                                   ;             ; u_pipe|u_bf|u_weights|u_store|u_wr_cdc|dst_data_q[28]                                            ;
+;     --          ;           ;                                   ;             ; u_pipe|u_bf|u_weights|u_store|u_wr_cdc|dst_data_q[6]                                             ;
+;     --          ;           ;                                   ;             ; u_pipe|u_bf|u_weights|u_store|u_wr_cdc|dst_data_q[12]                                            ;
+;     --          ;           ;                                   ;             ; u_pipe|u_bf|u_weights|u_store|u_wr_cdc|dst_data_q[5]                                             ;
+;     --          ;           ;                                   ;             ; u_pipe|u_bf|u_weights|u_store|u_wr_cdc|dst_data_q[4]                                             ;
+;     --          ;           ;                                   ;             ; u_pipe|u_bf|u_weights|u_store|u_wr_cdc|dst_data_q[8]                                             ;
+;     --          ;           ;                                   ;             ; u_pipe|u_bf|u_weights|u_store|u_wr_cdc|dst_data_q[2]                                             ;
+;     --          ;           ;                                   ;             ; u_pipe|u_bf|u_weights|u_store|u_wr_cdc|dst_data_q[26]                                            ;
+;     --          ;           ;                                   ;             ; u_pipe|u_bf|u_weights|u_store|u_wr_cdc|dst_data_q[0]                                             ;
+; short           ; left      ; [(132, 344), (143, 351)]          ; 46.429 %    ;    High Routing Fan-Out                                                                          ;
+;     --          ;           ;                                   ;             ; u_pipe|g_hist_rep[0].u_history|g_ant[3].g_lane[0].u_bank|g_rd_in_reg.rd_addr_q[1]~_Duplicate_3   ;
+;     --          ;           ;                                   ;             ; u_pipe|g_hist_rep[0].u_history|g_ant[3].g_lane[0].u_bank|g_rd_in_reg.rd_addr_q[1]~_Duplicate_2   ;
+;     --          ;           ;                                   ;             ; u_pipe|g_hist_rep[0].u_history|g_ant[3].g_lane[0].u_bank|g_wr_in_reg.wr_addr_q[3]                ;
+;     --          ;           ;                                   ;             ; u_pipe|g_hist_rep[0].u_history|g_ant[3].g_lane[0].u_bank|g_wr_in_reg.wr_addr_q[8]                ;
+;     --          ;           ;                                   ;             ; u_pipe|g_hist_rep[0].u_history|g_ant[3].g_lane[0].u_bank|g_wr_in_reg.wr_addr_q[2]                ;
+;     --          ;           ;                                   ;             ; u_pipe|g_hist_rep[0].u_history|g_ant[3].g_lane[0].u_bank|g_rd_in_reg.rd_addr_q[1]~_Duplicate     ;
+;     --          ;           ;                                   ;             ; u_pipe|g_hist_rep[0].u_history|g_ant[3].g_lane[0].u_bank|g_rd_in_reg.rd_en_q                     ;
+;     --          ;           ;                                   ;             ; u_pipe|g_hist_rep[0].u_history|g_ant[3].g_lane[0].u_bank|g_rd_in_reg.rd_addr_q[8]~_Duplicate_17  ;
+;     --          ;           ;                                   ;             ; u_pipe|g_hist_rep[0].u_history|g_ant[3].g_lane[0].u_bank|g_wr_in_reg.wr_addr_q[0]~_Duplicate_2   ;
+;     --          ;           ;                                   ;             ; u_pipe|g_hist_rep[0].u_history|g_ant[3].g_lane[0].u_bank|g_wr_in_reg.wr_addr_q[10]~_Duplicate_22 ;
+; short           ; left      ; [(132, 344), (143, 351)]          ; 46.429 %    ;    Long Distance                                                                                 ;
+;     --          ;           ;                                   ;             ; u_pipe|g_hist_rep[0].u_history|r1_addr_q[0][4]                                                   ;
+;     --          ;           ;                                   ;             ; u_pipe|g_hist_rep[0].u_history|r1_addr_q[0][5]                                                   ;
+;     --          ;           ;                                   ;             ; u_pipe|g_hist_rep[1].u_history|r1_addr_q[0][14]                                                  ;
+;     --          ;           ;                                   ;             ; u_pipe|g_hist_rep[0].u_history|beat_q[2][8]~ERTM                                                 ;
+;     --          ;           ;                                   ;             ; u_pipe|g_hist_rep[1].u_history|beat_q[2][8]~ERTM                                                 ;
+;     --          ;           ;                                   ;             ; u_pipe|u_bf|u_weights|u_store|mem[1][159][31]~0                                                  ;
+;     --          ;           ;                                   ;             ; u_pipe|u_bf|u_weights|u_store|mem[0][223][31]~198                                                ;
+;     --          ;           ;                                   ;             ; u_pipe|u_bf|u_weights|u_store|mem[1][95][31]~66                                                  ;
+;     --          ;           ;                                   ;             ; u_pipe|u_bf|u_weights|u_store|mem[1][17][31]~262                                                 ;
+;     --          ;           ;                                   ;             ; u_pipe|g_fft[3].u_fft|u_out_fifo|g_out_reg.out_data_q[54]~ERTM1                                  ;
+; short           ; up        ; [(156, 312), (167, 319)]          ; 95.972 %    ;    High Routing Fan-Out                                                                          ;
+;     --          ;           ;                                   ;             ; u_pipe|u_bf|u_weights|u_store|bank_sel                                                           ;
+;     --          ;           ;                                   ;             ; u_pipe|g_hist_rep[1].u_history|g_ant[12].g_lane[1].u_bank|g_rd_in_reg.rd_addr_q[1]               ;
+;     --          ;           ;                                   ;             ; u_pipe|u_bf|u_weights|u_store|u_wr_cdc|dst_data_q[19]                                            ;
+;     --          ;           ;                                   ;             ; u_pipe|u_bf|u_weights|u_store|u_wr_cdc|dst_data_q[21]                                            ;
+;     --          ;           ;                                   ;             ; u_pipe|u_bf|u_weights|u_store|u_wr_cdc|dst_data_q[2]                                             ;
+;     --          ;           ;                                   ;             ; u_pipe|u_bf|u_weights|u_store|u_wr_cdc|dst_data_q[14]                                            ;
+;     --          ;           ;                                   ;             ; u_pipe|u_bf|u_weights|u_store|u_wr_cdc|dst_data_q[20]                                            ;
+;     --          ;           ;                                   ;             ; u_pipe|u_bf|u_weights|u_store|u_wr_cdc|dst_data_q[1]                                             ;
+;     --          ;           ;                                   ;             ; u_pipe|u_bf|u_weights|u_store|u_wr_cdc|dst_data_q[0]                                             ;
+;     --          ;           ;                                   ;             ; u_pipe|u_bf|u_weights|u_store|u_wr_cdc|dst_data_q[15]                                            ;
+; short           ; up        ; [(156, 312), (167, 319)]          ; 95.972 %    ;    Long Distance                                                                                 ;
+;     --          ;           ;                                   ;             ; u_pipe|g_hist_rep[1].u_history|r1_addr_q[0][2]                                                   ;
+;     --          ;           ;                                   ;             ; u_pipe|g_hist_rep[1].u_history|reduce_nor_3~3_ERTM                                               ;
+;     --          ;           ;                                   ;             ; u_pipe|g_hist_rep[1].u_history|reduce_nor_3~3_ERTM0                                              ;
+;     --          ;           ;                                   ;             ; u_pipe|g_hist_rep[1].u_history|i22717~0                                                          ;
+;     --          ;           ;                                   ;             ; u_pipe|g_hist_rep[1].u_history|reduce_nor_3~1_ERTM                                               ;
+;     --          ;           ;                                   ;             ; u_pipe|g_hist_rep[1].u_history|reduce_nor_3~1_ERTM0                                              ;
+;     --          ;           ;                                   ;             ; u_pipe|u_bf|u_weights|u_store|u_wr_cdc|dst_data_q[28]                                            ;
+;     --          ;           ;                                   ;             ; u_pipe|u_bf|u_weights|u_store|u_wr_cdc|dst_data_q[12]                                            ;
+;     --          ;           ;                                   ;             ; u_pipe|u_bf|u_weights|u_store|u_wr_cdc|dst_data_q[5]                                             ;
+;     --          ;           ;                                   ;             ; u_pipe|u_bf|u_weights|u_store|u_wr_cdc|dst_data_q[0]                                             ;
+; short           ; down      ; [(132, 368), (143, 375)]          ; 79.444 %    ;    High Routing Fan-Out                                                                          ;
+;     --          ;           ;                                   ;             ; u_pipe|u_bf|u_weights|u_store|u_wr_cdc|dst_data_q[5]                                             ;
+;     --          ;           ;                                   ;             ; u_pipe|u_bf|u_weights|u_store|u_wr_cdc|dst_data_q[9]                                             ;
+;     --          ;           ;                                   ;             ; u_pipe|u_bf|u_weights|u_store|u_wr_cdc|dst_data_q[10]                                            ;
+;     --          ;           ;                                   ;             ; u_pipe|u_bf|u_weights|u_store|u_wr_cdc|dst_data_q[6]                                             ;
+;     --          ;           ;                                   ;             ; u_pipe|u_bf|u_weights|u_store|u_wr_cdc|dst_data_q[28]                                            ;
+;     --          ;           ;                                   ;             ; u_pipe|u_bf|u_weights|u_store|u_wr_cdc|dst_data_q[8]                                             ;
+;     --          ;           ;                                   ;             ; u_pipe|u_bf|u_weights|u_store|u_wr_cdc|dst_data_q[12]                                            ;
+;     --          ;           ;                                   ;             ; u_pipe|g_hist_rep[1].u_history|g_ant[3].g_lane[0].u_bank|g_wr_in_reg.wr_addr_q[9]~_Duplicate     ;
+;     --          ;           ;                                   ;             ; u_pipe|g_hist_rep[1].u_history|g_ant[3].g_lane[0].u_bank|g_wr_in_reg.wr_addr_q[1]~_Duplicate     ;
+;     --          ;           ;                                   ;             ; u_pipe|g_hist_rep[1].u_history|g_ant[3].g_lane[0].u_bank|g_wr_in_reg.wr_addr_q[2]~_Duplicate     ;
+; short           ; down      ; [(132, 368), (143, 375)]          ; 79.444 %    ;    Long Distance                                                                                 ;
+;     --          ;           ;                                   ;             ; u_pipe|u_bf|u_weights|u_store|u_wr_cdc|dst_data_q[6]                                             ;
+;     --          ;           ;                                   ;             ; u_pipe|u_bf|u_weights|u_store|u_wr_cdc|dst_data_q[28]                                            ;
+;     --          ;           ;                                   ;             ; u_pipe|u_bf|u_weights|u_store|u_wr_cdc|dst_data_q[12]                                            ;
+;     --          ;           ;                                   ;             ; u_pipe|u_bf|u_weights|u_store|u_wr_cdc|dst_data_q[5]                                             ;
+;     --          ;           ;                                   ;             ; u_pipe|u_bf|u_weights|u_store|u_wr_cdc|dst_data_q[8]                                             ;
+;     --          ;           ;                                   ;             ; u_pipe|u_bf|u_weights|u_store|u_wr_cdc|dst_data_q[10]                                            ;
+;     --          ;           ;                                   ;             ; u_pipe|u_bf|u_weights|u_store|u_wr_cdc|dst_data_q[9]                                             ;
+;     --          ;           ;                                   ;             ; u_pipe|g_hist_rep[0].u_history|g_ant[3].g_lane[1].u_bank|g_rd_out_reg.out_q[6]                   ;
+;     --          ;           ;                                   ;             ; u_pipe|g_hist_rep[0].u_history|g_ant[3].g_lane[1].u_bank|g_rd_out_reg.out_q[9]                   ;
+;     --          ;           ;                                   ;             ; u_pipe|g_hist_rep[0].u_history|g_ant[3].g_lane[1].u_bank|g_rd_out_reg.out_q[2]                   ;
+; long high speed ; right     ; [(384, 208), (395, 215)]          ; 96.528 %    ;    High Routing Fan-Out                                                                          ;
+;     --          ;           ;                                   ;             ; u_pipe|g_hist_rep[0].u_history|g_ant[8].g_lane[0].u_bank|g_rd_in_reg.rd_addr_q[1]                ;
+;     --          ;           ;                                   ;             ; u_pipe|g_hist_rep[0].u_history|g_ant[8].g_lane[0].u_bank|g_rd_in_reg.rd_addr_q[8]                ;
+;     --          ;           ;                                   ;             ; u_pipe|g_hist_rep[0].u_history|g_ant[8].g_lane[0].u_bank|g_rd_in_reg.rd_addr_q[2]                ;
+;     --          ;           ;                                   ;             ; u_pipe|g_hist_rep[0].u_history|g_ant[8].g_lane[0].u_bank|g_rd_in_reg.rd_addr_q[3]                ;
+;     --          ;           ;                                   ;             ; u_pipe|g_hist_rep[0].u_history|g_ant[8].g_lane[0].u_bank|g_rd_in_reg.rd_addr_q[4]                ;
+;     --          ;           ;                                   ;             ; u_pipe|g_hist_rep[0].u_history|g_ant[8].g_lane[0].u_bank|g_rd_in_reg.rd_addr_q[5]                ;
+;     --          ;           ;                                   ;             ; u_pipe|g_hist_rep[0].u_history|g_ant[8].g_lane[0].u_bank|g_rd_in_reg.rd_addr_q[6]                ;
+;     --          ;           ;                                   ;             ; u_pipe|g_hist_rep[0].u_history|g_ant[8].g_lane[0].u_bank|g_rd_in_reg.rd_addr_q[7]                ;
+;     --          ;           ;                                   ;             ; u_pipe|g_hist_rep[0].u_history|g_ant[8].g_lane[0].u_bank|g_rd_in_reg.rd_addr_q[9]                ;
+;     --          ;           ;                                   ;             ; u_pipe|g_hist_rep[0].u_history|g_ant[8].g_lane[0].u_bank|g_rd_in_reg.rd_addr_q[10]               ;
+; long high speed ; right     ; [(384, 208), (395, 215)]          ; 96.528 %    ;    Long Distance                                                                                 ;
+;     --          ;           ;                                   ;             ; u_pipe|g_hist_rep[0].u_history|r1_addr_q[0][2]                                                   ;
+;     --          ;           ;                                   ;             ; u_pipe|g_hist_rep[0].u_history|beat_q[8][8]~ERTM                                                 ;
+;     --          ;           ;                                   ;             ; cfg_pfb_wr_data[14]                                                                              ;
+;     --          ;           ;                                   ;             ; u_pipe|g_pfb[15].u_pfb|admit                                                                     ;
+;     --          ;           ;                                   ;             ; cfg_pfb_wr_data[20]                                                                              ;
+;     --          ;           ;                                   ;             ; cfg_pfb_wr_data[6]                                                                               ;
+;     --          ;           ;                                   ;             ; cfg_pfb_wr_data[25]                                                                              ;
+;     --          ;           ;                                   ;             ; cfg_pfb_wr_data[18]                                                                              ;
+;     --          ;           ;                                   ;             ; cfg_pfb_wr_data[26]                                                                              ;
+;     --          ;           ;                                   ;             ; cfg_pfb_wr_data[16]                                                                              ;
+; long high speed ; left      ; [(144, 296), (155, 303)]          ; 99.671 %    ;    High Routing Fan-Out                                                                          ;
+;     --          ;           ;                                   ;             ; u_pipe|u_align|u_collect|u_out|wr_en                                                             ;
+;     --          ;           ;                                   ;             ; u_pipe|g_hist_rep[0].u_history|g_ant[11].g_lane[0].u_bank|g_rd_in_reg.rd_en_q~_Duplicate_1       ;
+;     --          ;           ;                                   ;             ; u_pipe|g_hist_rep[0].u_history|g_ant[11].g_lane[0].u_bank|g_rd_in_reg.rd_addr_q[2]~_Duplicate    ;
+;     --          ;           ;                                   ;             ; u_pipe|g_hist_rep[0].u_history|g_ant[11].g_lane[0].u_bank|g_rd_in_reg.rd_addr_q[10]~_Duplicate   ;
+;     --          ;           ;                                   ;             ; u_pipe|u_align|u_collect|Mux_106~0                                                               ;
+;     --          ;           ;                                   ;             ; u_pipe|u_align|u_collect|Mux_105~0                                                               ;
+;     --          ;           ;                                   ;             ; u_pipe|u_align|u_collect|u_out|wr_ptr_q[0]~_Duplicate_3                                          ;
+;     --          ;           ;                                   ;             ; u_pipe|u_align|u_collect|u_out|wr_ptr_q[1]~_Duplicate_1                                          ;
+;     --          ;           ;                                   ;             ; u_pipe|u_align_cdc|u_fifo|g_store.mem~8343                                                       ;
+;     --          ;           ;                                   ;             ; u_pipe|u_align_cdc|u_fifo|g_store.mem~8345                                                       ;
+; long high speed ; left      ; [(144, 296), (155, 303)]          ; 99.671 %    ;    Long Distance                                                                                 ;
+;     --          ;           ;                                   ;             ; u_pipe|g_hist_rep[0].u_history|r1_addr_q[0][10]                                                  ;
+;     --          ;           ;                                   ;             ; u_pipe|g_hist_rep[0].u_history|r1_addr_q[0][15]                                                  ;
+;     --          ;           ;                                   ;             ; u_pipe|g_hist_rep[0].u_history|r1_addr_q[0][13]                                                  ;
+;     --          ;           ;                                   ;             ; u_pipe|u_align_cdc|u_fifo|g_store.mem~8339                                                       ;
+;     --          ;           ;                                   ;             ; u_pipe|u_align_cdc|u_fifo|g_store.mem~8340                                                       ;
+;     --          ;           ;                                   ;             ; u_pipe|u_align_cdc|u_fifo|g_store.mem~8341                                                       ;
+;     --          ;           ;                                   ;             ; u_pipe|u_bf|hold_data_q[583]                                                                     ;
+;     --          ;           ;                                   ;             ; u_pipe|u_bf|hold_data_q[28]                                                                      ;
+;     --          ;           ;                                   ;             ; u_pipe|u_bf|hold_data_q[61]                                                                      ;
+;     --          ;           ;                                   ;             ; u_pipe|u_bf|hold_data_q[35]                                                                      ;
+; long high speed ; up        ; [(324, 392), (335, 399)]          ; 100.541 %   ;    High Routing Fan-Out                                                                          ;
+;     --          ;           ;                                   ;             ; u_pipe|g_cfar_per_beam[8].u_cfar|act_r_lag_q[1]~_Duplicate0RTM_50                                ;
+;     --          ;           ;                                   ;             ; u_pipe|g_cfar_per_beam[8].u_cfar|u_window|i22168~11                                              ;
+;     --          ;           ;                                   ;             ; u_pipe|g_cfar_per_beam[8].u_cfar|u_window|i22168~19                                              ;
+;     --          ;           ;                                   ;             ; u_pipe|g_cfar_per_beam[8].u_cfar|u_window|i22282~8                                               ;
+;     --          ;           ;                                   ;             ; u_pipe|g_cfar_per_beam[8].u_cfar|u_window|i22852~4                                               ;
+;     --          ;           ;                                   ;             ; u_pipe|g_cfar_per_beam[8].u_cfar|u_window|i22852~10                                              ;
+;     --          ;           ;                                   ;             ; u_pipe|g_cfar_per_beam[8].u_cfar|u_window|i23878~28                                              ;
+;     --          ;           ;                                   ;             ; u_pipe|g_cfar_per_beam[8].u_cfar|u_window|add_294~216                                            ;
+;     --          ;           ;                                   ;             ; u_pipe|g_cfar_per_beam[8].u_cfar|u_window|i22966~0                                               ;
+;     --          ;           ;                                   ;             ; u_pipe|g_cfar_per_beam[8].u_cfar|u_window|i23422~45                                              ;
+; long high speed ; up        ; [(324, 392), (335, 399)]          ; 100.541 %   ;    Long Distance                                                                                 ;
+;     --          ;           ;                                   ;             ; u_pipe|g_cfar_per_beam[8].u_cfar|act_r_lag_q[1]~_Duplicate0RTM_50                                ;
+;     --          ;           ;                                   ;             ; u_pipe|g_cfar_per_beam[8].u_cfar|u_window|i22168~11                                              ;
+;     --          ;           ;                                   ;             ; u_pipe|g_cfar_per_beam[8].u_cfar|u_window|i22168~19                                              ;
+;     --          ;           ;                                   ;             ; u_pipe|g_cfar_per_beam[8].u_cfar|u_window|i22282~8                                               ;
+;     --          ;           ;                                   ;             ; u_pipe|g_cfar_per_beam[8].u_cfar|u_window|i22168~33                                              ;
+;     --          ;           ;                                   ;             ; u_pipe|g_cfar_per_beam[8].u_cfar|u_window|i23878~9                                               ;
+;     --          ;           ;                                   ;             ; u_pipe|g_cfar_per_beam[8].u_cfar|u_window|i23878~28                                              ;
+;     --          ;           ;                                   ;             ; u_pipe|g_cfar_per_beam[8].u_cfar|u_window|i23992~8                                               ;
+;     --          ;           ;                                   ;             ; u_pipe|g_cfar_per_beam[8].u_cfar|u_window|i23992~10                                              ;
+;     --          ;           ;                                   ;             ; u_pipe|g_cfar_per_beam[8].u_cfar|u_window|i23992~14                                              ;
+; long high speed ; down      ; [(324, 400), (335, 407)]          ; 102.198 %   ;    High Routing Fan-Out                                                                          ;
+;     --          ;           ;                                   ;             ; core_rst_n~input                                                                                 ;
+;     --          ;           ;                                   ;             ; u_pipe|g_cfar_per_beam[8].u_cfar|act_r_lag_q[1]~_Duplicate0RTM_4RTMUX                            ;
+;     --          ;           ;                                   ;             ; u_pipe|g_cfar_per_beam[8].u_cfar|act_r_lag_q[1]~_Duplicate0RTM_3RTMUX                            ;
+;     --          ;           ;                                   ;             ; u_pipe|g_cfar_per_beam[8].u_cfar|u_window|i22282~0                                               ;
+;     --          ;           ;                                   ;             ; u_pipe|g_cfar_per_beam[8].u_cfar|u_window|i22282~4                                               ;
+;     --          ;           ;                                   ;             ; u_pipe|g_cfar_per_beam[8].u_cfar|u_window|i22282~10                                              ;
+;     --          ;           ;                                   ;             ; u_pipe|g_cfar_per_beam[8].u_cfar|u_window|i22282~12                                              ;
+;     --          ;           ;                                   ;             ; u_pipe|g_cfar_per_beam[8].u_cfar|u_window|i23308~45                                              ;
+;     --          ;           ;                                   ;             ; u_pipe|g_cfar_per_beam[8].u_cfar|u_window|add_266~6                                              ;
+;     --          ;           ;                                   ;             ; u_pipe|g_cfar_per_beam[8].u_cfar|u_window|add_266~16                                             ;
+; long high speed ; down      ; [(324, 400), (335, 407)]          ; 102.198 %   ;    Long Distance                                                                                 ;
+;     --          ;           ;                                   ;             ; core_rst_n~input                                                                                 ;
+;     --          ;           ;                                   ;             ; u_pipe|g_cfar_per_beam[8].u_cfar|act_r_lag_q[1]~_Duplicate0RTM_4RTMUX                            ;
+;     --          ;           ;                                   ;             ; u_pipe|g_cfar_per_beam[8].u_cfar|act_r_lag_q[1]~_Duplicate0RTM_3RTMUX                            ;
+;     --          ;           ;                                   ;             ; u_pipe|g_cfar_per_beam[8].u_cfar|u_window|i22282~0                                               ;
+;     --          ;           ;                                   ;             ; u_pipe|g_cfar_per_beam[8].u_cfar|u_window|i23764~20                                              ;
+;     --          ;           ;                                   ;             ; u_pipe|g_cfar_per_beam[8].u_cfar|u_window|i22282~10                                              ;
+;     --          ;           ;                                   ;             ; u_pipe|g_cfar_per_beam[8].u_cfar|u_window|i22282~12                                              ;
+;     --          ;           ;                                   ;             ; u_pipe|g_cfar_per_beam[8].u_cfar|u_window|add_262~136                                            ;
+;     --          ;           ;                                   ;             ; u_pipe|g_cfar_per_beam[8].u_cfar|u_window|i22282~32                                              ;
+;     --          ;           ;                                   ;             ; u_pipe|g_cfar_per_beam[8].u_cfar|u_window|i22396~14                                              ;
++-----------------+-----------+-----------------------------------+-------------+--------------------------------------------------------------------------------------------------+
+
+
++----------------------------------------------------------------------------------------+
+; Peak Total Grid Crossings                                                              ;
++-----------------------------------------------------------------+----------------------+
+; Net Name                                                        ; Total Grid Crossings ;
++-----------------------------------------------------------------+----------------------+
+; core_rst_n~input                                                ; 486                  ;
+; u_pipe|g_hist_rep[0].u_history|r1_addr_q[0][1]                  ; 403                  ;
+; u_pipe|g_hist_rep[1].u_history|r1_addr_q[0][1]                  ; 368                  ;
+; u_pipe|g_hist_rep[0].u_history|r1_addr_q[0][7]                  ; 366                  ;
+; u_pipe|u_dma_mem|req_count_q[31]~xsyn                           ; 365                  ;
+; u_pipe|g_hist_rep[1].u_history|r1_addr_q[0][7]                  ; 362                  ;
+; u_pipe|g_hist_rep[0].u_history|r1_addr_q[0][8]                  ; 359                  ;
+; u_pipe|g_hist_rep[0].u_history|r1_addr_q[0][2]                  ; 359                  ;
+; u_pipe|g_hist_rep[0].u_history|r1_addr_q[0][9]                  ; 357                  ;
+; u_pipe|g_hist_rep[1].u_history|r1_addr_q[0][10]                 ; 357                  ;
+; u_pipe|g_hist_rep[0].u_history|r1_addr_q[0][6]                  ; 354                  ;
+; u_pipe|g_hist_rep[0].u_history|r1_addr_q[0][4]                  ; 353                  ;
+; u_pipe|g_hist_rep[0].u_history|r1_addr_q[0][3]                  ; 353                  ;
+; u_pipe|g_hist_rep[1].u_history|r1_addr_q[0][2]                  ; 351                  ;
+; u_pipe|g_hist_rep[1].u_history|r1_addr_q[0][5]                  ; 350                  ;
+; u_pipe|g_hist_rep[1].u_history|r1_addr_q[0][6]                  ; 348                  ;
+; u_pipe|g_hist_rep[1].u_history|r1_addr_q[0][4]                  ; 348                  ;
+; u_pipe|g_hist_rep[1].u_history|r1_addr_q[0][9]                  ; 348                  ;
+; u_pipe|g_hist_rep[1].u_history|r1_addr_q[0][3]                  ; 346                  ;
+; u_pipe|g_hist_rep[1].u_history|r1_addr_q[0][8]                  ; 346                  ;
+; u_pipe|g_hist_rep[0].u_history|r1_addr_q[0][10]                 ; 346                  ;
+; u_pipe|g_hist_rep[0].u_history|r1_addr_q[0][5]                  ; 345                  ;
+; u_pipe|u_align_cdc|u_fifo|wr_gray_q[0]~xsyn                     ; 342                  ;
+; u_pipe|g_hist_rep[1].u_history|r1_addr_q[0][15]                 ; 245                  ;
+; u_pipe|g_hist_rep[1].u_history|r1_addr_q[0][12]                 ; 243                  ;
+; u_pipe|g_hist_rep[0].u_history|r1_addr_q[0][14]                 ; 239                  ;
+; u_pipe|g_hist_rep[1].u_history|r1_addr_q[0][13]                 ; 239                  ;
+; u_pipe|g_hist_rep[0].u_history|r1_addr_q[0][11]                 ; 237                  ;
+; u_pipe|g_hist_rep[0].u_history|r1_addr_q[0][16]                 ; 237                  ;
+; u_pipe|g_hist_rep[1].u_history|g_ant[0].g_lane[0].u_bank|i111~0 ; 235                  ;
+; u_pipe|g_hist_rep[0].u_history|r1_addr_q[0][13]                 ; 231                  ;
+; u_pipe|g_hist_rep[0].u_history|g_ant[0].g_lane[1].u_bank|i111~0 ; 231                  ;
+; u_pipe|g_hist_rep[1].u_history|r1_addr_q[0][11]                 ; 230                  ;
+; u_pipe|g_hist_rep[1].u_history|g_ant[0].g_lane[1].u_bank|i111~0 ; 229                  ;
+; u_pipe|g_hist_rep[0].u_history|r1_addr_q[0][15]                 ; 228                  ;
+; u_pipe|g_hist_rep[1].u_history|r1_addr_q[0][14]                 ; 226                  ;
+; u_pipe|g_hist_rep[1].u_history|r1_addr_q[0][16]                 ; 226                  ;
+; u_pipe|g_hist_rep[0].u_history|r1_addr_q[0][12]                 ; 224                  ;
+; u_pipe|g_hist_rep[0].u_history|g_ant[0].g_lane[0].u_bank|i111~0 ; 220                  ;
+; u_pipe|g_hist_rep[0].u_history|i1274~0_ERTM                     ; 157                  ;
+; cfg_hist_enable                                                 ; 151                  ;
+; u_pipe|u_bf|u_weights|u_store|bank_sel                          ; 147                  ;
+; u_pipe|g_hist_rep[1].u_history|i22717~0                         ; 141                  ;
+; u_pipe|u_bf|u_weights|u_store|u_wr_cdc|dst_data_q[26]           ; 141                  ;
+; u_pipe|u_bf|u_weights|u_store|u_wr_cdc|dst_data_q[27]           ; 140                  ;
+; u_pipe|u_bf|u_weights|u_store|u_wr_cdc|dst_data_q[15]           ; 140                  ;
+; u_pipe|u_bf|u_weights|u_store|u_wr_cdc|dst_data_q[10]           ; 139                  ;
+; u_pipe|u_bf|u_weights|u_store|u_wr_cdc|dst_data_q[28]           ; 139                  ;
+; u_pipe|u_bf|u_weights|u_store|u_wr_cdc|dst_data_q[12]           ; 139                  ;
+; u_pipe|u_bf|u_weights|u_store|u_wr_cdc|dst_data_q[6]            ; 138                  ;
++-----------------------------------------------------------------+----------------------+
+
+
