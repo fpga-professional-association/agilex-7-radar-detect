@@ -97,3 +97,24 @@ successor arrives before the iter-1+2 fit at 15:55 lands, WAIT for it;
 do NOT start a new fit on top of the running one (fits stack-cost each
 other severely).
 
+### Successor agent 2 — status snapshot (2026-07-28 16:12)
+
+Second successor arrived. Confirmed the iter-1+2 full fit against
+`full_agmf039` seed 1 is IN FLIGHT (quartus_fit PID 10340 alive with
+~26 GB resident, log `results/timing/logs/iter1and2_v2_fit.log`). The
+synthesis phase completed at 16:02:14 (per `agilex7_wideband.syn.summary`
+timestamp); the Fitter was launched at 16:02+ and is expected to finish
+around 17:35 local (the Phase-6 baseline fit took 5673 s = 94 min in
+its immutable record). No new fit was launched; STA has not yet
+happened.
+
+Iteration 3 will be selected off the STA report once the current fit
+completes, using the same A-E selection tree above. If the successor
+after me arrives after 17:35, follow steps 1-7 of "After the fit lands"
+above and proceed straight into iteration 3. If the fit is still in
+flight, WAIT (do not stack fits).
+
+Iteration table in PR #51 body is still `*TBD*` for iters 1 and 2;
+`optimization_history.jsonl` has only the baseline row. Both get
+updated the moment the STA report lands.
+
