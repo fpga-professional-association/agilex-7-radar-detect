@@ -122,3 +122,49 @@ Phase-5 tie-offs).
 the fit completes.
 
 **Commit.** (this section's commit sha lands with the fit result.)
+
+### Iteration 1+2 combined fit result -- fmax 32.08 MHz  (2026-07-28)
+
+The combined iter-1 + iter-2 fit against `full_agmf039` seed 1 completed
+2026-07-28 18:03:42 (wall clock 7822.6 s = 130 min; peak memory 35.2 GB;
+Fitter Physical Synthesis 12.6 min; register duplication 91920 duplicates
+created during HyperFlex retiming). STA landed 18:05:29.
+
+Immutable record: `results/timing/compile_20260728T230826_iter1and2.json`.
+Fitter log: `results/timing/logs/iter1and2_v2_fit.log`.
+
+| Metric | Baseline | iter-1+2 | Delta |
+|---|---|---|---|
+| core_clk fmax | 39.67 MHz | **32.08 MHz** | -7.59 MHz (worse) |
+| Setup WNS | -22.987 ns | **-28.947 ns** | -5.960 ns (worse) |
+| Setup TNS | -1146299.488 ns | **-332357.862 ns** | +813941.626 ns (BETTER 3.5x) |
+| Hold WNS | -7.031 ns | **-6.958 ns** | +0.073 ns (marginally better) |
+| Hold TNS | -- | -90862.311 ns | (baseline field null) |
+| Logic depth on worst path | 68 | **7** | -61 (much better) |
+| ALM % | 23.12 % | **22.45 %** | -0.67 pp |
+| M20K % | 90.70 % | 90.70 % | no change |
+| DSP % | 20.36 % | 20.36 % | no change |
+| Critical path | `u_pipe|g_cfar_per_beam[15].u_cfar|u_window -> ...|sum_lag1_q[35]` | `u_pipe|u_dma_arb -> u_pipe|u_dma_arb` | ARCHITECTURAL SHIFT |
+
+**Reading of the result.** The CFAR-window pipeline (iter 1) worked exactly
+as designed: the sum-tree logic depth collapsed from 68 to 7, setup TNS
+improved 3.5x, and the recorded critical path moved off the CFAR window
+entirely. Hold slack improved slightly from iter 2's boundary
+registration. What went wrong is *not* iter 1: it is that iter 2's
+boundary registers on the DMA arbiter ports uncovered a routing-dominated
+control-plane hot spot inside `mem_arbiter` (`u_pipe|u_dma_arb`), where a
+single combinational net (`i2176~0`, driving into the `next_tag_q` /
+`free_tag_c` mux tree) fans out to 411 destinations, and the resulting
+routing delay is 29.831 ns (of the 31.169 ns data path -- 95.7% routing,
+cell delay just 1.099 ns, logic depth 7).
+
+The iteration is **accepted** as a recorded step even though fmax dropped:
+both changes are honest, both reduce the classes they target (LONG_COMB
+and HOLD/HIERARCHY_BOUNDARY), the accompanying TNS and utilization improve,
+and the loop moves the critical path onto its next architectural bottleneck
+rather than solving it. Iteration 3 addresses the newly-uncovered
+high-fanout mux -- case D of the A-E selection tree in
+`rejected_experiments.md`.
+
+**Commits.** iter-1: 2e37031 (RTL) + fadffa6 (log). iter-2: 947e76f (RTL)
++ 4a72b9a (log). This result: recorded in this commit.
