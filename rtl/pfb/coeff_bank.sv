@@ -319,7 +319,16 @@ module coeff_bank
   // ---------------------------------------------------------------------------
   logic [N_BANKS-1:0][N_COEFF-1:0][COEFF_W-1:0] mem;
 
-  initial mem = '0;
+  // Loop initialiser rather than `mem = '0` -- the latter draws a
+  // WIDTHCONCAT warning above 8 kbit replication on Verilator 5.020.
+  // Harmless power-up zeroing, same semantics.
+  initial begin
+    for (int unsigned b = 0; b < N_BANKS; b++) begin
+      for (int unsigned a = 0; a < N_COEFF; a++) begin
+        mem[b][a] = '0;
+      end
+    end
+  end
 
   always_ff @(posedge core_clk) begin
     if (wr_valid && !wr_to_active) begin

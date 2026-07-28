@@ -32,14 +32,14 @@ module pipeline_top
     input  wire         cfg_pfb_wr_valid,
     output wire         cfg_pfb_wr_ready,
     input  wire         cfg_pfb_wr_bank,
-    input  wire [3:0]   cfg_pfb_wr_addr,
+    input  wire [7:0]   cfg_pfb_wr_addr,   // widened to 8b for full_agmf039
     input  wire [31:0]  cfg_pfb_wr_data,
 
     // ---- beamformer weight bank programming ------------------------------
     input  wire         cfg_bf_wr_valid,
     output wire         cfg_bf_wr_ready,
     input  wire         cfg_bf_wr_bank,
-    input  wire [3:0]   cfg_bf_wr_addr,
+    input  wire [7:0]   cfg_bf_wr_addr,    // widened to 8b for full_agmf039
     input  wire [31:0]  cfg_bf_wr_data,
 
     // ---- pipeline swap request --------------------------------------------
@@ -72,13 +72,14 @@ module pipeline_top
     input  wire         cfg_cfar_status_clear,
 
     // ---- input stimulus (per antenna, unpacked) --------------------------
-    input  wire [3:0]   s_valid,
-    output wire [3:0]   s_ready,
-    input  wire [3:0]   s_sof,
-    input  wire [3:0]   s_eof,
-    // Antenna a, phase p occupies s_data[a*128 + p*32 +: 32]
-    input  wire [255:0] s_data,
-    input  wire [15:0]  s_seq,
+    // Widths follow config_pkg so tiny/medium/full elaborate this same top.
+    input  wire [config_pkg::N_ANTENNAS-1:0]                              s_valid,
+    output wire [config_pkg::N_ANTENNAS-1:0]                              s_ready,
+    input  wire [config_pkg::N_ANTENNAS-1:0]                              s_sof,
+    input  wire [config_pkg::N_ANTENNAS-1:0]                              s_eof,
+    // Antenna a, phase p occupies s_data[a*SPC*32 + p*32 +: 32].
+    input  wire [config_pkg::N_ANTENNAS*config_pkg::SAMPLES_PER_CYCLE*32-1:0] s_data,
+    input  wire [15:0]                                                    s_seq,
 
     // ---- output: CFAR detections -----------------------------------------
     output wire         m_valid,
@@ -89,6 +90,8 @@ module pipeline_top
     output wire         m_eof,
     output wire [15:0]  m_seq,
     output wire [3:0]   m_id,
+    output wire [7:0]   m_beam_id,
+    output wire [7:0]   m_bin_par_id,
 
     // ---- telemetry / status -----------------------------------------------
     output wire [31:0]  stat_pipe_frame_count,
@@ -117,6 +120,9 @@ module pipeline_top
     output wire [31:0]  stat_cfar_det_count,
     output wire [31:0]  stat_cfar_sup_count,
     output wire [31:0]  stat_cfar_frame_count,
+    output wire         stat_covar_sat_any,
+    output wire [31:0]  stat_covar_pair0_window,
+    output wire [31:0]  stat_covar_pair0_samples,
 
     // ---- DMA readback + statistics (issue #19 revision) ------------------
     input  wire         dma_mem_req_valid,
@@ -194,6 +200,8 @@ module pipeline_top
       .m_eof                     (m_eof),
       .m_seq                     (m_seq),
       .m_id                      (m_id),
+      .m_beam_id                 (m_beam_id),
+      .m_bin_par_id              (m_bin_par_id),
 
       .stat_pipe_frame_count     (stat_pipe_frame_count),
       .stat_pipe_swap_count      (stat_pipe_swap_count),
@@ -216,6 +224,9 @@ module pipeline_top
       .stat_cfar_det_count       (stat_cfar_det_count),
       .stat_cfar_sup_count       (stat_cfar_sup_count),
       .stat_cfar_frame_count     (stat_cfar_frame_count),
+      .stat_covar_sat_any        (stat_covar_sat_any),
+      .stat_covar_pair0_window   (stat_covar_pair0_window),
+      .stat_covar_pair0_samples  (stat_covar_pair0_samples),
 
       .dma_mem_req_valid         (dma_mem_req_valid),
       .dma_mem_req_ready         (dma_mem_req_ready),

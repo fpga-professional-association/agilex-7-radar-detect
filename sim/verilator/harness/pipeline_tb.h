@@ -43,14 +43,25 @@
 
 namespace pipeline_tb {
 
-// Medium-config sizes, matching rtl/top/benchmark_sim_top.sv
-constexpr unsigned kNAnt      = 4;
-constexpr unsigned kSpc       = 2;
-constexpr unsigned kFftSize   = 256;
-constexpr unsigned kNBeams    = 4;
+// Config-driven sizes, pulled from sim_config (generated from
+// config/<name>.json by scripts/build_verilator.py, mirrored by
+// benchmark_pipeline_top's config_pkg import). Same generated numbers are
+// used by the RTL, so tiny/medium/full_agmf039 all elaborate this same
+// harness against the same top.
+constexpr unsigned kNAnt      = sim_config::N_ANTENNAS;
+constexpr unsigned kSpc       = sim_config::SAMPLES_PER_CYCLE;
+constexpr unsigned kFftSize   = sim_config::FFT_SIZE;
+constexpr unsigned kNBeams    = sim_config::N_BEAMS;
 
 // Beats per frame at the PFB input: FFT_SIZE / SPC.
 constexpr unsigned kBeatsPerFrame = kFftSize / kSpc;
+
+// Serialized-fanout constants used by Phase-5 tests. POWER_FANOUT is the
+// number of (beam, bin_par) cells per beamformer beat; BIN_PAR is held at 2
+// in the RTL. These match the RTL's own localparam values.
+constexpr unsigned kBinPar     = 2;
+constexpr unsigned kBeamPar    = kNBeams;
+constexpr unsigned kPowerFanout = kBinPar * kBeamPar;
 
 enum class BpProfile {
   kNone,

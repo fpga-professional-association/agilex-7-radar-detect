@@ -127,7 +127,9 @@ void Session::idle_inputs() {
   top_->s_valid = 0;
   top_->s_sof   = 0;
   top_->s_eof   = 0;
-  for (int i = 0; i < 8; ++i) top_->s_data[i] = 0;
+  // Total 32-bit words in s_data: N_ANTENNAS * SAMPLES_PER_CYCLE
+  constexpr unsigned kSDataWords = kNAnt * kSpc;
+  for (unsigned i = 0; i < kSDataWords; ++i) top_->s_data[i] = 0;
   top_->s_seq   = 0;
 
   top_->cfg_pfb_wr_valid = 0;
@@ -282,26 +284,38 @@ void Session::core_drive() {
     return;
   }
 
+  // s_data layout matches benchmark_pipeline_top's port declaration:
+  //   antenna a, phase p occupies bits [a*SPC*32 + p*32 +: 32]
+  // In the Verilator wide vector (32-bit little-endian words) that maps to
+  // s_data[a*SPC + p] for phase p of antenna a. No padding between antennas.
+  //
+  // The RTL port `s_valid` and `s_sof`/`s_eof` are N_ANTENNAS bits wide;
+  // Verilator represents them as an integer that fits their width. On the
+  // full config N_ANTENNAS=16 -> 16 bits, so we widen the temporary to
+  // uint32_t and mask before assignment (top_->s_valid is a CData for <=8
+  // bits, SData for 9..16). Assigning through the pointer variant lets the
+  // same code handle both.
+  std::uint32_t v32 = 0, sof32 = 0, eof32 = 0;
   for (unsigned a = 0; a < kNAnt; ++a) {
     if (in_q_[a].empty()) continue;
     if (input_gap_ > 0.0 && harness::bernoulli(gap_rng_, input_gap_)) continue;
     const InBeat& b = in_q_[a].front();
-    v |= static_cast<std::uint8_t>(1u << a);
-    if (b.sof) sof |= static_cast<std::uint8_t>(1u << a);
-    if (b.eof) eof |= static_cast<std::uint8_t>(1u << a);
+    v32 |= (1u << a);
+    if (b.sof) sof32 |= (1u << a);
+    if (b.eof) eof32 |= (1u << a);
     for (unsigned p = 0; p < kSpc; ++p) {
-      top_->s_data[a * 4 + p] = b.phase[p];
-    }
-    // Zero the unused SPC slots for antenna a.
-    for (unsigned p = kSpc; p < 4; ++p) {
-      top_->s_data[a * 4 + p] = 0;
+      top_->s_data[a * kSpc + p] = b.phase[p];
     }
     if (a == 0) seq_bits = b.seq;
   }
-  top_->s_valid = v;
-  top_->s_sof   = sof;
-  top_->s_eof   = eof;
+  // Implicit narrowing on assignment: Verilator's CData / SData is unsigned,
+  // so assigning a uint32_t truncates to the port width. Medium N_ANT=4
+  // picks CData (8b); full N_ANT=16 picks SData (16b). Both work.
+  top_->s_valid = v32;
+  top_->s_sof   = sof32;
+  top_->s_eof   = eof32;
   top_->s_seq   = seq_bits;
+  (void)v; (void)sof; (void)eof;  // legacy locals, kept unused for continuity
 
   // Detection output ready, subject to backpressure profile.
   top_->m_ready = m_ready_next() ? 1 : 0;
@@ -399,7 +413,8 @@ void Session::program_pfb_coeff(std::uint8_t bank, std::uint16_t addr,
                                 std::uint32_t val) {
   top_->cfg_pfb_wr_valid = 1;
   top_->cfg_pfb_wr_bank  = bank;
-  top_->cfg_pfb_wr_addr  = static_cast<std::uint8_t>(addr & 0x1f);
+  // Port is 8 bits (full config), sliced to $clog2(PHASES*TAPS) inside the top.
+  top_->cfg_pfb_wr_addr  = static_cast<std::uint8_t>(addr & 0xff);
   top_->cfg_pfb_wr_data  = val;
   // Wait for cfg_pfb_wr_ready; the coefficient bank crosses cfg_clk boundary
   // so we advance both clocks a few cycles.
@@ -414,7 +429,8 @@ void Session::program_bf_weight(std::uint8_t bank, std::uint8_t addr,
                                 std::uint32_t val) {
   top_->cfg_bf_wr_valid = 1;
   top_->cfg_bf_wr_bank  = bank;
-  top_->cfg_bf_wr_addr  = static_cast<std::uint8_t>(addr & 0x0f);
+  // Port is 8 bits (full config), sliced to $clog2(N_BEAMS*N_ANT) inside the top.
+  top_->cfg_bf_wr_addr  = static_cast<std::uint8_t>(addr);
   top_->cfg_bf_wr_data  = val;
   for (int i = 0; i < 64; ++i) {
     sched_.run_cycles(cfg_, 1, time_limit_);
@@ -428,29 +444,28 @@ void Session::request_pipeline_swap() {
 }
 
 bool Session::program_and_swap_to_active_banks() {
-  // PFB coefficient bank 1: PHASES=2, TAPS=8 -> 16 addresses, addressed in
-  // phase-major order (address = phase*TAPS + tap). Program tap 0 of each
+  // PFB coefficient bank 1: PHASES=SPC, TAPS from config. Address in
+  // phase-major order (address = phase * TAPS + tap). Program tap 0 of each
   // phase with a large-but-safe real coefficient and every other tap with
-  // zero. That makes the polyphase filter a phase-preserving identity in
-  // the passband, so a tone at the FFT input comes through at its own
-  // input amplitude (no filter gain change) and the tone bin remains
-  // dominant after the FFT. 0x00007FFF is Q1.15 (re=1-2^-15, im=0), the
-  // largest legal positive coefficient.
+  // zero -- makes the filter a phase-preserving identity in the passband.
   const std::uint32_t pfb_active = 0x00007FFFu;
   const std::uint32_t pfb_zero   = 0x00000000u;
-  for (unsigned addr = 0; addr < 16; ++addr) {
-    // Address mapping: phase * TAPS + tap, TAPS=8. Tap 0 for each phase.
-    const unsigned tap = addr & 0x7u;
+  const unsigned pfb_taps      = sim_config::PFB_TAPS;
+  const unsigned pfb_addr_count = kSpc * pfb_taps;
+  for (unsigned addr = 0; addr < pfb_addr_count; ++addr) {
+    const unsigned tap = addr % pfb_taps;
     program_pfb_coeff(/*bank=*/1, static_cast<std::uint16_t>(addr),
                       tap == 0 ? pfb_active : pfb_zero);
   }
-  // Beamformer weights bank 1: N_BEAMS=4, N_ANT=4 -> 16 addresses. Uniform
-  // weights so the antenna-permutation invariant is a symmetric sum.
-  // A smaller weight (0x00001000 = 4096/32768 = 0.125) so the beam sum
-  // 4 * 0.125 * antenna_amp does not saturate; the resulting power stays
-  // in a comfortable range for the CFAR threshold check.
-  const std::uint32_t bf_val = 0x00001000u;
-  for (unsigned addr = 0; addr < 16; ++addr) {
+  // Beamformer weights bank 1: N_BEAMS * N_ANT addresses. Uniform weights.
+  // Scale down enough that N_ANT * weight * sample stays in range: use
+  //   weight ~= 0.5 / N_ANT scaled to Q1.15.
+  // At medium (N_ANT=4) that is 0.125 = 0x1000; at full (N_ANT=16) it is
+  // 0.03125 = 0x0400. This keeps power_calc's saturation bound satisfied at
+  // every config without changing the CFAR test's arithmetic beyond N_ANT.
+  const std::uint32_t bf_val = static_cast<std::uint32_t>(0x8000u / kNAnt / 2u);
+  const unsigned bf_addr_count = sim_config::N_BEAMS * kNAnt;
+  for (unsigned addr = 0; addr < bf_addr_count; ++addr) {
     program_bf_weight(/*bank=*/1, static_cast<std::uint8_t>(addr), bf_val);
   }
   request_pipeline_swap();

@@ -167,16 +167,27 @@ module fft_delay_line #(
   // description of "delay by DEPTH".
   // ---------------------------------------------------------------------------
 `ifndef SYNTHESIS
-  logic [WIDTH-1:0] shadow [DEPTH];
+  // Shadow shift register. Verilator 5.020 refuses to compile a for-loop
+  // with delayed assignments to an unpacked array (BLKLOOPINIT) when the
+  // loop bound is large. Rewrite the shift as a packed vector so the
+  // element index is a bit-slice select rather than an array lookup and
+  // the shift is a single non-blocking assignment. Semantics unchanged.
+  logic [DEPTH-1:0][WIDTH-1:0] shadow;
   logic [31:0]      pushed_q;
 
   always_ff @(posedge clk) begin
     if (!rst_n) begin
       pushed_q <= 32'd0;
     end else if (en) begin
-      for (int unsigned i = DEPTH - 1; i > 0; i--) shadow[i] <= shadow[i-1];
       shadow[0] <= d;
       if (pushed_q < 32'hFFFF_FFFF) pushed_q <= pushed_q + 32'd1;
+    end
+  end
+  if (DEPTH > 1) begin : g_shadow_shift
+    always_ff @(posedge clk) begin
+      if (rst_n && en) begin
+        shadow[DEPTH-1:1] <= shadow[DEPTH-2:0];
+      end
     end
   end
 

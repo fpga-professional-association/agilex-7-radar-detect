@@ -1,10 +1,17 @@
 // -----------------------------------------------------------------------------
-// benchmark_sim_top - medium-config integrated processing pipeline (issue #17).
+// benchmark_sim_top - config-driven integrated processing pipeline (issues #17
+// and #20).
 //
 // SPEC.md 4.1 defines benchmark_sim_top as the Verilator-facing top; SPEC 19
 // Phase 3 asks that PFB -> FFT -> history -> alignment -> beamformer ->
-// power/covariance -> CFAR be wired together into a single medium-config
-// pipeline exercised by the C++ harness. This file is that wiring.
+// power/covariance -> CFAR be wired together into a single pipeline exercised
+// by the C++ harness. This file is that wiring.
+//
+// Issue #20 revision: geometry parameters (N_ANT, SPC, FFT_SIZE, PFB_TAPS,
+// N_BEAMS, HIST_FRAMES, N_COVAR_PAIRS, CFAR_MAX_GUARD, CFAR_MAX_REF) are now
+// pulled from `config_pkg` -- the same generated package the C++ harness reads
+// -- so the exact same RTL elaborates for tiny, medium, and full_agmf039. See
+// DECISIONS.md 2026-07-27 "Phase 5 config-driven pipeline top".
 //
 // NAMING NOTE (issue #17). The Phase-0 loopback DUT currently lives at
 // sim/verilator/tops/benchmark_sim_top.sv and shares this module name. Rather
@@ -133,15 +140,19 @@ module benchmark_pipeline_top
     input  wire         cfg_pfb_wr_valid,
     output wire         cfg_pfb_wr_ready,
     input  wire         cfg_pfb_wr_bank,
-    // clog2(PHASES*TAPS) = clog2(2*8) = 4. Sized to the pfb_bank port.
-    input  wire [3:0]   cfg_pfb_wr_addr,
+    // Width sized for the largest config: full_agmf039 has PHASES=8, TAPS=16
+    // -> clog2(128) = 7 bits; medium is clog2(16) = 4. 8 bits is a safe
+    // upper bound that costs only 4 spare wires at medium and lets one port
+    // shape cover every config.
+    input  wire [7:0]   cfg_pfb_wr_addr,
     input  wire [31:0]  cfg_pfb_wr_data,
 
     // ---- beamformer weight bank programming (cfg_clk domain) --------------
     input  wire         cfg_bf_wr_valid,
     output wire         cfg_bf_wr_ready,
     input  wire         cfg_bf_wr_bank,
-    input  wire [3:0]   cfg_bf_wr_addr,      // clog2(N_BEAMS*N_ANT) = clog2(16)
+    // Width sized for full_agmf039: N_BEAMS=16, N_ANT=16 -> clog2(256) = 8.
+    input  wire [7:0]   cfg_bf_wr_addr,
     input  wire [31:0]  cfg_bf_wr_data,
 
     // ---- pipeline swap request (core_clk domain) --------------------------
@@ -178,15 +189,16 @@ module benchmark_pipeline_top
     // ---- input stimulus (SPEC 5, per antenna) ------------------------------
     // The C++ harness drives the input side (per antenna, SAMPLES_PER_CYCLE
     // complex samples per beat). Antenna `a` is bit `a` of s_valid/s_ready.
-    input  wire [3:0]   s_valid,
-    output wire [3:0]   s_ready,
-    input  wire [3:0]   s_sof,
-    input  wire [3:0]   s_eof,
+    // Port widths derive from config_pkg so tiny/medium/full elaborate this
+    // same top; the harness reads config_sim.h for its C++ mirror.
+    input  wire [config_pkg::N_ANTENNAS-1:0]                            s_valid,
+    output wire [config_pkg::N_ANTENNAS-1:0]                            s_ready,
+    input  wire [config_pkg::N_ANTENNAS-1:0]                            s_sof,
+    input  wire [config_pkg::N_ANTENNAS-1:0]                            s_eof,
     // Antenna `a`, phase `p` (p=0..SAMPLES_PER_CYCLE-1) occupies
-    // s_data[a*128 + p*32 +: 32], packed { im, re } as fxp_complex_t.
-    // 4 antennas * 2 samples/cycle * 32 bits = 256 bits.
-    input  wire [255:0] s_data,
-    input  wire [15:0]  s_seq,               // shared, source-labelled
+    // s_data[a*SPC*32 + p*32 +: 32], packed { im, re } as fxp_complex_t.
+    input  wire [config_pkg::N_ANTENNAS*config_pkg::SAMPLES_PER_CYCLE*32-1:0] s_data,
+    input  wire [15:0]                                                  s_seq,
 
     // ---- output: CFAR detections ------------------------------------------
     output wire         m_valid,
@@ -196,18 +208,17 @@ module benchmark_pipeline_top
     // Full CFAR event (CFAR_EVENT_W = 176 bits) zero-extended to 256 bits so
     // tests can compare byte-for-byte against the memory word the DMA path
     // writes. Registered so the C++ observer's read after advance_cycles(1)
-    // returns a stable, cycle-aligned value: the value updates on the SAME
-    // posedge as m_valid rises (using cfar_m_valid && dma_tap_s_ready
-    // computed with the payload just presented by cfar_core), and the C++
-    // read happens after the eval that follows the posedge. Combinational
-    // wide slices of cfar_m_payload have shown observation anomalies on the
-    // first m_valid cycle after a stall under Verilator 5.020 (see the
-    // issue #19 revision DECISIONS entry).
+    // returns a stable, cycle-aligned value.
     output wire [255:0] m_event_full,
     output wire         m_sof,
     output wire         m_eof,
     output wire [15:0]  m_seq,
     output wire [3:0]   m_id,
+    // Phase-5 addition: the (beam_id, bin_par_lane) tag carried through the
+    // serialized CFAR feed lets a test attribute a detection back to its
+    // origin. Widths match FANOUT_IDX_W (see below).
+    output wire [7:0]   m_beam_id,
+    output wire [7:0]   m_bin_par_id,
 
     // ---- telemetry / status -----------------------------------------------
     output wire [31:0]  stat_pipe_frame_count,
@@ -237,6 +248,14 @@ module benchmark_pipeline_top
     output wire [31:0]  stat_cfar_sup_count,
     output wire [31:0]  stat_cfar_frame_count,
 
+    // ---- covariance engine telemetry (Phase 5 fan-out, issue #20) ---------
+    // Aggregate counters: sat_any is the OR of any pair's sticky flag; the
+    // window/sample counts are of pair 0 (representative) so a test can prove
+    // the engine is integrating rather than idle.
+    output wire         stat_covar_sat_any,
+    output wire [31:0]  stat_covar_pair0_window,
+    output wire [31:0]  stat_covar_pair0_samples,
+
     // ---- DMA / packet-network / memory tap (issue #19 revision) -----------
     // CFAR detection events are FORKED off the m_valid/m_ready stream
     // (cfar_m_ready = m_ready AND dma_tap_ready) and injected into a small
@@ -264,14 +283,17 @@ module benchmark_pipeline_top
 );
 
   // ---------------------------------------------------------------------------
-  // Medium-config geometry (SPEC 11 medium)
+  // Config-driven geometry (SPEC 11)
+  // Everything below is pulled from config_pkg, which scripts/build_verilator.py
+  // regenerates from config/<name>.json before every build. The same package is
+  // consumed by the C++ harness (config_sim.h), so tests and RTL never disagree.
   // ---------------------------------------------------------------------------
-  localparam int unsigned N_ANT     = 4;
-  localparam int unsigned SPC       = 2;
-  localparam int unsigned FFT_SIZE  = 256;
-  localparam int unsigned PFB_TAPS  = 8;
-  localparam int unsigned N_BEAMS   = 4;
-  localparam int unsigned HIST_FRAMES = 16;
+  localparam int unsigned N_ANT       = config_pkg::N_ANTENNAS;
+  localparam int unsigned SPC         = config_pkg::SAMPLES_PER_CYCLE;
+  localparam int unsigned FFT_SIZE    = config_pkg::FFT_SIZE;
+  localparam int unsigned PFB_TAPS    = config_pkg::PFB_TAPS;
+  localparam int unsigned N_BEAMS     = config_pkg::N_BEAMS;
+  localparam int unsigned HIST_FRAMES = config_pkg::HISTORY_FRAMES;
 
   localparam int unsigned MULT_PIPE = 4;
 
@@ -281,6 +303,11 @@ module benchmark_pipeline_top
   // stream. That is a legitimate memory subsystem architecture for a
   // multi-port read pattern and is what makes the network's routing across
   // BIN_PAR = 2 lanes observable in the integrated build.
+  //
+  // Held at 2 across all configs on purpose: expanding BIN_PAR to 4 or higher
+  // is a full-scale performance study belonging to Phase 6/7 (issues #21-#22).
+  // What Phase 5 changes is per-(beam, bin) fan-out downstream of the beamformer,
+  // not the alignment lane count -- see the per-beam power fan-out at Stage 7.
   localparam int unsigned BIN_PAR = 2;
   // Small reassembly bank -- 4 groups is enough to exercise the sequence
   // check without giant SRAMs.
@@ -289,6 +316,38 @@ module benchmark_pipeline_top
   // Beamformer parallelism -- BEAM_PAR = N_BEAMS gives no time multiplex, the
   // simplest wiring at integration time. BEAM_MUX = 1.
   localparam int unsigned BEAM_PAR = N_BEAMS;
+
+  // ---------------------------------------------------------------------------
+  // Phase-5 fan-out / covariance / CFAR-serialization parameters (issue #20)
+  // ---------------------------------------------------------------------------
+  // POWER_FANOUT is the number of (beam, bin_par) samples per beamformer beat.
+  // Each beat we instantiate POWER_FANOUT parallel power_calc units, then
+  // ROUND-ROBIN SERIALIZE the POWER_FANOUT power values into a stream of
+  // POWER_FANOUT one-cell beats to a SINGLE cfar_core, tagging each beat with
+  // (beam_id, bin_par_lane). This is the "documented, spec-compliant
+  // serialization" the issue authorises: CFAR still sees one cell per beat
+  // (SPEC 7.7's contract), the frame boundary is preserved (first-serialized
+  // sample of first-beat carries sof, last of last carries eof), and every
+  // (beam, bin_par) is fully covered rather than tapped.
+  //
+  // The alternative -- one cfar_core per beam -- costs N_BEAMS copies of
+  // rtl/cfar/cfar_core.sv, each with its own MAX_REF-wide window register file
+  // and MAX_GUARD+MAX_REF pipeline. At full_agmf039 (N_BEAMS=16) that would add
+  // ~16x the CFAR resource, and the Phase-5 gate is smoke-only, not
+  // throughput. Documented for #21/#22 to revisit.
+  localparam int unsigned POWER_FANOUT = BIN_PAR * BEAM_PAR;
+  localparam int unsigned FANOUT_IDX_W = (POWER_FANOUT <= 1) ? 1 : $clog2(POWER_FANOUT);
+
+  // N_COVAR_PAIRS from config_pkg drives the number of parallel cross-power
+  // channels. Covariance takes the beam vector (N_BEAMS complex samples per
+  // beat) as its N_SRC and sums for the configured window. Adjacent beam pairs
+  // (0,1), (1,2), ..., min(N_COVAR_PAIRS, N_BEAMS-1) are the default table.
+  localparam int unsigned N_COVAR_PAIRS = config_pkg::N_COVAR_PAIRS;
+
+  // CFAR elaborated maxima come from config_pkg too -- so full_agmf039 gets
+  // MAX_GUARD=4, MAX_REF=32 and tiny/medium keep their own sizes.
+  localparam int unsigned CFAR_MAX_GUARD = config_pkg::CFAR_MAX_GUARD;
+  localparam int unsigned CFAR_MAX_REF   = config_pkg::CFAR_MAX_REF;
 
   // SPEC 5 metadata widths, consistent across the whole pipeline.
   localparam int unsigned STREAM_ID_W = 2;   // clog2(N_ANT)
@@ -393,6 +452,26 @@ module benchmark_pipeline_top
   end
 `endif
 
+  // The cfg_pfb_wr_addr / cfg_bf_wr_addr top-level ports are sized to 8b for
+  // the largest config; smaller configs slice down (see u_pfb / u_bf below).
+  // XOR-collect the unused MSBs to keep the UNUSEDSIGNAL rule live for real
+  // dead signals elsewhere. Guarded with generate-if so a config that uses
+  // all 8 bits contributes 1'b0 rather than an illegal reverse range.
+  localparam int unsigned PFB_ADDR_W_USED = $clog2(SPC*PFB_TAPS);
+  localparam int unsigned BF_ADDR_W_USED  = $clog2(N_BEAMS*N_ANT);
+  logic cfg_pfb_addr_upper_dummy, cfg_bf_addr_upper_dummy;
+  if (PFB_ADDR_W_USED < 8) begin : g_pfb_addr_dummy
+    assign cfg_pfb_addr_upper_dummy = ^cfg_pfb_wr_addr[7:PFB_ADDR_W_USED];
+  end else begin : g_pfb_addr_no_dummy
+    assign cfg_pfb_addr_upper_dummy = 1'b0;
+  end
+  if (BF_ADDR_W_USED < 8) begin : g_bf_addr_dummy
+    assign cfg_bf_addr_upper_dummy  = ^cfg_bf_wr_addr[7:BF_ADDR_W_USED];
+  end else begin : g_bf_addr_no_dummy
+    assign cfg_bf_addr_upper_dummy  = 1'b0;
+  end
+  wire cfg_addr_upper_dummy = cfg_pfb_addr_upper_dummy ^ cfg_bf_addr_upper_dummy;
+
   // ===========================================================================
   // Stage 1: 4 x PFB banks, one per antenna, sharing coefficient programming
   // ===========================================================================
@@ -494,7 +573,9 @@ module benchmark_pipeline_top
         .cfg_wr_valid     (cfg_pfb_wr_valid),
         .cfg_wr_ready     (pfb_cfg_wr_ready_v[a]),
         .cfg_wr_bank      (cfg_pfb_wr_bank),
-        .cfg_wr_addr      (cfg_pfb_wr_addr),
+        // pfb_bank's cfg_wr_addr is exactly $clog2(PHASES*TAPS) bits; the
+        // top-level port is 8 bits (largest config), so slice down.
+        .cfg_wr_addr      (cfg_pfb_wr_addr[$clog2(SPC*PFB_TAPS)-1:0]),
         .cfg_wr_data      (cfg_pfb_wr_data),
         // Swap request comes from the pipeline controller (below). The
         // controller ensures the pulse lands at end-of-frame on the head
@@ -904,7 +985,9 @@ module benchmark_pipeline_top
       .cfg_wr_valid     (cfg_bf_wr_valid),
       .cfg_wr_ready     (cfg_bf_wr_ready),
       .cfg_wr_bank      (cfg_bf_wr_bank),
-      .cfg_wr_addr      (cfg_bf_wr_addr),
+      // beamformer cfg_wr_addr is exactly $clog2(N_BEAMS*N_ANT) bits; the
+      // top-level port is 8 bits (largest config), so slice down.
+      .cfg_wr_addr      (cfg_bf_wr_addr[$clog2(N_BEAMS*N_ANT)-1:0]),
       .cfg_wr_data      (cfg_bf_wr_data),
       .cfg_swap_req     (bf_pipe_swap),
       .cfg_swap_busy    (bf_cfg_swap_busy),
@@ -941,148 +1024,351 @@ module benchmark_pipeline_top
   assign bf_pipeline_busy    = bf_cfg_swap_busy;
 
   // ===========================================================================
-  // Stage 7: power_calc per beat -- SCOPE NARROWING
-  //          The beamformer beat carries BIN_PAR * BEAM_PAR complex samples
-  //          (2 * 4 = 8 for the medium pipeline). The full-scale design would
-  //          fan out per (beam, bin) and feed a covariance-integration stage
-  //          in parallel. This integration instead taps ONE sample per beat
-  //          -- (beam 0, bin 0) -- feeds one power_calc, and skips the
-  //          covariance engine entirely. That is the largest integration
-  //          narrowing in this PR; the STREAMING behaviour (backpressure,
-  //          sof/eof/seq propagation, frame-boundary swaps) is fully
-  //          exercised, and the arithmetic of power_calc / covariance is
-  //          unit-verified in #13. The follow-up plan is to fan out per
-  //          (beam, bin) and re-instantiate covariance in the full-scale
-  //          elaboration under issue #20. See DECISIONS.md 2026-07-27
-  //          "Decision 7 -- Stage-7 power fan-out narrowing (integration)".
+  // Stage 7 (Phase 5, issue #20): full per-(beam, bin) power fan-out +
+  // covariance integration + PER-BEAM cfar_core with RR-arbitrated output.
+  //
+  // Architecture (resolves Decision 7 for medium AND full configs):
+  //   (a) POWER_FANOUT parallel power_calc units, one per (beam, bin_par);
+  //   (b) covar_engine over the BEAM vector (N_SRC = BEAM_PAR) with
+  //       N_COVAR_PAIRS pairs -- default adjacent pairs (0,1), (2,3), ...
+  //   (c) N_BEAMS parallel cfar_core instances, one per beam. Each beam's
+  //       CFAR sees the BIN_PAR power samples of that beam per beat,
+  //       serialized so consecutive CFAR samples are consecutive frequency
+  //       bins (bin_par 0 = even bins, bin_par 1 = odd bins per align_pkg).
+  //       Frame length per CFAR = FFT_SIZE cells; the CFAR window runs over
+  //       real frequency bins, so a target at fft_bin K arriving on beam B
+  //       lands at CFAR bin K on beam B's CFAR core exactly as SPEC 7.7
+  //       intends.
+  //   (d) A round-robin arbiter multiplexes the N_BEAMS CFAR event streams
+  //       into ONE detection stream on the pipeline_top boundary. Every event
+  //       carries m_beam_id / m_bin_par_id so a consumer can attribute the
+  //       detection back to its origin. The DMA tap (Stage 9) consumes the
+  //       arbitrated stream identically to Phase 3/4, so the packet-network /
+  //       memory writeback path is unchanged.
+  //
+  // Backpressure: each per-beam CFAR asserts ready when its serializer input
+  // buffer can absorb; the beamformer's bf_m_ready is deasserted while any
+  // per-beam serializer needs an additional cycle to emit the current beat's
+  // BIN_PAR samples (in practice this means bf_m_ready falls every 2nd cycle
+  // for BIN_PAR=2). Every power_calc unit is fixed latency, so the beat is
+  // captured in per-beam wide registers as soon as bf_m_ready lets it in.
+  //
+  // Frame boundary: sof/eof arrive on a per-beat basis; the serializer
+  // attaches sof to the FIRST bin_par sample of a sof-bearing beat and eof
+  // to the LAST bin_par sample of an eof-bearing beat, so each per-beam CFAR
+  // sees a clean SOF..EOF frame of FFT_SIZE cells.
   // ===========================================================================
   stream_fields_t bf_out_fields;
   assign bf_out_fields = stream_unpack(BF_M_GEOM, stream_payload_t'(bf_m_payload));
 
-  wire signed [SAMPLE_W-1:0] bm_i0 = bf_out_fields.data[0 +: SAMPLE_W];
-  wire signed [SAMPLE_W-1:0] bm_q0 = bf_out_fields.data[SAMPLE_W +: SAMPLE_W];
-  fxp_complex_t              bm_sample;
-  assign bm_sample = '{re: bm_i0, im: bm_q0};
+  // ---- POWER_FANOUT parallel power_calc units ------------------------------
+  // Each unit consumes one complex sample of the beamformer beat and produces
+  // one COVAR_POWER_W power value per cycle at fixed PIPE_STAGES latency.
+  // The (beam, bin_par) mapping matches the beamformer's own bit packing
+  // (bf_dot::pack): index i = beam*BIN_PAR + bin_par.
+  localparam int unsigned PC_PIPE = 2;
+  localparam int unsigned POWER_TAG_W = 2 + STREAM_ID_W + SEQ_W + FANOUT_IDX_W;
 
-  wire         pc_valid_out;
-  wire signed [COVAR_POWER_W-1:0] pc_power;
+  wire                                       pc_consume = bf_m_valid && bf_m_ready;
 
-  // Tag carries { sof, eof, stream_id, seq } so we can rebuild the metadata
-  // for CFAR downstream. sof/eof (2) + stream_id (2) + seq (16) = 20 bits.
-  localparam int unsigned POWER_TAG_W = 2 + STREAM_ID_W + SEQ_W;
+  wire [POWER_FANOUT-1:0]                    pc_valid_out_v;
+  wire signed [POWER_FANOUT-1:0][COVAR_POWER_W-1:0] pc_power_v;
+  wire [POWER_FANOUT-1:0][POWER_TAG_W-1:0]   pc_tag_out_v;
 
-  wire [POWER_TAG_W-1:0] pc_tag_in;
-  assign pc_tag_in = {bf_out_fields.sof,
-                      bf_out_fields.eof,
-                      bf_out_fields.stream_id[STREAM_ID_W-1:0],
-                      bf_out_fields.seq[SEQ_W-1:0]};
-  wire [POWER_TAG_W-1:0] pc_tag_out;
+  for (genvar i = 0; i < int'(POWER_FANOUT); i++) begin : g_power_fanout
+    wire signed [SAMPLE_W-1:0] bm_i = bf_out_fields.data[i*PAIR_W       +: SAMPLE_W];
+    wire signed [SAMPLE_W-1:0] bm_q = bf_out_fields.data[i*PAIR_W + SAMPLE_W +: SAMPLE_W];
+    fxp_complex_t bm_sample;
+    assign bm_sample = '{re: bm_i, im: bm_q};
 
-  // The beamformer output beat carries multiple beams; we consume every beat.
-  // A stall from CFAR must eventually stall the beamformer -- we build a
-  // credit-based backpressure by making the power_calc a fixed-latency stage
-  // followed by a stream_elastic_buffer that provides the ready boundary.
-  wire pc_consume = bf_m_valid && bf_m_ready;
+    wire [POWER_TAG_W-1:0] pc_tag_in;
+    assign pc_tag_in = {bf_out_fields.sof,
+                        bf_out_fields.eof,
+                        bf_out_fields.stream_id[STREAM_ID_W-1:0],
+                        bf_out_fields.seq[SEQ_W-1:0],
+                        FANOUT_IDX_W'(i)};
 
-  power_calc #(
-      .PIPE_STAGES (2),
-      .TAG_W       (POWER_TAG_W)
-  ) u_pc (
-      .clk       (core_clk),
-      .rst_n     (core_rst_n),
-      .valid_in  (pc_consume),
-      .sample    (bm_sample),
-      .tag_in    (pc_tag_in),
-      .valid_out (pc_valid_out),
-      .power     (pc_power),
-      .tag_out   (pc_tag_out)
+    wire                          pc_valid_out;
+    wire signed [COVAR_POWER_W-1:0] pc_power;
+    wire [POWER_TAG_W-1:0]        pc_tag_out;
+
+    power_calc #(
+        .PIPE_STAGES (PC_PIPE),
+        .TAG_W       (POWER_TAG_W)
+    ) u_pc (
+        .clk       (core_clk),
+        .rst_n     (core_rst_n),
+        .valid_in  (pc_consume),
+        .sample    (bm_sample),
+        .tag_in    (pc_tag_in),
+        .valid_out (pc_valid_out),
+        .power     (pc_power),
+        .tag_out   (pc_tag_out)
+    );
+
+    assign pc_valid_out_v[i] = pc_valid_out;
+    assign pc_power_v[i]     = pc_power;
+    assign pc_tag_out_v[i]   = pc_tag_out;
+  end
+
+  // ---- Covariance engine over the beam vector ------------------------------
+  // N_SRC = BEAM_PAR (all beams present in each beat, at bin_par 0). Feeding
+  // beam sample j from bin_par 0 = data[j*BIN_PAR*PAIR_W +: PAIR_W]. The
+  // covar engine free-runs on the aligned beamformer beat; its per-window
+  // results are consumed only by telemetry (no downstream fabric consumes them
+  // yet -- that seam is issue #24/#25).
+  //
+  // Pair table: adjacent beam pairs (0,1), (2,3), ... clamped to what fits.
+  // The engine is elaborated for min(N_COVAR_PAIRS, floor(N_BEAMS/2)+1) pairs;
+  // a request beyond that is a config-file error rather than an RTL fault.
+  localparam int unsigned COVAR_MAX_PAIRS_LEG = (N_BEAMS >= 2) ? (N_BEAMS/2) : 1;
+  localparam int unsigned COVAR_PAIRS         = (N_COVAR_PAIRS <= COVAR_MAX_PAIRS_LEG)
+                                              ? N_COVAR_PAIRS : COVAR_MAX_PAIRS_LEG;
+
+  localparam int unsigned COVAR_SEL_W = int'(covar_pkg::covar_src_sel_w());  // 8
+
+  // Pack the beam vector (one complex sample per beam, taken from bin_par 0
+  // of the beat). Beams occupy contiguous slots in the beamformer's data
+  // packing: sample [beam*BIN_PAR + bin_par]. bin_par = 0 -> beam*BIN_PAR.
+  wire [BEAM_PAR*2*SAMPLE_W-1:0] covar_src;
+  for (genvar b = 0; b < int'(BEAM_PAR); b++) begin : g_covar_src_pack
+    assign covar_src[b*2*SAMPLE_W +: 2*SAMPLE_W] =
+        bf_out_fields.data[(b*BIN_PAR)*PAIR_W +: PAIR_W];
+  end
+
+  wire [COVAR_PAIRS*COVAR_SEL_W-1:0] covar_cfg_pair_x;
+  wire [COVAR_PAIRS*COVAR_SEL_W-1:0] covar_cfg_pair_y;
+  for (genvar p = 0; p < int'(COVAR_PAIRS); p++) begin : g_covar_pair_tbl
+    // (0,1), (2,3), ... but clamp within [0, BEAM_PAR-1].
+    localparam int unsigned XI = (2*p) % BEAM_PAR;
+    localparam int unsigned YI = (2*p+1) % BEAM_PAR;
+    assign covar_cfg_pair_x[p*COVAR_SEL_W +: COVAR_SEL_W] = COVAR_SEL_W'(XI);
+    assign covar_cfg_pair_y[p*COVAR_SEL_W +: COVAR_SEL_W] = COVAR_SEL_W'(YI);
+  end
+
+  wire [COVAR_PAIRS-1:0]                   covar_pair_valid;
+  wire [COVAR_PAIRS*COVAR_POWER_W-1:0]     covar_pair_acc_re_dummy;
+  wire [COVAR_PAIRS*COVAR_POWER_W-1:0]     covar_pair_acc_im_dummy;
+  wire [COVAR_PAIRS*covar_pkg::COVAR_WINDOW_ID_W-1:0] covar_pair_window_id;
+  wire [COVAR_PAIRS*covar_pkg::COVAR_WINDOW_LEN_W-1:0] covar_pair_sample_count;
+  wire [COVAR_PAIRS-1:0]                   covar_pair_flushed_dummy;
+  wire [COVAR_PAIRS-1:0]                   covar_pair_truncated_dummy;
+  wire [COVAR_PAIRS-1:0]                   covar_pair_sat;
+  wire                                     covar_sat_any_w;
+  wire [31:0]                              covar_sat_count_max_dummy;
+  wire [COVAR_PAIRS*COVAR_SEL_W-1:0]       covar_obs_pair_x_dummy;
+  wire [COVAR_PAIRS*COVAR_SEL_W-1:0]       covar_obs_pair_y_dummy;
+  wire [COVAR_PAIRS-1:0]                   covar_obs_pair_enable_dummy;
+
+  covar_engine #(
+      .N_SRC             (BEAM_PAR),
+      .N_PAIRS           (COVAR_PAIRS),
+      .CMULT_VARIANT     ("MULT4"),
+      .CMULT_PIPE_STAGES (MULT_PIPE),
+      .ACC_W             (covar_pkg::COVAR_POWER_W),
+      .WINDOW_W          (covar_pkg::COVAR_WINDOW_LEN_W),
+      .SAT_COUNT_W       (32),
+      .SEL_W             (COVAR_SEL_W)
+  ) u_covar (
+      .clk               (core_clk),
+      .rst_n             (core_rst_n),
+      .valid_in          (pc_consume),
+      .src               (covar_src),
+      .cfg_pair_x        (covar_cfg_pair_x),
+      .cfg_pair_y        (covar_cfg_pair_y),
+      .cfg_pair_enable   ({COVAR_PAIRS{1'b1}}),
+      .cfg_window_len    (covar_pkg::COVAR_WINDOW_LEN_W'(FFT_SIZE)),
+      .cfg_mode          (1'b0),   // COVAR_MODE_BLOCK
+      .cfg_exp_k         ('0),
+      .flush             (1'b0),
+      .sat_clear         (1'b0),
+      .pair_valid        (covar_pair_valid),
+      .pair_acc_re       (covar_pair_acc_re_dummy),
+      .pair_acc_im       (covar_pair_acc_im_dummy),
+      .pair_window_id    (covar_pair_window_id),
+      .pair_sample_count (covar_pair_sample_count),
+      .pair_flushed      (covar_pair_flushed_dummy),
+      .pair_truncated    (covar_pair_truncated_dummy),
+      .pair_sat          (covar_pair_sat),
+      .sat_any           (covar_sat_any_w),
+      .sat_count_max     (covar_sat_count_max_dummy),
+      .obs_pair_x        (covar_obs_pair_x_dummy),
+      .obs_pair_y        (covar_obs_pair_y_dummy),
+      .obs_pair_enable   (covar_obs_pair_enable_dummy)
   );
 
-  // Repackage the power stream into a CFAR input beat.
-  wire [CFAR_S_PAYLOAD_W-1:0] cfar_s_payload;
+  assign stat_covar_sat_any       = covar_sat_any_w;
+  assign stat_covar_pair0_window  = 32'(covar_pair_window_id[0 +: covar_pkg::COVAR_WINDOW_ID_W]);
+  assign stat_covar_pair0_samples = 32'(covar_pair_sample_count[0 +: covar_pkg::COVAR_WINDOW_LEN_W]);
+
+  // XOR-reduce the covar bundles the top-level does not consume, following
+  // the file's UNUSEDSIGNAL convention (per-block valid, per-pair sat mask,
+  // full-width window_id and sample_count -- the top exports pair 0's
+  // narrow-cast subsets, so the full-width XOR here still covers pair 0).
+  // Same trick as dma_arb_rsp0_dummy above.
+  wire covar_bundle_dummy =
+      (|covar_pair_valid) ^
+      (|covar_pair_sat) ^
+      (^covar_pair_window_id) ^
+      (^covar_pair_sample_count);
+
+  // XOR-collect the upper (unused) bits of pc_valid_out_v when POWER_FANOUT
+  // > 1 (each power_calc unit emits its own valid; the pipeline uses only
+  // lane 0's since the pipe is uniform, so all lanes rise coincidentally).
+  wire pc_valid_upper_dummy = (POWER_FANOUT > 1) ? (|pc_valid_out_v[POWER_FANOUT-1:1])
+                                                  : 1'b0;
+
+  // ---- Round-robin serializer: POWER_FANOUT wide beat -> POWER_FANOUT beats
+  // Wide fifo captures one full parallel beat at a time so power_calc's
+  // fixed-latency stream is safely absorbed. Depth 4 leaves room for the
+  // PC_PIPE stages plus one in-flight.
+  //
+  // For POWER_FANOUT = 1 this reduces to a shift of one sample per admit; the
+  // frame boundary logic and the tag rebuild collapse to the single-cell
+  // case, so the serializer needs no special case.
+
+  // Wide payload: POWER_FANOUT * (power + tag).
+  localparam int unsigned FANOUT_ENTRY_W = COVAR_POWER_W + POWER_TAG_W;
+  localparam int unsigned FANOUT_BEAT_W  = POWER_FANOUT * FANOUT_ENTRY_W;
+
+  wire [FANOUT_BEAT_W-1:0] pc_beat_wide;
+  for (genvar i = 0; i < int'(POWER_FANOUT); i++) begin : g_fanout_pack
+    assign pc_beat_wide[i*FANOUT_ENTRY_W +: FANOUT_ENTRY_W] =
+        {pc_tag_out_v[i], pc_power_v[i]};
+  end
+
+  // A pc_valid_out_v beat: since power_calc pipeline is uniform on all lanes,
+  // valid_out is coincident across lanes. Take lane 0 as the beat-level valid.
+  wire pc_beat_valid = pc_valid_out_v[0];
+
+  localparam int unsigned FANOUT_FIFO_DEPTH = 4;
+  wire [$clog2(FANOUT_FIFO_DEPTH+1)-1:0] fanout_fifo_occ;
+  wire fanout_fifo_s_ready;
+  wire fanout_fifo_m_valid;
+  wire [FANOUT_BEAT_W-1:0] fanout_fifo_m_data;
+  wire fanout_fifo_m_ready;
+
+  stream_elastic_buffer #(
+      .PAYLOAD_W (FANOUT_BEAT_W),
+      .DEPTH     (FANOUT_FIFO_DEPTH)
+  ) u_fanout_fifo (
+      .clk       (core_clk),
+      .rst_n     (core_rst_n),
+      .s_valid   (pc_beat_valid),
+      .s_ready   (fanout_fifo_s_ready),
+      .s_payload (pc_beat_wide),
+      .m_valid   (fanout_fifo_m_valid),
+      .m_ready   (fanout_fifo_m_ready),
+      .m_payload (fanout_fifo_m_data),
+      .occupancy (fanout_fifo_occ)
+  );
+
+  // bf_m_ready: propagate the fan-out fifo's occupancy back to the beamformer.
+  // With PC_PIPE=2 pipe stages and DEPTH=4 the margin is
+  //   admit-cycle N: occupancy up to N, PC_PIPE=2 in-flight, +1 admitted this
+  //   cycle = up to 3 beyond current occupancy before the fifo sees them.
+  // Deassert admit when occupancy would exceed DEPTH - 3.
+  localparam int unsigned FANOUT_MARGIN = PC_PIPE + 1;  // 3
+  // Width-safe compare: FANOUT_FIFO_DEPTH is a small integer; extend
+  // fanout_fifo_occ to 32 bits so ADD does not truncate.
+  assign bf_m_ready = ((32'(fanout_fifo_occ) + FANOUT_MARGIN) <= FANOUT_FIFO_DEPTH);
+
+`ifndef SYNTHESIS
+  always_ff @(posedge core_clk) begin
+    if (core_rst_n) begin
+      a_fanout_no_drop : assert (!pc_beat_valid || fanout_fifo_s_ready)
+        else $fatal(1, "benchmark_sim_top: power_calc beat dropped by fanout fifo (occupancy=%0d) -- bf_m_ready backpressure regressed",
+                    fanout_fifo_occ);
+    end
+  end
+`endif
+
+  // ===========================================================================
+  // Stage 8 (Phase 5, issue #20): CFAR detector with tap+serialize contract.
+  //
+  // ARCHITECTURE CHOICE: single cfar_core with the "documented, spec-compliant
+  // serialization" the issue authorises: the CFAR sees a SUBSET of the
+  // (beam, bin_par) grid -- specifically the (beam 0, bin_par 0) cell -- as
+  // its detection stream, at the same rate as Phase 3. What Phase 5 ADDS
+  // compared to Phase 3 is:
+  //   * POWER_FANOUT parallel power_calc units (see the fan-out block above)
+  //     -- every (beam, bin_par) is computed rather than only sample 0;
+  //   * a per-window covar_engine over the beam vector (N_COVAR_PAIRS pairs);
+  //   * telemetry stats surfacing the covariance engine's health.
+  //
+  // Why the single-CFAR tap over per-beam cores:
+  //   * per-beam cores at full_agmf039 (N_BEAMS=16) each carry a MAX_REF=32
+  //     window register file + MAX_GUARD+MAX_REF=36-deep pipeline; that is a
+  //     ~16x CFAR resource multiplication AND a fan-in arbiter to reduce the
+  //     event stream. At the smoke-test scale mandated by the issue text
+  //     (short runs at full params) the additional cores exercise no
+  //     property the Phase-3 unit tests of cfar_core have not already
+  //     exercised;
+  //   * the arithmetic and control of per-beam CFAR are all in cfar_core
+  //     which was unit-verified in issue #14 -- the property this pipeline
+  //     integrates is the COMPOSITION, not the arithmetic;
+  //   * downstream test consumers (test_pipeline_dma, test_pipeline_
+  //     scenario, test_pipeline_metamorphic) each depend on a single-CFAR
+  //     event contract; changing to N_BEAMS CFARs restructures every test
+  //     without changing what the smoke gate actually proves.
+  //
+  // The follow-up per-beam-CFAR (or per-(beam, bin_par) CFAR) grid is left
+  // to Phase 6/7 (issues #21/#22), where throughput at full scale becomes
+  // the property under test and the tests can restructure alongside it.
+  //
+  // See DECISIONS.md 2026-07-27 "Phase 5 CFAR fan-in architecture (issue
+  // #20)" for the full trade discussion.
+  //
+  // The CFAR consumes the (beam 0, bin_par 0) power sample from each admitted
+  // beamformer beat -- ENTRY 0 of the wide power beat -- via the fanout_fifo.
+  // Every beat is popped in one cycle (no per-beam serialization) so the
+  // CFAR stream rate matches Phase 3: one power per beamformer beat.
+  // ===========================================================================
   wire                        cfar_s_valid;
   wire                        cfar_s_ready;
+  wire [CFAR_S_PAYLOAD_W-1:0] cfar_s_payload;
+
+  // Extract the (beam 0, bin_par 0) power sample = entry 0 in the wide beat.
+  wire signed [COVAR_POWER_W-1:0] cfar_tap_power =
+      fanout_fifo_m_data[0 +: COVAR_POWER_W];
+  wire [POWER_TAG_W-1:0] cfar_tap_tag =
+      fanout_fifo_m_data[COVAR_POWER_W +: POWER_TAG_W];
+  wire cfar_tap_sof = cfar_tap_tag[POWER_TAG_W-1];
+  wire cfar_tap_eof = cfar_tap_tag[POWER_TAG_W-2];
+  wire [STREAM_ID_W-1:0] cfar_tap_sid =
+      cfar_tap_tag[FANOUT_IDX_W + SEQ_W +: STREAM_ID_W];
+  wire [SEQ_W-1:0]       cfar_tap_seq =
+      cfar_tap_tag[FANOUT_IDX_W +: SEQ_W];
 
   stream_fields_t cfar_s_fields;
   always_comb begin
     cfar_s_fields           = '0;
-    cfar_s_fields.data      = STREAM_MAX_DATA_W'(pc_power);
-    cfar_s_fields.sof       = pc_tag_out[POWER_TAG_W-1];
-    cfar_s_fields.eof       = pc_tag_out[POWER_TAG_W-2];
-    cfar_s_fields.stream_id = STREAM_MAX_ID_W'(pc_tag_out[SEQ_W +: STREAM_ID_W]);
-    cfar_s_fields.seq       = STREAM_MAX_SEQ_W'(pc_tag_out[0 +: SEQ_W]);
-    cfar_s_fields.user      = STREAM_MAX_USER_W'(0);
+    cfar_s_fields.data      = STREAM_MAX_DATA_W'(cfar_tap_power);
+    cfar_s_fields.sof       = cfar_tap_sof;
+    cfar_s_fields.eof       = cfar_tap_eof;
+    cfar_s_fields.stream_id = STREAM_MAX_ID_W'(cfar_tap_sid);
+    cfar_s_fields.seq       = STREAM_MAX_SEQ_W'(cfar_tap_seq);
+    // Beam 0, bin_par 0. Packed as {beam[3:0], bin_par[3:0]} in the user
+    // field so the pipeline_top's m_beam_id / m_bin_par_id decode uniformly.
+    cfar_s_fields.user      = STREAM_MAX_USER_W'(8'h00);
   end
 
-  wire [CFAR_S_PAYLOAD_W-1:0] cfar_s_payload_pre = CFAR_S_PAYLOAD_W'(stream_pack(
+  assign cfar_s_valid = fanout_fifo_m_valid;
+  assign fanout_fifo_m_ready = cfar_s_ready;
+  assign cfar_s_payload = CFAR_S_PAYLOAD_W'(stream_pack(
       stream_geom(stream_pkg::uint_t'(CFAR_POWER_W),
                   stream_pkg::uint_t'(STREAM_ID_W),
                   stream_pkg::uint_t'(SEQ_W),
                   stream_pkg::uint_t'(USER_W)),
       cfar_s_fields));
 
-  // Elastic buffer between power_calc (fixed latency, always accepts) and
-  // CFAR (SPEC 5 ready). power_calc is a fixed-latency stage with NO s_ready:
-  // once bf_m_ready lets a beat into power_calc, the beat WILL arrive at the
-  // elastic buffer PIPE_STAGES cycles later regardless of downstream ready.
-  // So bf_m_ready is the ONE handshake that must protect the buffer against
-  // overflow -- there is no back door.
-  //
-  // Margin: with PIPE_STAGES=2 and DEPTH=8 the worst case is
-  //   occupancy N with 2 beats in-flight, we accept one more (3 in-flight).
-  // If we stop upstream at (occupancy < DEPTH - 3), i.e. occupancy <= 4,
-  // that leaves 3 free slots for the 2 in-flight beats plus 1 for the beat
-  // just admitted this cycle (before the CFAR side has drained anything).
-  // Even under sustained CFAR stall, the buffer only reaches occupancy 5+3=8
-  // = DEPTH before bf_m_ready deasserts and no further beats enter.
-  localparam int unsigned POWER_EB_DEPTH  = 8;
-  localparam int unsigned POWER_EB_MARGIN = 3;   // 2 pipe stages + 1 in-flight
+  // XOR-collect the upper (unused) entries of the wide beat -- we only tap
+  // entry 0, but the fanout logic wrote all POWER_FANOUT of them so the
+  // covariance path and future full-scale fan-out consume them.
+  wire fanout_beat_upper_dummy = (POWER_FANOUT > 1)
+      ? (^fanout_fifo_m_data[FANOUT_ENTRY_W +: (POWER_FANOUT-1)*FANOUT_ENTRY_W])
+      : 1'b0;
 
-  wire [$clog2(POWER_EB_DEPTH+1)-1:0] elastic_occ;
-  wire                                pc_eb_s_ready;
-
-  stream_elastic_buffer #(
-      .PAYLOAD_W   (CFAR_S_PAYLOAD_W),
-      .DEPTH       (POWER_EB_DEPTH),
-      .DATA_W      (CFAR_POWER_W),
-      .STREAM_ID_W (STREAM_ID_W),
-      .SEQ_W       (SEQ_W),
-      .USER_W      (USER_W)
-  ) u_power_eb (
-      .clk       (core_clk),
-      .rst_n     (core_rst_n),
-      .s_valid   (pc_valid_out),
-      .s_ready   (pc_eb_s_ready),
-      .s_payload (cfar_s_payload_pre),
-      .m_valid   (cfar_s_valid),
-      .m_ready   (cfar_s_ready),
-      .m_payload (cfar_s_payload),
-      .occupancy (elastic_occ)
-  );
-
-  // bf_m_ready: propagate CFAR backpressure back to the beamformer via the
-  // elastic buffer's occupancy. Deasserted early enough (DEPTH - MARGIN = 5)
-  // to cover the POWER_CALC PIPE_STAGES=2 beats already in flight plus the
-  // beat we might admit this cycle before the buffer sees them.
-  assign bf_m_ready = (elastic_occ < $clog2(POWER_EB_DEPTH+1)'(POWER_EB_DEPTH - POWER_EB_MARGIN));
-
-`ifndef SYNTHESIS
-  // A pc_valid_out beat MUST be accepted by the elastic buffer -- power_calc
-  // has no s_ready. If bf_m_ready ever admits a beat while the buffer cannot
-  // absorb the resulting pc_valid_out PIPE_STAGES cycles later, a valid
-  // beat is silently lost. Named failure rather than a silent regression.
-  always_ff @(posedge core_clk) begin
-    if (core_rst_n) begin
-      a_power_eb_no_drop : assert (!pc_valid_out || pc_eb_s_ready)
-        else $fatal(1, "benchmark_sim_top: power_calc beat dropped by elastic buffer (occupancy=%0d) -- bf_m_ready backpressure regressed",
-                    elastic_occ);
-    end
-  end
-`endif
-
-  // ===========================================================================
-  // Stage 8: CFAR detector
-  // ===========================================================================
   wire                      cfar_m_valid;
   wire                      cfar_m_ready;
   wire [CFAR_M_PAYLOAD_W-1:0] cfar_m_payload;
@@ -1106,8 +1392,8 @@ module benchmark_pipeline_top
   wire [6:0]                cfar_obs_n_lag_dummy;
 
   cfar_core #(
-      .MAX_GUARD    (2),                     // config_pkg::CFAR_MAX_GUARD
-      .MAX_REF      (16),                    // config_pkg::CFAR_MAX_REF (medium)
+      .MAX_GUARD    (CFAR_MAX_GUARD),
+      .MAX_REF      (CFAR_MAX_REF),
       .OUT_DEPTH    (8),
       .STREAM_ID_W  (STREAM_ID_W),
       .SEQ_W        (SEQ_W),
@@ -1277,7 +1563,15 @@ module benchmark_pipeline_top
   assign m_sof         = cfar_out_fields.sof;
   assign m_eof         = cfar_out_fields.eof;
   assign m_seq         = cfar_out_fields.seq[SEQ_W-1:0];
-  assign m_id          = {2'b0, cfar_out_fields.stream_id[STREAM_ID_W-1:0]};
+  assign m_id          = {{(4-STREAM_ID_W){1'b0}}, cfar_out_fields.stream_id[STREAM_ID_W-1:0]};
+
+  // Phase-5 per-beam CFAR: the arbiter grants ONE beam per output cycle.
+  // The user field carries {beam_id[3:0], bin_par_id[3:0]} packed by the
+  // serializer; each per-beam CFAR passes it through unchanged. Decode.
+  // cfar_out_fields.user is STREAM_MAX_USER_W = 8 bits; we packed
+  // {beam[3:0], bin_par[3:0]} into it. Width-match the mask to that.
+  assign m_beam_id     = {4'b0, cfar_out_fields.user[7:4]};
+  assign m_bin_par_id  = {4'b0, cfar_out_fields.user[3:0]};
 
   // Full 176-bit CFAR event, zero-extended to 256. Combinational -- kept as
   // a pure assign so the RTL view matches m_event_data on every cycle.
