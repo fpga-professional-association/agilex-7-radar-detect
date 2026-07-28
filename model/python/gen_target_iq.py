@@ -334,9 +334,71 @@ def scenario_three_targets_even(cfg: ScenarioConfig, seed: int) -> Scenario:
     )
 
 
+def scenario_mixed_parity(cfg: ScenarioConfig, seed: int) -> Scenario:
+    """Six targets on mixed even / odd FFT bins, all angle_idx=0.
+
+    Phase 6 (issue #21) lands per-beam CFAR + BIN_PAR-cycle serializer, so
+    the pipeline now sees BOTH even and odd FFT bins as CFAR cells (the
+    Phase-5 single-tap-at-(beam 0, bin_par 0) restriction is lifted). This
+    scenario exercises that: six targets, three on even bins and three on
+    odd bins, all at strong and moderate SNR. angle_idx = 0 keeps beam
+    discrimination out of the picture (uniform BF weights are used by the
+    default harness setup, so angle_idx != 0 targets would still not select
+    a particular beam -- that is a Phase 7+ study when beam-weighted
+    steering lands).
+
+    Bin choices avoid DC and Nyquist, and stay inside a comfortable
+    fittable-CFAR half-window margin (guard 1 + ref 8 = 9 unfittable at
+    each frame edge, so bins 10..(FFT_SIZE-11) are all fittable at CFAR
+    bin index = fft_bin under the Phase-6 mapping).
+    """
+    f = cfg.fft_size
+    h = cfg.history_frames
+    # Three even and three odd. Separation between adjacent target bins is
+    # at least 4 CFAR bins so the +/-1 CFAR bin-tolerance in the check does
+    # not aliasise odd targets onto adjacent even targets (per-beam CFAR
+    # picks up BOTH parity lanes; the check must be able to attribute an
+    # odd-bin detection to its OWN target, not the nearby even one).
+    range_bins = [f // 8,       f // 4 + 4,  3 * f // 8,
+                  f // 8 + 5,   f // 4 + 9,  3 * f // 8 + 5]
+    dopplers   = [2, h - 3, h // 2 - 1, 3, h - 4, h // 2 + 1]
+    snr_dbs    = [20.0, 15.0, 10.0, 18.0, 14.0, 8.0]
+    parity_tag = ["e0", "e1", "e2", "o0", "o1", "o2"]
+    targets = [
+        Target(f"t{i}_{parity_tag[i]}", range_bins[i], dopplers[i], 0, snr_dbs[i])
+        for i in range(6)
+    ]
+    return Scenario(
+        name="mixed_parity",
+        seed=seed,
+        targets=targets,
+        noise_sigma=0.005,
+        clutter_bin=-1,
+        clutter_amp=0.0,
+        target_amp=0.03,
+        description=(
+            "Six targets on mixed even/odd FFT bins, angle_idx=0. Designed for "
+            "the Phase-6 (issue #21) per-beam CFAR + BIN_PAR-serialiser "
+            "sim-injection contract: every FFT bin now lands on some CFAR "
+            "cell of every beam, so odd-bin targets that were invisible to "
+            "the Phase-5 single-tap CFAR are now detectable."
+        ),
+        config={
+            "name": cfg.name,
+            "N_ANTENNAS": cfg.n_antennas,
+            "SAMPLES_PER_CYCLE": cfg.samples_per_cycle,
+            "FFT_SIZE": cfg.fft_size,
+            "HISTORY_FRAMES": cfg.history_frames,
+            "N_BEAMS": cfg.n_beams,
+            "SAMPLE_W": cfg.sample_w,
+        },
+    )
+
+
 SCENARIOS = {
     "three_targets": scenario_three_targets,
     "three_targets_even": scenario_three_targets_even,
+    "mixed_parity": scenario_mixed_parity,
 }
 
 

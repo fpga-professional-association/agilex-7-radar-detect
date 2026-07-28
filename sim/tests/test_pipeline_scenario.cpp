@@ -120,7 +120,13 @@ constexpr unsigned kCfarAlpha     = 0x0800;   // 8.0 in UQ8.8
 // bound is 6 across all frames of the scenario -- see the alpha
 // justification in DECISIONS.md.
 constexpr int      kBinTol        = 1;
-constexpr unsigned kFalseAlarmMax = 6;
+// Phase 6 (issue #21): per-beam CFAR emits detections on ALL N_BEAMS beams
+// in parallel; a per-beam false-alarm rate that produced up to 6 false
+// alarms under the single-CFAR tap now scales up to
+// kFalseAlarmMaxPerBeam * N_BEAMS. The alpha and (guard, ref) settings are
+// unchanged so the per-beam probability of a false alarm is identical to
+// the Phase-5 setting.
+constexpr unsigned kFalseAlarmMaxPerBeam = 6;
 
 // -----------------------------------------------------------------------------
 // CFAR event decoding
@@ -374,6 +380,11 @@ int sim_test_main(const SimArgs& args) {
   const std::uint64_t expected_beats_in =
       static_cast<std::uint64_t>(frames.size()) *
       pipeline_tb::kBeatsPerFrame * pipeline_tb::kNAnt;
+  // Phase 6 (issue #21): per-beam CFAR + RR arbiter emits kNBeams m_eof
+  // markers per input frame.
+  const std::uint64_t expected_output_frames =
+      static_cast<std::uint64_t>(frames.size()) *
+      pipeline_tb::Session::frames_per_input_frame();
   const std::uint64_t budget =
       static_cast<std::uint64_t>(frames.size()) * 20000ULL + 200000ULL;
   std::uint64_t elapsed = 0;
@@ -383,7 +394,7 @@ int sim_test_main(const SimArgs& args) {
     ++elapsed;
     sample_cfar_output(top.get(), events);
     const bool inputs_done = sess.beats_driven() == expected_beats_in;
-    const bool outputs_done = sess.frames_observed() >= sess.frames_driven();
+    const bool outputs_done = sess.frames_observed() >= expected_output_frames;
     if (inputs_done && outputs_done) { drained = true; break; }
   }
   // Drain a little more to catch trailing detection beats.
@@ -404,6 +415,9 @@ int sim_test_main(const SimArgs& args) {
                  static_cast<unsigned long long>(elapsed));
   }
 
+  const unsigned kFalseAlarmMax =
+      kFalseAlarmMaxPerBeam *
+      pipeline_tb::Session::frames_per_input_frame();
   CheckReport rep = check_detections(meta, events, /*bin_par=*/2,
                                      kBinTol, kFalseAlarmMax);
 

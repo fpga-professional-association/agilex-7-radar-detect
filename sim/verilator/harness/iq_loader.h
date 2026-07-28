@@ -77,10 +77,21 @@ bool load_scenario(const std::string& base_dir,
                    std::vector<StimFrame>& frames);
 
 // Given a scene FFT bin and the pipeline's BIN_PAR, return the CFAR bin
-// index the pipeline's tap will observe for the tapped parity (lane 0).
-// For BIN_PAR = 2 this is fft_bin / 2 for even fft_bin. If fft_bin is on
-// the untapped parity, returns -1 (the target is invisible to the tap).
+// index the pipeline's per-beam CFAR cell holds this bin.
+//
+// Phase 6 (issue #21) per-beam CFAR + BIN_PAR-cycle serializer: EVERY FFT
+// bin reaches some cfar_core cell (bin_par 0 lane carries even bins, bin_par
+// 1 lane carries odd bins, and the serialized per-beam cfar_core frame
+// contains FFT_SIZE cells in FFT-bin order). CFAR bin index == FFT bin
+// index directly; there is no "untapped parity" anymore.
+//
+// Phase 5 (superseded): the single-CFAR tap at (beam 0, bin_par 0) meant
+// only even FFT bins were visible and their CFAR-bin index was fft_bin/2.
+// Callers that still need the Phase-5 mapping (e.g. the `three_targets_even`
+// reference-chain verification path in model/python/range_doppler.py) use
+// ``cfar_bin_for_fft_bin_p5``.
 int cfar_bin_for_fft_bin(int fft_bin, unsigned bin_par);
+int cfar_bin_for_fft_bin_p5(int fft_bin, unsigned bin_par);
 
 }  // namespace pipeline_tb
 

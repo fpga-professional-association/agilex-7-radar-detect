@@ -1284,161 +1284,385 @@ module benchmark_pipeline_top
 `endif
 
   // ===========================================================================
-  // Stage 8 (Phase 5, issue #20): CFAR detector with tap+serialize contract.
+  // Stage 8 (Phase 6, issue #21): PER-BEAM CFAR fan-out with round-robin
+  // arbiter on the output.
   //
-  // ARCHITECTURE CHOICE: single cfar_core with the "documented, spec-compliant
-  // serialization" the issue authorises: the CFAR sees a SUBSET of the
-  // (beam, bin_par) grid -- specifically the (beam 0, bin_par 0) cell -- as
-  // its detection stream, at the same rate as Phase 3. What Phase 5 ADDS
-  // compared to Phase 3 is:
-  //   * POWER_FANOUT parallel power_calc units (see the fan-out block above)
-  //     -- every (beam, bin_par) is computed rather than only sample 0;
-  //   * a per-window covar_engine over the beam vector (N_COVAR_PAIRS pairs);
-  //   * telemetry stats surfacing the covariance engine's health.
+  // Phase 5 (issue #20, DECISIONS.md 2026-07-27 issue #20 Decision 2) tapped
+  // ONE cell per beamformer beat -- (beam 0, bin_par 0) -- into a SINGLE
+  // cfar_core. Phase 6 lands the follow-up per-beam fan-out that decision
+  // deferred, per issue #21's review comment. Architecture:
   //
-  // Why the single-CFAR tap over per-beam cores:
-  //   * per-beam cores at full_agmf039 (N_BEAMS=16) each carry a MAX_REF=32
-  //     window register file + MAX_GUARD+MAX_REF=36-deep pipeline; that is a
-  //     ~16x CFAR resource multiplication AND a fan-in arbiter to reduce the
-  //     event stream. At the smoke-test scale mandated by the issue text
-  //     (short runs at full params) the additional cores exercise no
-  //     property the Phase-3 unit tests of cfar_core have not already
-  //     exercised;
-  //   * the arithmetic and control of per-beam CFAR are all in cfar_core
-  //     which was unit-verified in issue #14 -- the property this pipeline
-  //     integrates is the COMPOSITION, not the arithmetic;
-  //   * downstream test consumers (test_pipeline_dma, test_pipeline_
-  //     scenario, test_pipeline_metamorphic) each depend on a single-CFAR
-  //     event contract; changing to N_BEAMS CFARs restructures every test
-  //     without changing what the smoke gate actually proves.
+  //   * BIN_PAR-cycle SERIALIZER per beam. Each beam owns a small state
+  //     machine that consumes the beam's BIN_PAR power samples out of a
+  //     fanout FIFO beat and emits them one cell per cycle to that beam's
+  //     cfar_core, in bin_par-ascending order (bin_par 0 first, then 1).
+  //     All N_BEAMS serializers run in LOCKSTEP: they consume the same
+  //     fanout beat and pop it once every beam has finished its BIN_PAR
+  //     cells. That way each cfar_core sees FFT_SIZE cells per input
+  //     frame in bin order -- the CFAR-window semantics SPEC 7.7 needs.
+  //   * N_BEAMS parallel cfar_core instances. Each one is the same
+  //     cfar_core module the Phase-3 unit tests exercise; nothing about
+  //     the arithmetic changes. Frame length per CFAR = FFT_SIZE cells,
+  //     one CFAR frame per input frame, N_BEAMS frames per input frame
+  //     summed over the whole fan-out.
+  //   * ROUND-ROBIN ARBITER (pkt_rr_arb, N=N_BEAMS) on the outputs. Grants
+  //     one beam's cfar_core.m_valid onto the pipeline_top boundary per
+  //     cycle. Each event's `user` field carries {beam_id[3:0],
+  //     bin_par_id[3:0]}, so a downstream consumer can attribute the
+  //     detection back to its origin. Because bf_m_ready throttles the
+  //     beamformer to admit only every BIN_PAR-th cycle, the aggregate
+  //     event rate per input frame is N_BEAMS x (per-beam per-frame
+  //     event count).
   //
-  // The follow-up per-beam-CFAR (or per-(beam, bin_par) CFAR) grid is left
-  // to Phase 6/7 (issues #21/#22), where throughput at full scale becomes
-  // the property under test and the tests can restructure alongside it.
+  // Test contract change (see DECISIONS.md 2026-07-28 issue #21 entry):
+  //   * frames_observed == N_BEAMS * frames_driven (m_eof arrives once per
+  //     beam per input frame -- N_BEAMS EOFs interleaved by the arbiter).
+  //   * det_count / sup_count / frame_count are aggregated across all
+  //     beams as SUMS of stat_det_count[b], stat_sup_count[b],
+  //     stat_frame_count[b] for b in [0, N_BEAMS). Saturating add.
+  //   * The DMA fork (Stage 9) is unchanged: it forks the ARBITER OUTPUT
+  //     m_valid/m_ready, so every arbitrated event is captured in the tap
+  //     buffer and delivered to memory just like Phase 5.
   //
-  // See DECISIONS.md 2026-07-27 "Phase 5 CFAR fan-in architecture (issue
-  // #20)" for the full trade discussion.
-  //
-  // The CFAR consumes the (beam 0, bin_par 0) power sample from each admitted
-  // beamformer beat -- ENTRY 0 of the wide power beat -- via the fanout_fifo.
-  // Every beat is popped in one cycle (no per-beam serialization) so the
-  // CFAR stream rate matches Phase 3: one power per beamformer beat.
+  // The Phase-5 rationale for a single tap ("N_BEAMS-parallel CFAR would
+  // cascade test failures") is resolved by restructuring the four affected
+  // tests in Phase 6 alongside this landing -- test_pipeline_continuous,
+  // test_pipeline_metamorphic, test_pipeline_dma, test_pipeline_scenario --
+  // to expect the multi-event contract. That restructuring is honest: the
+  // invariants those tests check (frame-count monotonicity, impulse
+  // response non-vacuity, DMA event counter equality, ground-truth target
+  // discovery) all lift to per-beam CFAR naturally because the beamformer
+  // weights are uniform, so every beam sees the same power stream and
+  // therefore N_BEAMS x every previous count is the correct expected
+  // value.
   // ===========================================================================
-  wire                        cfar_s_valid;
-  wire                        cfar_s_ready;
-  wire [CFAR_S_PAYLOAD_W-1:0] cfar_s_payload;
 
-  // Extract the (beam 0, bin_par 0) power sample = entry 0 in the wide beat.
-  wire signed [COVAR_POWER_W-1:0] cfar_tap_power =
-      fanout_fifo_m_data[0 +: COVAR_POWER_W];
-  wire [POWER_TAG_W-1:0] cfar_tap_tag =
-      fanout_fifo_m_data[COVAR_POWER_W +: POWER_TAG_W];
-  wire cfar_tap_sof = cfar_tap_tag[POWER_TAG_W-1];
-  wire cfar_tap_eof = cfar_tap_tag[POWER_TAG_W-2];
-  wire [STREAM_ID_W-1:0] cfar_tap_sid =
-      cfar_tap_tag[FANOUT_IDX_W + SEQ_W +: STREAM_ID_W];
-  wire [SEQ_W-1:0]       cfar_tap_seq =
-      cfar_tap_tag[FANOUT_IDX_W +: SEQ_W];
+  // Per-beam serializer state: a phase counter cycles through BIN_PAR cells
+  // per admitted fanout beat. Each beam's cfar_core acknowledges its cell at
+  // its OWN pace (SPEC 5 stability rule: once s_valid is high, hold it until
+  // s_ready fires). A per-beam beam_ph_done_q tracks which beams have already
+  // consumed the CURRENT phase's cell; the phase counter advances only after
+  // every beam has fired s_ready. Once the last phase's cell is consumed by
+  // every beam, the fanout FIFO beat is popped.
+  //
+  // This is a genuine lockstep: all beams see the SAME (sof, eof, seq) beat
+  // metadata, and each beam's cfar_core sees BIN_PAR cells in ascending
+  // bin_par order per input frame beat. What "lockstep" means here is
+  // per-PHASE, not per-cycle -- a slow-to-accept beam holds up the phase
+  // advance without dropping any beam's offered beat.
+  localparam int unsigned SER_PHASE_W = (BIN_PAR <= 1) ? 1 : $clog2(BIN_PAR);
 
-  stream_fields_t cfar_s_fields;
-  always_comb begin
-    cfar_s_fields           = '0;
-    cfar_s_fields.data      = STREAM_MAX_DATA_W'(cfar_tap_power);
-    cfar_s_fields.sof       = cfar_tap_sof;
-    cfar_s_fields.eof       = cfar_tap_eof;
-    cfar_s_fields.stream_id = STREAM_MAX_ID_W'(cfar_tap_sid);
-    cfar_s_fields.seq       = STREAM_MAX_SEQ_W'(cfar_tap_seq);
-    // Beam 0, bin_par 0. Packed as {beam[3:0], bin_par[3:0]} in the user
-    // field so the pipeline_top's m_beam_id / m_bin_par_id decode uniformly.
-    cfar_s_fields.user      = STREAM_MAX_USER_W'(8'h00);
+  logic [SER_PHASE_W-1:0] ser_phase_q;
+  // beam_ph_done_q[b] = "beam b has consumed the current-phase cell already".
+  // Cleared when the phase advances.
+  logic [N_BEAMS-1:0]     beam_ph_done_q;
+
+  // Wire arrays for per-beam CFAR interfaces.
+  wire [N_BEAMS-1:0]                    cfar_s_valid_v;
+  wire [N_BEAMS-1:0]                    cfar_s_ready_v;
+  wire [N_BEAMS*CFAR_S_PAYLOAD_W-1:0]   cfar_s_payload_v;
+  wire [N_BEAMS-1:0]                    cfar_m_valid_v;
+  wire [N_BEAMS-1:0]                    cfar_m_ready_v;
+  wire [N_BEAMS*CFAR_M_PAYLOAD_W-1:0]   cfar_m_payload_v;
+  wire [N_BEAMS*32-1:0]                 cfar_stat_det_v;
+  wire [N_BEAMS*32-1:0]                 cfar_stat_sup_v;
+  wire [N_BEAMS*32-1:0]                 cfar_stat_frame_v;
+  // Per-beam obs / fault dummies: gathered as bit-vectors so a single XOR
+  // at the top level keeps the UNUSEDSIGNAL rule live (Verilator lint pass
+  // treats un-consumed named-port outputs as errors; the top-level XOR
+  // sinks them without silencing the rule).
+  wire [N_BEAMS*6-1:0]  cfar_fault_v;
+  wire [N_BEAMS-1:0]    cfar_obs_cfg_pending_v;
+  wire [N_BEAMS-1:0]    cfar_obs_active_enable_v;
+  wire [N_BEAMS*2-1:0]  cfar_obs_active_mode_v;
+  wire [N_BEAMS-1:0]    cfar_obs_active_out_mode_v;
+  wire [N_BEAMS*5-1:0]  cfar_obs_active_guard_lead_v;
+  wire [N_BEAMS*5-1:0]  cfar_obs_active_guard_lag_v;
+  wire [N_BEAMS*6-1:0]  cfar_obs_active_ref_lead_v;
+  wire [N_BEAMS*6-1:0]  cfar_obs_active_ref_lag_v;
+  wire [N_BEAMS*16-1:0] cfar_obs_active_alpha_v;
+  wire [N_BEAMS-1:0]    cfar_obs_frame_open_v;
+  wire [N_BEAMS*5-1:0]  cfar_obs_max_guard_v;
+  wire [N_BEAMS*6-1:0]  cfar_obs_max_ref_v;
+  wire [N_BEAMS*7-1:0]  cfar_obs_n_lead_v;
+  wire [N_BEAMS*7-1:0]  cfar_obs_n_lag_v;
+
+  // Per-beam handshake acknowledgements THIS cycle. `beam_ph_fire[b]` is high
+  // on the cycle beam b consumes the current-phase cell (either firing s_ready
+  // right now with s_valid, or already-done from a prior cycle within this
+  // phase and s_valid is deasserted so no new fire).
+  wire [N_BEAMS-1:0] beam_ph_fire_now;
+  // beam_ph_done_next[b] = beam_ph_done_q[b] OR beam_ph_fire_now[b].
+  wire [N_BEAMS-1:0] beam_ph_done_next;
+
+  // Phase-complete: every beam has consumed the current-phase cell.
+  wire phase_complete = &beam_ph_done_next;
+
+  wire ser_last_phase = (ser_phase_q == SER_PHASE_W'(BIN_PAR - 1));
+
+  // Pop the fanout FIFO beat when the LAST phase completes (all beams have
+  // consumed the bin_par-1 cell of this beat).
+  assign fanout_fifo_m_ready = fanout_fifo_m_valid && phase_complete && ser_last_phase;
+
+  always_ff @(posedge core_clk) begin
+    if (!core_rst_n) begin
+      ser_phase_q    <= '0;
+      beam_ph_done_q <= '0;
+    end else if (fanout_fifo_m_valid) begin
+      if (phase_complete) begin
+        // Phase done: clear per-beam done flags, advance phase (wrap on last).
+        beam_ph_done_q <= '0;
+        if (ser_last_phase) begin
+          ser_phase_q <= '0;
+        end else begin
+          ser_phase_q <= ser_phase_q + SER_PHASE_W'(1);
+        end
+      end else begin
+        // Phase still in progress: accumulate any beams that fired this cycle.
+        beam_ph_done_q <= beam_ph_done_next;
+      end
+    end
   end
 
-  assign cfar_s_valid = fanout_fifo_m_valid;
-  assign fanout_fifo_m_ready = cfar_s_ready;
-  assign cfar_s_payload = CFAR_S_PAYLOAD_W'(stream_pack(
-      stream_geom(stream_pkg::uint_t'(CFAR_POWER_W),
-                  stream_pkg::uint_t'(STREAM_ID_W),
-                  stream_pkg::uint_t'(SEQ_W),
-                  stream_pkg::uint_t'(USER_W)),
-      cfar_s_fields));
+  // Sof/eof/id/seq are common tag bits at the beat granularity; the
+  // per-beam serializer attaches sof to phase-0 and eof to phase-BIN_PAR-1.
+  // We use entry 0's tag as the beat metadata (all lanes carry identical
+  // sof/eof/seq/stream_id in fan-out).
+  wire [POWER_TAG_W-1:0] fanout_beat_tag0 =
+      fanout_fifo_m_data[COVAR_POWER_W +: POWER_TAG_W];
+  wire fanout_beat_sof = fanout_beat_tag0[POWER_TAG_W-1];
+  wire fanout_beat_eof = fanout_beat_tag0[POWER_TAG_W-2];
+  wire [STREAM_ID_W-1:0] fanout_beat_sid =
+      fanout_beat_tag0[FANOUT_IDX_W + SEQ_W +: STREAM_ID_W];
+  wire [SEQ_W-1:0]       fanout_beat_seq =
+      fanout_beat_tag0[FANOUT_IDX_W +: SEQ_W];
 
-  // XOR-collect the upper (unused) entries of the wide beat -- we only tap
-  // entry 0, but the fanout logic wrote all POWER_FANOUT of them so the
-  // covariance path and future full-scale fan-out consume them.
-  wire fanout_beat_upper_dummy = (POWER_FANOUT > 1)
-      ? (^fanout_fifo_m_data[FANOUT_ENTRY_W +: (POWER_FANOUT-1)*FANOUT_ENTRY_W])
-      : 1'b0;
+  // Which phase is the sof / eof cell?
+  //   sof cell: phase == 0 AND fanout_beat_sof (frame start beat, bin_par 0)
+  //   eof cell: phase == BIN_PAR-1 AND fanout_beat_eof (frame end beat,
+  //            last bin_par)
+  wire ser_cell_sof = fanout_beat_sof && (ser_phase_q == SER_PHASE_W'(0));
+  wire ser_cell_eof = fanout_beat_eof && ser_last_phase;
+
+  // Beam loop: instantiate N_BEAMS cfar_core + build each beam's serialized
+  // input beat.
+  for (genvar b = 0; b < int'(N_BEAMS); b++) begin : g_cfar_per_beam
+    // The (beam b, bin_par ser_phase_q) entry in the fanout beat is at
+    // index i = b * BIN_PAR + ser_phase_q. Extract that entry's power.
+    wire signed [COVAR_POWER_W-1:0] beam_cell_power;
+    if (BIN_PAR == 1) begin : g_binpar1
+      assign beam_cell_power =
+          fanout_fifo_m_data[b*FANOUT_ENTRY_W +: COVAR_POWER_W];
+    end else begin : g_binpar_ge_2
+      // Mux over BIN_PAR entries by ser_phase_q for this beam.
+      logic signed [COVAR_POWER_W-1:0] beam_cell_power_r;
+      always_comb begin
+        beam_cell_power_r = '0;
+        for (int unsigned p = 0; p < BIN_PAR; p++) begin
+          if (SER_PHASE_W'(p) == ser_phase_q) begin
+            beam_cell_power_r =
+                fanout_fifo_m_data[(b*BIN_PAR + p)*FANOUT_ENTRY_W +: COVAR_POWER_W];
+          end
+        end
+      end
+      assign beam_cell_power = beam_cell_power_r;
+    end
+
+    // Build the per-beam serialized CFAR input beat.
+    // - data = beam_cell_power (COVAR_POWER_W, sign-extended into CFAR
+    //   input width -- CFAR_POWER_W == COVAR_POWER_W by cfar_pkg definition).
+    // - sof = ser_cell_sof (first cell of first beat of a frame)
+    // - eof = ser_cell_eof (last cell of last beat of a frame)
+    // - stream_id/seq: pass-through the beamformer's beat metadata
+    // - user: {beam_id[3:0], bin_par_id[3:0]}, so the arbiter output tag
+    //   encodes origin at 8 bits max (N_BEAMS <= 16, BIN_PAR <= 16 -- both
+    //   fit in 4 bits at every configured shape).
+    stream_fields_t s_fields;
+    always_comb begin
+      s_fields           = '0;
+      s_fields.data      = STREAM_MAX_DATA_W'(beam_cell_power);
+      s_fields.sof       = ser_cell_sof;
+      s_fields.eof       = ser_cell_eof;
+      s_fields.stream_id = STREAM_MAX_ID_W'(fanout_beat_sid);
+      s_fields.seq       = STREAM_MAX_SEQ_W'(fanout_beat_seq);
+      // user = {beam_id[3:0], bin_par_id[3:0]}; b <= 15 and ser_phase_q < BIN_PAR
+      s_fields.user = STREAM_MAX_USER_W'({b[3:0], 4'(ser_phase_q)});
+    end
+
+    // Per-beam s_valid stays HIGH as long as the fanout beat is available
+    // AND this beam has NOT already consumed the current-phase cell. This
+    // preserves the SPEC 5 handshake stability rule: once valid is
+    // asserted, it stays asserted until s_ready fires (which is the
+    // acceptance moment). Different beams can fire s_ready on different
+    // cycles; the shared ser_phase_q advances only after every beam has
+    // consumed the phase.
+    assign cfar_s_valid_v[b] = fanout_fifo_m_valid && !beam_ph_done_q[b];
+    // Fire is the accepted-this-cycle marker.
+    assign beam_ph_fire_now[b] = cfar_s_valid_v[b] && cfar_s_ready_v[b];
+    assign beam_ph_done_next[b] = beam_ph_done_q[b] || beam_ph_fire_now[b];
+    assign cfar_s_payload_v[b*CFAR_S_PAYLOAD_W +: CFAR_S_PAYLOAD_W] =
+        CFAR_S_PAYLOAD_W'(stream_pack(
+            stream_geom(stream_pkg::uint_t'(CFAR_POWER_W),
+                        stream_pkg::uint_t'(STREAM_ID_W),
+                        stream_pkg::uint_t'(SEQ_W),
+                        stream_pkg::uint_t'(USER_W)),
+            s_fields));
+
+    wire                        m_valid_b;
+    wire [CFAR_M_PAYLOAD_W-1:0] m_payload_b;
+    wire [31:0]                 stat_det_b;
+    wire [31:0]                 stat_sup_b;
+    wire [31:0]                 stat_frame_b;
+
+    cfar_core #(
+        .MAX_GUARD    (CFAR_MAX_GUARD),
+        .MAX_REF      (CFAR_MAX_REF),
+        .OUT_DEPTH    (8),
+        .STREAM_ID_W  (STREAM_ID_W),
+        .SEQ_W        (SEQ_W),
+        .USER_W       (USER_W)
+    ) u_cfar (
+        .clk               (core_clk),
+        .rst_n             (core_rst_n),
+        .s_valid           (cfar_s_valid_v[b]),
+        .s_ready           (cfar_s_ready_v[b]),
+        .s_payload         (cfar_s_payload_v[b*CFAR_S_PAYLOAD_W +: CFAR_S_PAYLOAD_W]),
+        .m_valid           (m_valid_b),
+        .m_ready           (cfar_m_ready_v[b]),
+        .m_payload         (m_payload_b),
+        .cfg_enable        (cfg_cfar_enable),
+        .cfg_mode          (cfg_cfar_mode),
+        .cfg_out_mode      (cfg_cfar_out_mode),
+        .cfg_guard_lead    (cfg_cfar_guard_lead),
+        .cfg_guard_lag     (cfg_cfar_guard_lag),
+        .cfg_ref_lead      (cfg_cfar_ref_lead),
+        .cfg_ref_lag       (cfg_cfar_ref_lag),
+        .cfg_alpha         (cfg_cfar_alpha),
+        .cfg_status_clear  (cfg_cfar_status_clear),
+        .stat_det_count    (stat_det_b),
+        .stat_sup_count    (stat_sup_b),
+        .stat_frame_count  (stat_frame_b),
+        .stat_fault        (cfar_fault_v            [b*6  +: 6]),
+        .obs_cfg_pending   (cfar_obs_cfg_pending_v  [b]),
+        .obs_active_enable (cfar_obs_active_enable_v[b]),
+        .obs_active_mode   (cfar_obs_active_mode_v  [b*2  +: 2]),
+        .obs_active_out_mode (cfar_obs_active_out_mode_v[b]),
+        .obs_active_guard_lead (cfar_obs_active_guard_lead_v[b*5 +: 5]),
+        .obs_active_guard_lag  (cfar_obs_active_guard_lag_v [b*5 +: 5]),
+        .obs_active_ref_lead   (cfar_obs_active_ref_lead_v  [b*6 +: 6]),
+        .obs_active_ref_lag    (cfar_obs_active_ref_lag_v   [b*6 +: 6]),
+        .obs_active_alpha  (cfar_obs_active_alpha_v [b*16 +: 16]),
+        .obs_frame_open    (cfar_obs_frame_open_v   [b]),
+        .obs_max_guard     (cfar_obs_max_guard_v    [b*5 +: 5]),
+        .obs_max_ref       (cfar_obs_max_ref_v      [b*6 +: 6]),
+        .obs_n_lead        (cfar_obs_n_lead_v       [b*7 +: 7]),
+        .obs_n_lag         (cfar_obs_n_lag_v        [b*7 +: 7])
+    );
+
+    assign cfar_m_valid_v[b] = m_valid_b;
+    assign cfar_m_payload_v[b*CFAR_M_PAYLOAD_W +: CFAR_M_PAYLOAD_W] = m_payload_b;
+    assign cfar_stat_det_v  [b*32 +: 32] = stat_det_b;
+    assign cfar_stat_sup_v  [b*32 +: 32] = stat_sup_b;
+    assign cfar_stat_frame_v[b*32 +: 32] = stat_frame_b;
+  end
+
+  // Sink the aggregated per-beam obs/fault vectors as a single XOR so lint
+  // stays quiet without silencing UNUSEDSIGNAL.
+  wire cfar_obs_bundle_dummy =
+      (^cfar_fault_v) ^
+      (|cfar_obs_cfg_pending_v) ^
+      (|cfar_obs_active_enable_v) ^
+      (^cfar_obs_active_mode_v) ^
+      (|cfar_obs_active_out_mode_v) ^
+      (^cfar_obs_active_guard_lead_v) ^
+      (^cfar_obs_active_guard_lag_v) ^
+      (^cfar_obs_active_ref_lead_v) ^
+      (^cfar_obs_active_ref_lag_v) ^
+      (^cfar_obs_active_alpha_v) ^
+      (|cfar_obs_frame_open_v) ^
+      (^cfar_obs_max_guard_v) ^
+      (^cfar_obs_max_ref_v) ^
+      (^cfar_obs_n_lead_v) ^
+      (^cfar_obs_n_lag_v);
+
+  // XOR-collect the upper (unused) entries of the wide fanout beat: with
+  // per-beam CFAR every entry IS consumed (each beam's serializer reads its
+  // own BIN_PAR entries), so this is now a real fanout-drive: the wire is
+  // kept for lint-parity with Phase 5 (upstream may add covariance/telemetry
+  // paths that also observe the FIFO).
+  wire fanout_beat_upper_dummy = 1'b0;
+
+  // ---- Round-robin arbiter: N_BEAMS CFAR outputs -> ONE pipeline_top out
+  // See rtl/packet/pkt_rr_arb.sv for the arbiter contract. `update` fires on
+  // the cycle the arbiter output is CONSUMED (m_valid && m_ready). At most
+  // one beam is granted per cycle; grant_idx names which beam is on the wire
+  // this cycle.
+  localparam int unsigned RR_IDX_W = (N_BEAMS > 1) ? $clog2(N_BEAMS) : 1;
 
   wire                      cfar_m_valid;
   wire                      cfar_m_ready;
   wire [CFAR_M_PAYLOAD_W-1:0] cfar_m_payload;
-  wire [31:0]               cfar_stat_det;
-  wire [31:0]               cfar_stat_sup;
-  wire [31:0]               cfar_stat_frame;
-  wire [5:0]                cfar_stat_fault_dummy;
-  wire                      cfar_obs_cfg_pending_dummy;
-  wire                      cfar_obs_active_enable_dummy;
-  wire [1:0]                cfar_obs_active_mode_dummy;
-  wire                      cfar_obs_active_out_mode_dummy;
-  wire [4:0]                cfar_obs_active_guard_lead_dummy;
-  wire [4:0]                cfar_obs_active_guard_lag_dummy;
-  wire [5:0]                cfar_obs_active_ref_lead_dummy;
-  wire [5:0]                cfar_obs_active_ref_lag_dummy;
-  wire [15:0]               cfar_obs_active_alpha_dummy;
-  wire                      cfar_obs_frame_open_dummy;
-  wire [4:0]                cfar_obs_max_guard_dummy;
-  wire [5:0]                cfar_obs_max_ref_dummy;
-  wire [6:0]                cfar_obs_n_lead_dummy;
-  wire [6:0]                cfar_obs_n_lag_dummy;
+  wire [N_BEAMS-1:0]        rr_grant;
+  wire                      rr_any_grant;
+  wire [RR_IDX_W-1:0]       rr_grant_idx_dummy;
 
-  cfar_core #(
-      .MAX_GUARD    (CFAR_MAX_GUARD),
-      .MAX_REF      (CFAR_MAX_REF),
-      .OUT_DEPTH    (8),
-      .STREAM_ID_W  (STREAM_ID_W),
-      .SEQ_W        (SEQ_W),
-      .USER_W       (USER_W)
-  ) u_cfar (
-      .clk               (core_clk),
-      .rst_n             (core_rst_n),
-      .s_valid           (cfar_s_valid),
-      .s_ready           (cfar_s_ready),
-      .s_payload         (cfar_s_payload),
-      .m_valid           (cfar_m_valid),
-      .m_ready           (cfar_m_ready),
-      .m_payload         (cfar_m_payload),
-      .cfg_enable        (cfg_cfar_enable),
-      .cfg_mode          (cfg_cfar_mode),
-      .cfg_out_mode      (cfg_cfar_out_mode),
-      .cfg_guard_lead    (cfg_cfar_guard_lead),
-      .cfg_guard_lag     (cfg_cfar_guard_lag),
-      .cfg_ref_lead      (cfg_cfar_ref_lead),
-      .cfg_ref_lag       (cfg_cfar_ref_lag),
-      .cfg_alpha         (cfg_cfar_alpha),
-      .cfg_status_clear  (cfg_cfar_status_clear),
-      .stat_det_count    (cfar_stat_det),
-      .stat_sup_count    (cfar_stat_sup),
-      .stat_frame_count  (cfar_stat_frame),
-      .stat_fault        (cfar_stat_fault_dummy),
-      .obs_cfg_pending   (cfar_obs_cfg_pending_dummy),
-      .obs_active_enable (cfar_obs_active_enable_dummy),
-      .obs_active_mode   (cfar_obs_active_mode_dummy),
-      .obs_active_out_mode (cfar_obs_active_out_mode_dummy),
-      .obs_active_guard_lead (cfar_obs_active_guard_lead_dummy),
-      .obs_active_guard_lag  (cfar_obs_active_guard_lag_dummy),
-      .obs_active_ref_lead   (cfar_obs_active_ref_lead_dummy),
-      .obs_active_ref_lag    (cfar_obs_active_ref_lag_dummy),
-      .obs_active_alpha  (cfar_obs_active_alpha_dummy),
-      .obs_frame_open    (cfar_obs_frame_open_dummy),
-      .obs_max_guard     (cfar_obs_max_guard_dummy),
-      .obs_max_ref       (cfar_obs_max_ref_dummy),
-      .obs_n_lead        (cfar_obs_n_lead_dummy),
-      .obs_n_lag         (cfar_obs_n_lag_dummy)
+  pkt_rr_arb #(
+      .N (N_BEAMS)
+  ) u_cfar_rr (
+      .clk       (core_clk),
+      .rst_n     (core_rst_n),
+      .req       (cfar_m_valid_v),
+      .update    (cfar_m_valid && cfar_m_ready),
+      .grant     (rr_grant),
+      .any_grant (rr_any_grant),
+      .grant_idx (rr_grant_idx_dummy)
   );
 
-  assign stat_cfar_det_count   = cfar_stat_det;
-  assign stat_cfar_sup_count   = cfar_stat_sup;
-  assign stat_cfar_frame_count = cfar_stat_frame;
+  // Per-beam ready = external ready AND this beam is granted.
+  for (genvar b = 0; b < int'(N_BEAMS); b++) begin : g_cfar_grant_ready
+    assign cfar_m_ready_v[b] = rr_grant[b] && cfar_m_ready;
+  end
+
+  // Arbiter output valid + payload mux. Since exactly one grant bit is high
+  // when any is granted, mux by grant_idx.
+  assign cfar_m_valid = rr_any_grant;
+  // Mux via a per-bit reduction: only the granted beam's payload is on the
+  // wire this cycle. Use a for-loop as an OR-reduction so N_BEAMS is a
+  // genuine parameter.
+  logic [CFAR_M_PAYLOAD_W-1:0] cfar_m_payload_mux;
+  always_comb begin
+    cfar_m_payload_mux = '0;
+    for (int unsigned bb = 0; bb < N_BEAMS; bb++) begin
+      if (rr_grant[bb]) begin
+        cfar_m_payload_mux =
+            cfar_m_payload_v[bb*CFAR_M_PAYLOAD_W +: CFAR_M_PAYLOAD_W];
+      end
+    end
+  end
+  assign cfar_m_payload = cfar_m_payload_mux;
+
+  // Aggregate per-beam CFAR counters into pipeline_top boundary telemetry.
+  // Saturating add: with 32-bit counters and N_BEAMS<=16 the sum saturates at
+  // 2^32-1, which is far more than any realistic test drives; the ceiling is
+  // there for the assertions and the JSON exporter, not for the events.
+  logic [31:0] agg_det_r, agg_sup_r, agg_frame_r;
+  always_comb begin
+    logic [63:0] acc_det, acc_sup, acc_frame;
+    acc_det = '0;
+    acc_sup = '0;
+    acc_frame = '0;
+    for (int unsigned bb = 0; bb < N_BEAMS; bb++) begin
+      acc_det   += 64'(cfar_stat_det_v  [bb*32 +: 32]);
+      acc_sup   += 64'(cfar_stat_sup_v  [bb*32 +: 32]);
+      acc_frame += 64'(cfar_stat_frame_v[bb*32 +: 32]);
+    end
+    agg_det_r   = (acc_det   > 64'hFFFF_FFFF) ? 32'hFFFF_FFFF : acc_det[31:0];
+    agg_sup_r   = (acc_sup   > 64'hFFFF_FFFF) ? 32'hFFFF_FFFF : acc_sup[31:0];
+    agg_frame_r = (acc_frame > 64'hFFFF_FFFF) ? 32'hFFFF_FFFF : acc_frame[31:0];
+  end
+  assign stat_cfar_det_count   = agg_det_r;
+  assign stat_cfar_sup_count   = agg_sup_r;
+  assign stat_cfar_frame_count = agg_frame_r;
 
   // Decode CFAR output for external consumers.
   stream_fields_t cfar_out_fields;

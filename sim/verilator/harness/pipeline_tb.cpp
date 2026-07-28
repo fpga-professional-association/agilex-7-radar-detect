@@ -385,17 +385,26 @@ void Session::hist_sample() {
 
 bool Session::run_until_idle(std::uint64_t budget_core_cycles) {
   const std::uint64_t start = sched_.cycles(core_);
+  // Phase 6 (issue #21): per-beam CFAR fan-out emits ONE m_eof per beam per
+  // input frame. The output-drain target is therefore
+  //   frames_per_input_frame() * frames_queued_ = kNBeams * frames_queued_
+  // for every input frame. Under the Phase-5 single-CFAR contract the target
+  // was frames_queued_; see DECISIONS.md 2026-07-28 (issue #21) for the
+  // supersession.
+  const std::uint64_t expected_output_frames =
+      static_cast<std::uint64_t>(frames_per_input_frame()) * frames_queued_;
   while (sched_.cycles(core_) - start < budget_core_cycles) {
     bool any_pending = false;
     for (unsigned a = 0; a < kNAnt; ++a) {
       if (!in_q_[a].empty()) { any_pending = true; break; }
     }
-    // Wait until all input drained AND at least frames_queued_ output frames
-    // observed OR expect_detections_ is false and inputs drained. (Some
-    // configurations produce no CFAR output because the tones do not exceed
-    // the threshold; in that case we don't require a detection.)
+    // Wait until all input drained AND at least the expected N_BEAMS-fold
+    // output frames observed OR expect_detections_ is false and inputs
+    // drained. (Some configurations produce no CFAR output because the
+    // tones do not exceed the threshold; in that case we don't require a
+    // detection.)
     const bool inputs_done = !any_pending;
-    const bool outputs_done = (frames_observed_ >= frames_queued_) ||
+    const bool outputs_done = (frames_observed_ >= expected_output_frames) ||
                               !expect_detections_;
     if (inputs_done && outputs_done) return true;
     if (sched_.run_cycles(core_, 128, time_limit_) != StopReason::kRunning) {

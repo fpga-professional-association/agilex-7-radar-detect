@@ -180,6 +180,16 @@ class Session {
   std::uint64_t frames_driven() const { return frames_queued_; }
   std::uint64_t frames_observed() const { return frames_observed_; }
   std::uint64_t detections() const { return detections_; }
+  // Per-input-frame output frame count on the CFAR boundary. Phase 6 lands
+  // per-beam CFAR (issue #21): every input frame produces N_BEAMS output
+  // frame markers (one m_eof per beam per input frame, interleaved by the
+  // round-robin arbiter). Tests that ran under the Phase-5 single-CFAR
+  // contract expected frames_observed == frames_driven; the multi-beam
+  // contract is frames_observed == frames_per_input_frame() * frames_driven.
+  // The constant is kNBeams (16 at full_agmf039, 4 at medium, 2 at tiny),
+  // but callers should use this accessor so any future refactor to a
+  // different fan-out only edits the harness.
+  static constexpr unsigned frames_per_input_frame() { return kNBeams; }
   // Reads stat_cfar_det_count directly -- number of DETECT events fired
   // by the CFAR core, distinct from the number of output frame markers.
   std::uint64_t cfar_det_count() const;

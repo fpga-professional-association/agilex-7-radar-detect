@@ -249,6 +249,12 @@ int sim_test_main(const SimArgs& args) {
   std::uint64_t elapsed = 0;
   bool drained = false;
 
+  // Phase 6 (issue #21): per-beam CFAR arbiter emits kNBeams m_eof beats
+  // per input frame. Expected drain target for frames_observed is
+  // frames_per_input_frame() * frames_driven.
+  const std::uint64_t expected_output_frames =
+      static_cast<std::uint64_t>(
+          pipeline_tb::Session::frames_per_input_frame()) * kNumFrames;
   while (elapsed < budget) {
     if (!sess.advance_cycles(1)) break;
     ++elapsed;
@@ -256,8 +262,8 @@ int sim_test_main(const SimArgs& args) {
     if (top->m_valid && top->m_ready) {
       captured.push_back(capture_event(top.get()));
     }
-    const bool inputs_done  = sess.beats_driven()   == expected_beats_in;
-    const bool outputs_done = sess.frames_observed() >= sess.frames_driven();
+    const bool inputs_done  = sess.beats_driven() == expected_beats_in;
+    const bool outputs_done = sess.frames_observed() >= expected_output_frames;
     if (inputs_done && outputs_done) { drained = true; break; }
   }
   // Drain until every captured event has been written into memory AND
