@@ -173,9 +173,14 @@ set_instance_assignment -name VIRTUAL_PIN ON -to "m_bin_par_id[*]"
 set_instance_assignment -name VIRTUAL_PIN ON -to dma_mem_req_valid
 set_instance_assignment -name VIRTUAL_PIN ON -to dma_mem_req_ready
 set_instance_assignment -name VIRTUAL_PIN ON -to "dma_mem_req[*]"
+# mem_req_t and mem_rsp_t are packed structs; Quartus expands them as
+# dma_mem_req.<field>[bit], so a bracketed-only wildcard misses them.
+# The `-to * -match "*dma_mem_req*"` form covers the field expansion.
+set_instance_assignment -name VIRTUAL_PIN ON -to "dma_mem_req.*"
 set_instance_assignment -name VIRTUAL_PIN ON -to dma_mem_rsp_valid
 set_instance_assignment -name VIRTUAL_PIN ON -to dma_mem_rsp_ready
 set_instance_assignment -name VIRTUAL_PIN ON -to "dma_mem_rsp[*]"
+set_instance_assignment -name VIRTUAL_PIN ON -to "dma_mem_rsp.*"
 
 # Coefficient / weight programming plane
 set_instance_assignment -name VIRTUAL_PIN ON -to cfg_pfb_wr_valid

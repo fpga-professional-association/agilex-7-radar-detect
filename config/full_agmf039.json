@@ -1,6 +1,6 @@
 {
   "name": "full_agmf039",
-  "description": "Full-device configuration for AGMF039R47B1E1VC. Quartus benchmark, seed sweeps, timing closure. SAMPLES_PER_CYCLE=2 deviation from SPEC 11 nominal; see DECISIONS.md 2026-07-27 'Phase 5 full_agmf039 SAMPLES_PER_CYCLE deviation'.",
+  "description": "Full-device configuration for AGMF039R47B1E1VC. Quartus benchmark, seed sweeps, timing closure. Deviations from SPEC 11: SAMPLES_PER_CYCLE=2 (see DECISIONS.md 2026-07-27 issue #20 Decision 3), HISTORY_FRAMES=256 (see DECISIONS.md 2026-07-28 issue #21 Decision 8: BIN_PAR=2-replicated history_core at HISTORY_FRAMES=512 would need 536 Mbit vs AGMF039's 388 Mbit M20K capacity; halved to fit device).",
   "spec_reference": "SPEC.md 11 (Full AGMF039), SPEC.md 3 (nominal full-scale configuration)",
   "schema_version": 1,
   "purpose": [
@@ -38,7 +38,7 @@
     "FFT_SIZE": 1024,
     "PFB_TAPS": 16,
     "N_BEAMS": 16,
-    "HISTORY_FRAMES": 512,
+    "HISTORY_FRAMES": 256,
     "PACKET_W": 512,
     "N_COVAR_PAIRS": 16,
     "SAMPLE_W": 16,

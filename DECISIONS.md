@@ -5048,7 +5048,37 @@ purpose; it does not invoke verilator.
 This entry records the immutable baseline commit hash and seed at
 the time of merge. See `evidence/baseline/source_commit.txt` for the
 authoritative commit. Baseline seed: `1` (SPEC 25 development seed).
-Baseline configuration: `full_agmf039` (SPC=2 per Decision 4).
-Utilization percentages and per-clock Fmax / WNS / TNS numbers are
-in `evidence/baseline/{utilization,timing}.json`. SPEC 27
-immutability applies: this directory is read-only after this merge.
+Baseline configuration: `full_agmf039` (SPC=2 per Decision 4,
+HISTORY_FRAMES=256 per Decision 8). Utilization percentages and
+per-clock Fmax / WNS / TNS numbers are in
+`evidence/baseline/{utilization,timing}.json`. SPEC 27 immutability
+applies: this directory is read-only after this merge.
+
+**Decision 8 -- HISTORY_FRAMES reduced from 512 to 256.** The
+initial Phase-6 baseline fit at HISTORY_FRAMES=512 failed with
+memory over-utilisation: the BIN_PAR=2-replicated `history_core`
+requires
+
+    N_ANT x BIN_PAR x FFT_SIZE x FRAMES x SAMPLE_W*2 bits
+    = 16 x 2 x 1024 x 512 x 32 = 536 Mbit
+
+vs AGMF039R47B1E1VC's M20K capacity of 18,960 blocks x 20,480 bits
+= 388 Mbit -- 138% overutilisation. Halving FRAMES to 256 brings
+the storage to 268 Mbit total, which fits within the device (69%
+of M20K capacity, comfortably in the SPEC 25 acceptance region
+55-80%).
+
+*Alternative rejected (single-replica history_core with dual-port
+read):* the align network (SPEC 7.4) uses BIN_PAR=2 read ports; a
+non-replicated history_core would need a true dual-port memory of
+the same total bit count, saving no bits. The replication is what
+lets the pipeline place the two lanes at their natural clock domains.
+
+*Alternative rejected (increase SPC to 8):* the FFT merge chain
+does not yet support SPC>2 (see 2026-07-27 issue #20 Decision 3),
+and the SPC refactor is genuine engineering work. Deferred to a
+future PR that lands `fft_dit_merge` for higher SPC.
+
+The SPEC 11 nominal HISTORY_FRAMES=512 remains the spec target;
+`config/full_agmf039.json` documents the deviation and the
+per-cycle sample count is unchanged.
