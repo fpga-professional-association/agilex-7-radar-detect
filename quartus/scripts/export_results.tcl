@@ -374,6 +374,21 @@ if {$dirty} { lappend notes "working tree was dirty at export time; result is no
 # ---------------------------------------------------------------------------
 # Assemble
 # ---------------------------------------------------------------------------
+# --- configuration detection ------------------------------------------------
+# Read CONFIG_NAME out of the generated config_pkg.sv the qsf references.
+# Falls back to "unknown" if the file is missing (bench::open_project would
+# have already failed in that case).
+set config_name "unknown"
+set cfg_pkg_path [file join $bench::repo_root "sim" "verilator" "generated" "config_pkg.sv"]
+if {[file exists $cfg_pkg_path]} {
+    set fh [open $cfg_pkg_path r]
+    set txt [read $fh]
+    close $fh
+    if {[regexp {CONFIG_NAME\s*=\s*"([^"]+)"} $txt -> cn]} {
+        set config_name $cn
+    }
+}
+
 set record [json::obj [list \
     commit               [json::str  [bench::git_commit]] \
     commit_dirty         [json::bool $dirty] \
@@ -382,7 +397,7 @@ set record [json::obj [list \
     device               [json::str  $bench::device] \
     revision             [json::str  $bench::revision] \
     seed                 [json::int  $seed] \
-    configuration        [json::str  "phase0_minimal_top"] \
+    configuration        [json::str  $config_name] \
     stage                [json::strn $stage_requested] \
     stages_completed     [json::array_of_str $stages_completed] \
     verification_passed  [json::bool $verification_passed] \
