@@ -72,6 +72,18 @@ module mem_arbiter
              N_PORTS, MAX_INFLIGHT_PER_PORT,
              N_PORTS * MAX_INFLIGHT_PER_PORT, MEM_TAG_W);
     end
+    // Iteration-3 free-tag search relies on rotate-by-next_tag_q wrapping
+    // as a modulo-MAX_TAG operation.  That equivalence holds exactly when
+    // MAX_TAG is a power of two: {v,v} >> k selects the correct rotated
+    // slice, and (rel + next_tag_q) truncated to TAG_W_USED wraps
+    // correctly.  Every legitimate configuration (N_PORTS * MAX_INFLIGHT
+    // per SPEC 4.3 / #19) is a power-of-two, but assert it explicitly so
+    // a future non-pow2 caller fails elaboration rather than silently
+    // producing a broken free-tag search.
+    if (MAX_TAG != (1 << TAG_W_USED)) begin
+      $fatal(1, "mem_arbiter: MAX_TAG=%0d must be a power of two (2**TAG_W_USED=%0d) for iteration-3 rotate-priority-encode free-tag search",
+             MAX_TAG, (1 << TAG_W_USED));
+    end
   end
 `endif
 
@@ -118,20 +130,72 @@ module mem_arbiter
   logic [7:0]         inflight_q;
 
   // Find a free tag when issuing.
+  //
+  // Issue #22 iteration 3 (LONG_ROUTING / high-fanout control):
+  // the previous shape was a wrap-around linear priority chain over MAX_TAG
+  // slots that put `next_tag_q` into every one of the MAX_TAG priority
+  // stages -- Quartus inferred a single combinational net (i2176~0 in the
+  // iter-1+2 sta) with fan-out 411 driving the whole tree, giving a
+  // routing-dominated 31 ns path (95% routing, 5% cell).
+  //
+  // This version keeps the exact same functional contract -- pick the
+  // smallest (next_tag_q + i) mod MAX_TAG such that tag_valid_q[idx] = 0,
+  // valid iff any such index exists -- but implements it as:
+  //   1. Pack tag_valid_q into a packed MAX_TAG-bit vector `tv_pack`.
+  //   2. Rotate that vector RIGHT by `next_tag_q` positions so that the bit
+  //      corresponding to `next_tag_q` sits at position 0 of `tv_rot`.
+  //   3. Find the LSB-position of the first zero bit in `tv_rot` with a
+  //      fixed-priority encoder (linear search over MAX_TAG POSITIONS, but
+  //      no dependence on `next_tag_q` inside the priority chain).
+  //   4. Add `next_tag_q` back and truncate to TAG_W_USED bits.
+  //
+  // `next_tag_q` now appears in one barrel shifter and one final adder --
+  // both O(log MAX_TAG) fanout -- rather than in every stage of the
+  // priority chain. Semantics are identical: the LSB priority in the
+  // rotated vector maps exactly to the "smallest i" ordering the original
+  // loop implemented.
   logic [TAG_W_USED-1:0] free_tag_c;
   logic                  free_tag_valid_c;
+  logic [MAX_TAG-1:0]    tv_pack;
+  logic [MAX_TAG-1:0]    tv_rot;
+  logic [TAG_W_USED-1:0] rel_idx_c;
   always_comb begin
-    free_tag_c = '0;
+    for (int unsigned t = 0; t < MAX_TAG; t++) tv_pack[t] = tag_valid_q[t];
+  end
+  // Barrel right-rotate by next_tag_q.  MAX_TAG is a power of two (checked
+  // by the elaboration $fatal below); {tv_pack, tv_pack} >> next_tag_q
+  // gives an unambiguous rotated slice for any next_tag_q in [0, MAX_TAG-1].
+  // {v,v} >> k is 2*MAX_TAG bits; the lower MAX_TAG bits are the
+  // rotated slice.  Explicit slice keeps the widths honest at lint.
+  // The upper MAX_TAG bits of tv_pack_shifted are intentionally
+  // discarded: any bit shifted past MAX_TAG maps to a wrapped position
+  // that the LOWER half already exposes correctly (because the source
+  // is v concatenated with v).  Suppress the intentional UNUSEDSIGNAL.
+  /* verilator lint_off UNUSEDSIGNAL */
+  logic [(2*MAX_TAG)-1:0] tv_pack_dbl;
+  logic [(2*MAX_TAG)-1:0] tv_pack_shifted;
+  /* verilator lint_on UNUSEDSIGNAL */
+  assign tv_pack_dbl     = {tv_pack, tv_pack};
+  assign tv_pack_shifted = tv_pack_dbl >> next_tag_q;
+  assign tv_rot          = tv_pack_shifted[MAX_TAG-1:0];
+  // Fixed-priority encoder over the ROTATED vector.  Because the loop no
+  // longer depends on `next_tag_q`, the priority chain synthesises as a
+  // clean parallel-prefix "leading zero" structure whose control inputs
+  // are only the local rotated valid bits.
+  always_comb begin
+    rel_idx_c        = '0;
     free_tag_valid_c = 1'b0;
     for (int unsigned i = 0; i < MAX_TAG; i++) begin
-      logic [TAG_W_USED-1:0] idx2;
-      idx2 = TAG_W_USED'((32'(next_tag_q) + i) % MAX_TAG);
-      if (!free_tag_valid_c && !tag_valid_q[idx2]) begin
-        free_tag_c = idx2;
+      if (!free_tag_valid_c && !tv_rot[i]) begin
+        rel_idx_c        = TAG_W_USED'(i);
         free_tag_valid_c = 1'b1;
       end
     end
   end
+  // Rotate the found position back to absolute index space.  Because
+  // MAX_TAG is a power of two, the modulo is a natural truncation to
+  // TAG_W_USED bits.
+  assign free_tag_c = TAG_W_USED'(rel_idx_c + next_tag_q);
 
   // We accept a producer's beat only when we have both a downstream slot and a
   // free tag.
