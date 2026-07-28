@@ -9,10 +9,25 @@
 // the Fitter does not have to place real IO buffers for the ~5000+ bit-wide
 // stream/DMA interfaces; the fabric is what the Fitter measures.
 //
+// PHASE 7 iteration 2 (issue #22): STREAM BOUNDARY REGISTRATION. The
+// Phase-6 baseline showed hold WNS = -7.031 ns on paths like
+// s_sof[*] -> u_pipe|g_pfb[*]|g_meta_cyc[0]|m_q[*], because the virtual-pin
+// min-IO-delay of 0.100 ns (quartus/constraints/io.sdc) is shorter than
+// the near-zero routing to the receiving flops. Adding one register stage
+// between the virtual-pin boundary and the pipeline provides the tCO the
+// constraint models AND gives HyperFlex retiming raw material at the
+// fabric edge (SPEC 23 "provide suitable input and output registers"). Under
+// SPEC 5, "a source holds payload and metadata stable while stalled", so
+// registering `valid` alongside the payload (with `ready` still combinational
+// backward) is exact: the sender never releases a beat except when this
+// cycle's ready is 1, and next cycle the register captures new data. No
+// beats are dropped, no beats are duplicated.
+//
 // What this wrapper adds beyond a straight instantiation of
 // benchmark_pipeline_top:
 //   * boundary registration on every stream input/output (defence against
-//     the Fitter refusing to retime through a port);
+//     the Fitter refusing to retime through a port; addresses Phase-6 hold
+//     WNS and gives HyperFlex material at the boundary);
 //   * tie-off constants on the coefficient/weight bank programming
 //     interfaces (they can be programmed by a register-plane seam in a
 //     later phase; for the Phase-5 elaboration and synthesis they need to
@@ -129,6 +144,158 @@ module benchmark_fabric_top
 );
 
   // ---------------------------------------------------------------------------
+  // Phase-7 iteration 2 boundary registers (core_clk domain)
+  //
+  // Every wide stream / DMA / telemetry port that crosses this hierarchy in
+  // core_clk carries one register stage between the virtual-pin boundary and
+  // the pipeline. The rule that keeps this SPEC-5 correct is section-header
+  // above: `valid` is registered alongside its payload, `ready` stays
+  // combinational backward; the sender holds valid until ready fires, so
+  // the register never captures inconsistent (valid, payload) pairs.
+  //
+  // The cfg_* / boundary-register-programming interfaces are NOT registered:
+  // they run on cfg_clk and are already Phase-5 tie-offs; a boundary register
+  // in a different clock domain would be a spurious crossing.
+  // ---------------------------------------------------------------------------
+  localparam int unsigned S_DATA_W = config_pkg::N_ANTENNAS *
+                                     config_pkg::SAMPLES_PER_CYCLE * 32;
+
+  logic [config_pkg::N_ANTENNAS-1:0] s_valid_q;
+  logic [config_pkg::N_ANTENNAS-1:0] s_sof_q;
+  logic [config_pkg::N_ANTENNAS-1:0] s_eof_q;
+  logic [S_DATA_W-1:0]               s_data_q;
+  logic [15:0]                       s_seq_q;
+
+  always_ff @(posedge core_clk) begin
+    if (!core_rst_n) begin
+      s_valid_q <= '0;
+    end else begin
+      s_valid_q <= s_valid;
+    end
+    s_sof_q  <= s_sof;
+    s_eof_q  <= s_eof;
+    s_data_q <= s_data;
+    s_seq_q  <= s_seq;
+  end
+
+  // Output stream side: register the pipeline's outputs before they leave
+  // the fabric. m_ready flows in combinationally (SPEC 5 backward path).
+  logic                                       m_valid_q;
+  logic [63:0]                                m_event_data_q;
+  logic [255:0]                               m_event_full_q;
+  logic                                       m_sof_q;
+  logic                                       m_eof_q;
+  logic [15:0]                                m_seq_q;
+  logic [3:0]                                 m_id_q;
+  logic [7:0]                                 m_beam_id_q;
+  logic [7:0]                                 m_bin_par_id_q;
+
+  // Wires connecting u_pipe outputs to the boundary registers above.
+  wire                                        m_valid_i;
+  wire [63:0]                                 m_event_data_i;
+  wire [255:0]                                m_event_full_i;
+  wire                                        m_sof_i, m_eof_i;
+  wire [15:0]                                 m_seq_i;
+  wire [3:0]                                  m_id_i;
+  wire [7:0]                                  m_beam_id_i, m_bin_par_id_i;
+
+  always_ff @(posedge core_clk) begin
+    if (!core_rst_n) begin
+      m_valid_q <= 1'b0;
+    end else begin
+      m_valid_q <= m_valid_i;
+    end
+    m_event_data_q <= m_event_data_i;
+    m_event_full_q <= m_event_full_i;
+    m_sof_q        <= m_sof_i;
+    m_eof_q        <= m_eof_i;
+    m_seq_q        <= m_seq_i;
+    m_id_q         <= m_id_i;
+    m_beam_id_q    <= m_beam_id_i;
+    m_bin_par_id_q <= m_bin_par_id_i;
+  end
+
+  assign m_valid       = m_valid_q;
+  assign m_event_data  = m_event_data_q;
+  assign m_event_full  = m_event_full_q;
+  assign m_sof         = m_sof_q;
+  assign m_eof         = m_eof_q;
+  assign m_seq         = m_seq_q;
+  assign m_id          = m_id_q;
+  assign m_beam_id     = m_beam_id_q;
+  assign m_bin_par_id  = m_bin_par_id_q;
+
+  // DMA readback path -- register the wide request/response payloads.
+  // Handshake valid/ready stays direct: the mem_arbiter's protocol is
+  // single-outstanding-per-port and its own timing budget is already
+  // internal (issue #19 abstract seam).
+  logic          dma_mem_req_valid_q;
+  mem_req_t      dma_mem_req_q;
+  logic          dma_mem_rsp_ready_q;
+
+  wire           dma_mem_rsp_valid_i;
+  mem_rsp_t      dma_mem_rsp_i;
+  wire           dma_mem_req_ready_i;
+
+  logic          dma_mem_rsp_valid_q;
+  mem_rsp_t      dma_mem_rsp_q;
+
+  always_ff @(posedge core_clk) begin
+    if (!core_rst_n) begin
+      dma_mem_req_valid_q <= 1'b0;
+      dma_mem_rsp_ready_q <= 1'b0;
+      dma_mem_rsp_valid_q <= 1'b0;
+    end else begin
+      dma_mem_req_valid_q <= dma_mem_req_valid;
+      dma_mem_rsp_ready_q <= dma_mem_rsp_ready;
+      dma_mem_rsp_valid_q <= dma_mem_rsp_valid_i;
+    end
+    dma_mem_req_q <= dma_mem_req;
+    dma_mem_rsp_q <= dma_mem_rsp_i;
+  end
+
+  assign dma_mem_rsp_valid = dma_mem_rsp_valid_q;
+  assign dma_mem_rsp       = dma_mem_rsp_q;
+  assign dma_mem_req_ready = dma_mem_req_ready_i;
+
+  // Telemetry: registered too, since they are consumed off-fabric by the
+  // register plane (or virtual pins today); registration lets Quartus retime
+  // freely from the counter's saturating flops toward the boundary.
+  logic [31:0]  stat_pipe_frame_count_q;
+  logic [31:0]  stat_pipe_swap_count_q;
+  logic [31:0]  stat_cfar_det_count_q;
+  logic [31:0]  stat_cfar_frame_count_q;
+  logic [31:0]  stat_dma_events_delivered_q;
+  logic [31:0]  stat_dma_mem_req_count_q;
+  logic         stat_covar_sat_any_q;
+
+  wire [31:0]  stat_pipe_frame_count_i;
+  wire [31:0]  stat_pipe_swap_count_i;
+  wire [31:0]  stat_cfar_det_count_i;
+  wire [31:0]  stat_cfar_frame_count_i;
+  wire [31:0]  stat_dma_events_delivered_i;
+  wire [31:0]  stat_dma_mem_req_count_i;
+  wire         stat_covar_sat_any_i;
+
+  always_ff @(posedge core_clk) begin
+    stat_pipe_frame_count_q     <= stat_pipe_frame_count_i;
+    stat_pipe_swap_count_q      <= stat_pipe_swap_count_i;
+    stat_cfar_det_count_q       <= stat_cfar_det_count_i;
+    stat_cfar_frame_count_q     <= stat_cfar_frame_count_i;
+    stat_dma_events_delivered_q <= stat_dma_events_delivered_i;
+    stat_dma_mem_req_count_q    <= stat_dma_mem_req_count_i;
+    stat_covar_sat_any_q        <= stat_covar_sat_any_i;
+  end
+
+  assign stat_pipe_frame_count     = stat_pipe_frame_count_q;
+  assign stat_pipe_swap_count      = stat_pipe_swap_count_q;
+  assign stat_cfar_det_count       = stat_cfar_det_count_q;
+  assign stat_cfar_frame_count     = stat_cfar_frame_count_q;
+  assign stat_dma_events_delivered = stat_dma_events_delivered_q;
+  assign stat_dma_mem_req_count    = stat_dma_mem_req_count_q;
+  assign stat_covar_sat_any        = stat_covar_sat_any_q;
+
+  // ---------------------------------------------------------------------------
   // Instantiate the pipeline. Sinks for the telemetry ports that this
   // fabric top does not export (they are still exercised by the pipeline
   // internally; the fabric top's job is to elaborate the same integrated
@@ -194,26 +361,26 @@ module benchmark_fabric_top
       .cfg_cfar_alpha            (cfg_cfar_alpha),
       .cfg_cfar_status_clear     (cfg_cfar_status_clear),
 
-      .s_valid                   (s_valid),
+      .s_valid                   (s_valid_q),
       .s_ready                   (s_ready),
-      .s_sof                     (s_sof),
-      .s_eof                     (s_eof),
-      .s_data                    (s_data),
-      .s_seq                     (s_seq),
+      .s_sof                     (s_sof_q),
+      .s_eof                     (s_eof_q),
+      .s_data                    (s_data_q),
+      .s_seq                     (s_seq_q),
 
-      .m_valid                   (m_valid),
+      .m_valid                   (m_valid_i),
       .m_ready                   (m_ready),
-      .m_event_data              (m_event_data),
-      .m_event_full              (m_event_full),
-      .m_sof                     (m_sof),
-      .m_eof                     (m_eof),
-      .m_seq                     (m_seq),
-      .m_id                      (m_id),
-      .m_beam_id                 (m_beam_id),
-      .m_bin_par_id              (m_bin_par_id),
+      .m_event_data              (m_event_data_i),
+      .m_event_full              (m_event_full_i),
+      .m_sof                     (m_sof_i),
+      .m_eof                     (m_eof_i),
+      .m_seq                     (m_seq_i),
+      .m_id                      (m_id_i),
+      .m_beam_id                 (m_beam_id_i),
+      .m_bin_par_id              (m_bin_par_id_i),
 
-      .stat_pipe_frame_count     (stat_pipe_frame_count),
-      .stat_pipe_swap_count      (stat_pipe_swap_count),
+      .stat_pipe_frame_count     (stat_pipe_frame_count_i),
+      .stat_pipe_swap_count      (stat_pipe_swap_count_i),
       .stat_pipe_swap_overrun    (pipe_swap_overrun_dummy),
       .stat_pipe_swap_busy       (pipe_swap_busy_dummy),
       .stat_pipe_swap_pending    (pipe_swap_pending_dummy),
@@ -230,24 +397,24 @@ module benchmark_fabric_top
       .stat_align_timeout_count  (align_timeout_dummy),
       .stat_bf_frame_count       (bf_frame_dummy),
       .stat_bf_sat_any           (bf_sat_dummy),
-      .stat_cfar_det_count       (stat_cfar_det_count),
+      .stat_cfar_det_count       (stat_cfar_det_count_i),
       .stat_cfar_sup_count       (cfar_sup_dummy),
-      .stat_cfar_frame_count     (stat_cfar_frame_count),
-      .stat_covar_sat_any        (stat_covar_sat_any),
+      .stat_cfar_frame_count     (stat_cfar_frame_count_i),
+      .stat_covar_sat_any        (stat_covar_sat_any_i),
       .stat_covar_pair0_window   (covar_pair0_window_dummy),
       .stat_covar_pair0_samples  (covar_pair0_samples_dummy),
 
-      .dma_mem_req_valid         (dma_mem_req_valid),
-      .dma_mem_req_ready         (dma_mem_req_ready),
-      .dma_mem_req               (dma_mem_req),
-      .dma_mem_rsp_valid         (dma_mem_rsp_valid),
-      .dma_mem_rsp_ready         (dma_mem_rsp_ready),
-      .dma_mem_rsp               (dma_mem_rsp),
+      .dma_mem_req_valid         (dma_mem_req_valid_q),
+      .dma_mem_req_ready         (dma_mem_req_ready_i),
+      .dma_mem_req               (dma_mem_req_q),
+      .dma_mem_rsp_valid         (dma_mem_rsp_valid_i),
+      .dma_mem_rsp_ready         (dma_mem_rsp_ready_q),
+      .dma_mem_rsp               (dma_mem_rsp_i),
       .stat_dma_events_captured  (dma_captured_dummy),
-      .stat_dma_events_delivered (stat_dma_events_delivered),
+      .stat_dma_events_delivered (stat_dma_events_delivered_i),
       .stat_dma_pkt_ing_packets  (dma_pkt_ing_dummy),
       .stat_dma_pkt_egr_packets  (dma_pkt_egr_dummy),
-      .stat_dma_mem_req_count    (stat_dma_mem_req_count),
+      .stat_dma_mem_req_count    (stat_dma_mem_req_count_i),
       .stat_dma_mem_rsp_count    (dma_mem_rsp_count_dummy),
       .stat_dma_write_addr_next  (dma_write_addr_next_dummy)
   );
