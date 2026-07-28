@@ -254,18 +254,37 @@ if {[llength $clocks] == 0} {
 }
 
 # --- constraints integrity (SPEC.md 24) -------------------------------------
+# Two-source merge: report_sta.tcl scans the SDC files, constraints_report.tcl
+# queries the Quartus timing analyzer. The Quartus record is authoritative for
+# `disabled_arcs` (SDC scan cannot see them) and for the clock-name list; the
+# SDC scan is authoritative for counts of directives in the checked-in SDCs.
+# Values from the Quartus record override the SDC scan when both are present.
 set integ [frag timing integrity {}]
-if {[llength $integ] == 0} {
+set qs_integ [frag constraints_report integrity {}]
+set qs_clocks {}
+if {[dict exists $qs_integ clocks]} { set qs_clocks [dict get $qs_integ clocks] }
+
+# Merge: start with the Tcl-scan values, then overwrite from the Quartus
+# record when a key is present in both.
+foreach k {false_paths multicycle_paths clock_groups max_delays min_delays
+           unconstrained_paths ignored_sdc_constraints disabled_arcs} {
+    if {[dict exists $qs_integ $k]} {
+        dict set integ $k [dict get $qs_integ $k]
+    }
+}
+if {[llength $integ] == 0 && [llength $qs_integ] == 0} {
     set integrity_json "null"
 } else {
     set integrity_json [json::obj [list \
-        false_paths          [json::int [dict_get_or $integ false_paths]] \
-        multicycle_paths     [json::int [dict_get_or $integ multicycle_paths]] \
-        clock_groups         [json::int [dict_get_or $integ clock_groups]] \
-        max_delays           [json::int [dict_get_or $integ max_delays]] \
-        min_delays           [json::int [dict_get_or $integ min_delays]] \
-        unconstrained_paths  [json::int [dict_get_or $integ unconstrained_paths]] \
+        false_paths             [json::int [dict_get_or $integ false_paths]] \
+        multicycle_paths        [json::int [dict_get_or $integ multicycle_paths]] \
+        clock_groups            [json::int [dict_get_or $integ clock_groups]] \
+        max_delays              [json::int [dict_get_or $integ max_delays]] \
+        min_delays              [json::int [dict_get_or $integ min_delays]] \
+        disabled_arcs           [json::int [dict_get_or $integ disabled_arcs]] \
+        unconstrained_paths     [json::int [dict_get_or $integ unconstrained_paths]] \
         ignored_sdc_constraints [json::int [dict_get_or $integ ignored_sdc_constraints]] \
+        clocks                  [json::array_of_str $qs_clocks] \
     ] 2]
 }
 

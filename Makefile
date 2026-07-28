@@ -1308,6 +1308,7 @@ define QUARTUS_REPORTS
 	@'$(QUARTUS_SH)'  -t $(QSCRIPTS)/report_utilization.tcl
 	@'$(QUARTUS_STA)' -t $(QSCRIPTS)/report_congestion.tcl
 	@'$(QUARTUS_STA)' -t $(QSCRIPTS)/report_retiming.tcl
+	@'$(QUARTUS_STA)' -t $(QSCRIPTS)/constraints_report.tcl
 endef
 
 # ===========================================================================
@@ -1361,8 +1362,8 @@ help:
 	@printf '%-18s %-9s %s\n' 'calibrate-packet' 'windows' 'SPEC 18 packet-switch stage + two-stage fabric-slice sweep'
 	@printf '%-18s %-9s %s\n' 'calibrate-summary' 'local'  'rebuild the calibration JSON/table from evidence on disk (KERNEL=<name>)'
 	@printf '\n'
-	@printf '%-18s %-9s %s\n' 'seed-sweep'       'windows' 'TODO(issue #23) ten-seed robustness sweep'
-	@printf '%-18s %-9s %s\n' 'compare-baseline' 'local'   'TODO(issue #21) compare current run to baseline'
+	@printf '%-18s %-9s %s\n' 'seed-sweep'       'windows' 'drive N compiles across SEEDS (issue #21 tooling, issue #23 ten-seed gate)'
+	@printf '%-18s %-9s %s\n' 'compare-baseline' 'local'   'diff results/timing/latest.json against evidence/baseline/timing.json'
 	@printf '%-18s %-9s %s\n' 'reproduce-final'  'both'    'TODO(issue #25) reproduce the final result'
 	@printf '\n'
 	@printf 'numerics-check, coeff-check, fft-check and cdc-inventory are not SPEC 16\n'
@@ -1767,12 +1768,42 @@ calibrate-summary:
 # Cross-toolchain analysis targets (SPEC.md 16)
 # ===========================================================================
 
-seed-sweep:
-	$(call TODO,23,Phase 8: Ten-seed robustness sweep)
+# seed-sweep (issue #21 tooling, issue #23 gate):
+# Drive multiple Quartus compiles across a seed list and aggregate. The
+# baseline (issue #21) uses only the fixed development seed (SEED variable),
+# so `seed-sweep SEEDS=1` is a legal single-point invocation that exercises
+# every code path. The ten-seed final-stage robustness sweep (issue #23)
+# uses SEEDS="1 2 3 4 5 6 7 8 9 10".
+#
+# SEEDS is a space-separated list at the Make level (matching the sim-medium
+# convention); the driver expects it as a comma-separated string, so a
+# transform is done in the recipe.
+compare-baseline: $(PYTHON_CHECK)
+	@if [ ! -f evidence/baseline/timing.json ]; then \
+	    printf '[compare-baseline] evidence/baseline/timing.json not found;\n' 1>&2; \
+	    printf '[compare-baseline] the immutable baseline has not landed yet.\n' 1>&2; \
+	    printf '[compare-baseline] Run `make quartus-compile SEED=$(SEED)` first,\n' 1>&2; \
+	    printf '[compare-baseline] then commit evidence/baseline/ (issue #21).\n' 1>&2; \
+	    exit 2; \
+	fi
+	@if [ ! -f results/timing/latest.json ]; then \
+	    printf '[compare-baseline] results/timing/latest.json not found; run `make quartus-report` first.\n' 1>&2; \
+	    exit 2; \
+	fi
+	$(PYTHON) scripts/compare_runs.py evidence/baseline/timing.json results/timing/latest.json
 
-compare-baseline:
-	$(call TODO,21,Phase 6: Baseline fit and comparison tooling)
+# seed-sweep: single-seed smoke by default. Override SEEDS="1 2 3 ..." for a
+# multi-seed run. Passes through the caller's PIPE_CONFIG (default full_agmf039).
+SWEEP_CONFIG ?= full_agmf039
+seed-sweep: $(PYTHON_CHECK)
+	@printf '[seed-sweep] seeds=%s config=%s\n' '$(SEEDS)' '$(SWEEP_CONFIG)'
+	$(PYTHON) scripts/seed_sweep.py \
+	    --seeds "$(shell echo $(SEEDS) | tr ' ' ',')" \
+	    --config $(SWEEP_CONFIG) \
+	    --quartus-bin '$(QUARTUS_BIN)'
 
+# reproduce-final: issue #25 (Executive summary and reproducibility). Left
+# unimplemented at Phase 6.
 reproduce-final:
 	$(call TODO,25,Evidence package and reproducibility)
 
