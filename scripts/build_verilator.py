@@ -549,6 +549,16 @@ def main() -> int:
         action="store_true",
         help="print only the resulting binary path and exit 0 (no build)",
     )
+    p.add_argument(
+        "--config-only",
+        action="store_true",
+        help=(
+            "regenerate sim/verilator/generated/config_pkg.sv (and "
+            "config_sim.h) from config/<name>.json and exit 0. Does not "
+            "call verilator. Used by the Quartus targets (SPEC.md 15) to "
+            "make sure the qsf-referenced config_pkg matches QUARTUS_CONFIG."
+        ),
+    )
     p.add_argument("--quiet", action="store_true", help="less chatter")
     p.add_argument(
         "--verilator",
@@ -559,6 +569,10 @@ def main() -> int:
 
     if args.print_binary:
         print(REPO_ROOT / binary_path(args.mode, args.config, args.test, args.top))
+        return 0
+
+    if args.config_only:
+        generate_config(args.config, args.quiet)
         return 0
 
     if shutil.which(args.verilator) is None:

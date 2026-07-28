@@ -4896,3 +4896,159 @@ SPC=8, so SPC=2 is guaranteed to under-utilise); closure at SPC=2 says
 nothing about SPC=8 closure. To avoid that churn the SPC decision must
 be FINAL BEFORE #22 begins closure work. This constraint is echoed in
 the follow-up issue comments landed as part of this revision.
+
+---
+
+## 2026-07-28 -- Phase 6: per-beam CFAR + immutable baseline fit (issue #21)
+
+**Context.** SPEC 19 Phase 6 requires one immutable, unoptimized reference
+compile for `full_agmf039` before the timing-closure loop (#22) begins,
+plus completion of the SPEC 17 machine-readable Quartus-record tooling
+(parse, compare, dashboard, sweep) and the SPEC 24 constraints-integrity
+audit. Issue #21's binding review comment additionally mandated the
+Phase-5 follow-up: land per-beam CFAR fan-out, restructure the four
+affected pipeline tests, and add `three_targets` / mixed-parity
+injection scenarios that the single-tap CFAR could not see.
+
+**Decision 1 -- Per-beam CFAR with round-robin arbiter.**
+`rtl/top/benchmark_sim_top.sv` Stage 8 now instantiates
+N_BEAMS parallel `cfar_core` modules inside a `for (genvar b = 0; b <
+N_BEAMS)` block, fed by a BIN_PAR-cycle serialiser and drained by a
+`pkt_rr_arb` (N=N_BEAMS) round-robin arbiter. Each `cfar_core` sees a
+frame of FFT_SIZE cells per input frame in bin order; the arbiter
+multiplexes the N_BEAMS event streams onto the pipeline_top boundary
+with each event tagged `{beam_id[3:0], bin_par_id[3:0]}` in the SPEC 5
+`user` field. Aggregate `stat_cfar_{det,sup,frame}_count` is the
+saturating 32-bit sum across beams.
+
+Handshake stability: the serialiser holds per-beam `s_valid`
+constant until every beam has consumed the current-phase cell
+(per-beam `beam_ph_done_q` tracker), so the SPEC 5 handshake rule "once
+asserted, valid stays asserted until s_ready fires" is preserved
+independently for each beam.
+
+Why RTL (not documented serialisation): the alternative -- feed one
+`cfar_core` a (beam x bin) product-order stream -- breaks the CFAR
+window semantics (a window crossing a beam boundary conflates two
+independent power spectra); it is not spec-compliant. The RTL cost of
+N_BEAMS parallel cores is bounded by cfar_pkg's window size and is what
+the Phase-6 baseline gate exists to measure.
+
+*Alternative rejected (deferred single-CFAR tap):* Phase 5's
+serialisation at (beam 0, bin_par 0) was the "documented, spec-compliant"
+tap referenced in issue #20 Decision 2. The review comment on #21 is
+explicit that Phase 6 must land the fan-out AND restructure the tests;
+serialisation-as-tap is not acceptable at #21's gate.
+
+**Decision 2 -- Test restructuring: multi-event contract.** The four
+Phase-5 tests are updated to the multi-event contract in the same PR
+as the RTL change:
+
+  * `pipeline_tb::Session::frames_per_input_frame()` returns N_BEAMS;
+    `run_until_idle` drains until `frames_observed >= N_BEAMS x
+    frames_queued` (one m_eof per beam per input frame, interleaved by
+    the arbiter).
+  * `test_pipeline_continuous`: `expected_out = N_BEAMS x frames_driven`,
+    exact equality (not >=) on the frame boundary.
+  * `test_pipeline_metamorphic`: pairwise invariants (zero-in,
+    impulse repeatability, linearity, delay, inactive-bank, reset-rep,
+    antenna-perm) preserved as strict equality. Backpressure invariance
+    becomes a bounded delta: with the RR arbiter and per-beam FLUSH-edge
+    accounting, heavy backpressure introduces up to
+    `N_BEAMS x n_frames` extra decisions vs light backpressure. Bound is
+    documented and honest (not a fudge).
+  * `test_pipeline_dma`: drain target updated; `captured ==
+    delivered == observed` exact equality preserved (packet path did
+    not lose or duplicate).
+  * `test_pipeline_scenario`: false-alarm bound scales by N_BEAMS
+    (each beam's per-window false-alarm probability is unchanged, so
+    aggregate scales linearly).
+
+**Decision 3 -- `mixed_parity` scenario replaces `three_targets` at
+Phase-6 injection.** The 2026-07-27 issue #20 Decision 11 comment
+predicted that per-beam CFAR would make `three_targets` (nonzero
+angles) injection-testable. Under UNIFORM beamformer weights that is
+NOT true: coherent addition of a per-antenna phase gradient
+`exp(j 2 pi angle_idx a / N_ANT)` across N_ANT antennas with equal
+weights is `N_ANT sinc(pi angle_idx)`, zero unless
+`angle_idx == 0 (mod N_ANT)`. So nonzero-angle targets are nulled at
+every beam under uniform weights, regardless of per-beam CFAR.
+
+`three_targets_even` continues to pass (three even bins, angle 0 --
+3/3 detected, 4 false alarms under bound 24 at medium seed 1).
+
+Added `mixed_parity` (6 targets, 3 even + 3 odd FFT bins, angle 0):
+under Phase-5 single-tap the three odd-bin targets were invisible
+(align_pkg lane parity); under Phase-6 per-beam CFAR the
+BIN_PAR-cycle serialiser puts every FFT bin on some cfar_core cell,
+so every target is detectable. Passes on seeds 1/2/3 at medium
+(6/6 detected, up to 8 false alarms under bound 24).
+
+`three_targets` (nonzero angles) proper injection requires per-beam
+steering weights (deferring to Phase 7 or later). The scenario is
+still generated and its reference chain still validates in
+range_doppler.py; only the sim-injection path continues to be a
+Phase-7 concern.
+
+`cfar_bin_for_fft_bin` in `sim/verilator/harness/iq_loader.h` now
+returns the FFT bin index directly (identity mapping, since every FFT
+bin reaches a cfar_core cell); `cfar_bin_for_fft_bin_p5` retains the
+Phase-5 mapping for the reference-chain path.
+
+**Decision 4 -- SPC=2 accepted as the Phase-6 baseline shape.** The
+issue #20 Decision 3 and #20 revision 2 Decision 4 both flagged SPC=2
+vs SPEC 11 SPC=8 as a Phase 6+ decision. The Phase-6 baseline lands at
+SPC=2 (config unchanged). Rationale: the FFT merge-chain refactor
+(N-way DIT tree, per-level twiddle scheduling) is genuine engineering
+work independent of every other Phase-6 obligation, and the review
+comment on #21 does not require it before the baseline lands. The
+baseline is what #22 tunes; if #22 or #23 finds the SPC=2 fit does not
+match the SPEC 25 fractions, the fft_core refactor is what lands next
+(new baseline_v2/, new dated entry per SPEC 27 immutability rule).
+
+**Decision 5 -- Tooling for SPEC 17 record shape.** New scripts:
+  * `scripts/compare_runs.py`: baseline vs candidate delta, flags
+    regressions on Fmax / WNS / TNS / failing paths / utilization / new
+    unconstrained endpoints.
+  * `scripts/make_dashboard.py`: Markdown or HTML per-record dashboard,
+    deterministic (sorted timestamp -> commit -> seed).
+  * `scripts/seed_sweep.py`: driver for N compiles across a seed list.
+    Baseline uses N=1; #23 uses N=10 with the same driver. Resume mode
+    reuses records whose commit matches HEAD.
+  * `scripts/constraints_report.py`: SPEC 24 audit as a local,
+    tool-independent script. Scans quartus/constraints/*.sdc for every
+    exception directive; cross-checks against the Quartus record's
+    constraints_integrity block; --strict fails on any undocumented
+    exception.
+  * `scripts/populate_baseline_evidence.py`: assemble evidence/baseline/
+    from a completed compile record + the sim-full-smoke summary,
+    refusing to overwrite existing files without --force.
+
+Tcl side additions:
+  * `quartus/scripts/constraints_report.tcl`: dumps the Quartus timing
+    analyzer's view of exceptions (get_timing_exceptions,
+    report_disable_timing, report_sdc -ignored) and the analyzer's
+    clock-name list. Merged into `export_results.tcl`'s
+    constraints_integrity JSON.
+
+**Decision 6 -- Makefile QUARTUS_CONFIG regeneration.** The Quartus
+qsf references `sim/verilator/generated/config_pkg.sv`, which is
+generated by `scripts/build_verilator.py` from `config/<name>.json`.
+Prior to Phase 6, this file was implicitly whatever the last sim run
+had generated -- an easy source of "Quartus compiles the WRONG config"
+bugs. The Phase-6 Makefile adds a `QUARTUS_CONFIG_REGEN` step
+(`build_verilator.py --config-only --config $(QUARTUS_CONFIG)`) as the
+FIRST recipe line of every quartus-{map,fit,compile} target;
+`QUARTUS_CONFIG` defaults to `full_agmf039`. Overrides:
+`make quartus-map QUARTUS_CONFIG=medium` for a debug run.
+`--config-only` mode was added to `build_verilator.py` for this
+purpose; it does not invoke verilator.
+
+**Decision 7 -- Baseline fit numbers and evidence.**
+This entry records the immutable baseline commit hash and seed at
+the time of merge. See `evidence/baseline/source_commit.txt` for the
+authoritative commit. Baseline seed: `1` (SPEC 25 development seed).
+Baseline configuration: `full_agmf039` (SPC=2 per Decision 4).
+Utilization percentages and per-clock Fmax / WNS / TNS numbers are
+in `evidence/baseline/{utilization,timing}.json`. SPEC 27
+immutability applies: this directory is read-only after this merge.
