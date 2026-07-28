@@ -615,7 +615,8 @@ SIM_RANDOM_RECIPE   = $(SIM_DISPATCH)
 SIM_STRESS_RECIPE   = $(SIM_DISPATCH)
 SIM_COVERAGE_RECIPE = $(SIM_DISPATCH)
 SIM_SCENARIO_RECIPE = $(SIM_DISPATCH)
-SIM_STUB_20      = $(SIM_DISPATCH)
+SIM_FULL_SMOKE      = $(SIM_DISPATCH)
+SIM_STUB_20         = $(SIM_DISPATCH)
 
 else
 
@@ -1202,6 +1203,42 @@ define SIM_STUB_20
 	$(call TODO,20,Phase 5: Full-scale elaboration and smoke tests)
 endef
 
+# --- Phase 5 full-scale smoke suite (issue #20, SPEC 13.5) ------------------
+# Elaborates pipeline_top at CONFIG=full_agmf039 (16 antennas / 2 samples-per-
+# cycle / 1024-pt FFT / 16 taps / 16 beams / 512 history frames) and runs the
+# §13.5 checklist test as a SHORT smoke:
+#     1. reset/init
+#     2. several complete FFT frames
+#     3. one coefficient-bank update
+#     4. one beam-weight update
+#     5. random backpressure
+#     6. at least one CFAR detection
+#     7. packet output verified
+#
+# The full elaboration is heavy (models ~30-60s to build, tens of MB of
+# generated .cpp). At single-seed we still stay well under the 5-minute
+# wall-clock budget. SAMPLES_PER_CYCLE=2 in full_agmf039 is a documented
+# deviation from SPEC 11 nominal (SPC=8) -- fft_core.sv currently only
+# handles P<=2 merge levels; the deviation lets the full geometry elaborate
+# without a bigger FFT refactor. See DECISIONS.md 2026-07-27 "Phase 5
+# full_agmf039 SAMPLES_PER_CYCLE deviation".
+FULL_SMOKE_TEST   := test_full_smoke
+FULL_SMOKE_CONFIG := full_agmf039
+FULL_SMOKE_BIN     = sim/verilator/build/fast_$(FULL_SMOKE_CONFIG)_$(PIPE_TOP)/V$(PIPE_TOP)_$(FULL_SMOKE_TEST)
+
+define SIM_FULL_SMOKE_RECIPE
+	@printf '[sim-full-smoke] issue #20 SPEC 13.5 full-scale smoke\n'
+	@printf '[sim-full-smoke] config=%s seed=%s test=%s\n' \
+	    '$(FULL_SMOKE_CONFIG)' '$(SEED)' '$(FULL_SMOKE_TEST)'
+	$(BUILD_VERILATOR) --mode fast --config $(FULL_SMOKE_CONFIG) --jobs $(JOBS) \
+	    --top $(PIPE_TOP) --files $(PIPE_FILES) --test $(FULL_SMOKE_TEST)
+	./$(FULL_SMOKE_BIN) +seed=$(SEED) +results=$(RESULTS_DIR)
+	@printf '\n[sim-full-smoke] PASS\n'
+endef
+
+# Bind the aliased SIM_FULL_SMOKE to the WSL-side recipe.
+SIM_FULL_SMOKE = $(SIM_FULL_SMOKE_RECIPE)
+
 endif
 
 # --- Quartus-side recipe ---------------------------------------------------
@@ -1304,7 +1341,7 @@ help:
 	@printf '%-18s %-9s %s\n' 'sim-random'       'wsl'     'issue #17 randomized backpressure + clock-phase sweep'
 	@printf '%-18s %-9s %s\n' 'sim-stress'       'wsl'     'issue #17 long stress (SPEC 13.4), STRESS_CYCLES=$(STRESS_CYCLES)'
 	@printf '%-18s %-9s %s\n' 'sim-coverage'     'wsl'     'issue #17 coverage build; results/simulation/coverage/'
-	@printf '%-18s %-9s %s\n' 'sim-full-smoke'   'wsl'     'TODO(issue #20) full-scale smoke test'
+	@printf '%-18s %-9s %s\n' 'sim-full-smoke'   'wsl'     'issue #20 SPEC 13.5 full-scale smoke @ full_agmf039'
 	@printf '%-18s %-9s %s\n' 'scenario'         'wsl'     'issue #44 (part 1): render range-Doppler map for SCENARIO=<name>'
 	@printf '%-18s %-9s %s\n' 'sim-scenario'     'wsl'     'issue #44 (part 2): inject scenario through pipeline, CFAR vs ground truth (SEEDS=$(SEEDS))'
 	@printf '\n'
@@ -1433,7 +1470,7 @@ sim-scenario:
 	$(SIM_SCENARIO_RECIPE)
 
 sim-full-smoke:
-	$(SIM_STUB_20)
+	$(SIM_FULL_SMOKE)
 
 # `scenario` (issue #44, part 1): generate a synthetic multi-antenna target IQ
 # scene and render its range-Doppler map through the reference chain (PFB ->

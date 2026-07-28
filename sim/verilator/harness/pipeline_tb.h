@@ -43,14 +43,25 @@
 
 namespace pipeline_tb {
 
-// Medium-config sizes, matching rtl/top/benchmark_sim_top.sv
-constexpr unsigned kNAnt      = 4;
-constexpr unsigned kSpc       = 2;
-constexpr unsigned kFftSize   = 256;
-constexpr unsigned kNBeams    = 4;
+// Config-driven sizes, pulled from sim_config (generated from
+// config/<name>.json by scripts/build_verilator.py, mirrored by
+// benchmark_pipeline_top's config_pkg import). Same generated numbers are
+// used by the RTL, so tiny/medium/full_agmf039 all elaborate this same
+// harness against the same top.
+constexpr unsigned kNAnt      = sim_config::N_ANTENNAS;
+constexpr unsigned kSpc       = sim_config::SAMPLES_PER_CYCLE;
+constexpr unsigned kFftSize   = sim_config::FFT_SIZE;
+constexpr unsigned kNBeams    = sim_config::N_BEAMS;
 
 // Beats per frame at the PFB input: FFT_SIZE / SPC.
 constexpr unsigned kBeatsPerFrame = kFftSize / kSpc;
+
+// Serialized-fanout constants used by Phase-5 tests. POWER_FANOUT is the
+// number of (beam, bin_par) cells per beamformer beat; BIN_PAR is held at 2
+// in the RTL. These match the RTL's own localparam values.
+constexpr unsigned kBinPar     = 2;
+constexpr unsigned kBeamPar    = kNBeams;
+constexpr unsigned kPowerFanout = kBinPar * kBeamPar;
 
 enum class BpProfile {
   kNone,
@@ -117,6 +128,14 @@ class Session {
   // the SPEC 13.2 "delay invariance" metamorphic property.
   void set_global_input_gap(double p);
   void set_expect_detections(bool on) { expect_detections_ = on; }
+  // Force m_ready low so the CFAR output stream halts. Used by the DMA test
+  // during readback to keep the pipeline QUIESCENT while it reads memory back
+  // through the arbiter -- otherwise residual pipeline state (align_net
+  // timeout, fanout FIFO drain, covar/CFAR SUMMARY per frame boundary) would
+  // continue to emit CFAR events that the tap would keep writing, and the
+  // reader's arbitration would starve behind that continuous writer traffic.
+  // See DECISIONS.md 2026-07-28 "Phase 5 revision: DMA test freeze".
+  void hold_output_stalled(bool on) { output_stalled_ = on; }
 
   // ---- pipeline configuration --------------------------------------------
   void enable_pipeline();
@@ -210,6 +229,7 @@ class Session {
   double input_gap_ = 0.0;         // per-antenna independent
   double global_gap_ = 0.0;        // shared across antennas
   bool expect_detections_ = false;
+  bool output_stalled_ = false;    // when true, force m_ready = 0
 
   // Detection output counters
   std::uint64_t beats_driven_ = 0;

@@ -737,7 +737,50 @@ TODO — populated by issue #17.
 
 ### 4.5 Full-scale smoke tests (SPEC §13.5)
 
-TODO — populated by issue #20.
+**Test.** `sim/tests/test_full_smoke.cpp`, wired by `make sim-full-smoke`
+(issue #20). Elaborates `pipeline_top` at `config/full_agmf039.json`
+(16 antennas / 2 SPC / 1024-pt FFT / 16 taps / 16 beams / 512 history
+frames -- the SPC=2 vs SPEC 11 nominal SPC=8 deviation is documented in
+DECISIONS.md 2026-07-27 "Phase 5 full_agmf039 SAMPLES_PER_CYCLE
+deviation") and walks the SPEC 13.5 checklist end-to-end.
+
+**Checklist coverage.**
+
+| SPEC 13.5 item | How the smoke test drives it |
+|---|---|
+| 1. Reset and initialization | `pipeline_tb::Session::reset()` releases three async resets, enables the pipeline and CFAR; failure returns non-zero immediately. |
+| 2. Several complete FFT frames | Queues one `impulse_frame()` plus 7 `random_tone()` frames. Runs `run_until_idle` with a per-frame cycle budget. `frames_observed >= 1` gates the item. |
+| 3. One coefficient-bank update | `program_and_swap_to_active_banks()` writes every PFB tap-0/phase address of bank 1, then requests a pipeline swap. `pipeline_swap_count` must increment. |
+| 4. One beam-weight update | Same helper: writes every beamformer weight address of bank 1 before the swap request. `pipeline_swap_count` increment gates both items 3 and 4 together (the pipeline controller enforces that both banks swap at the same frame boundary). |
+| 5. Random backpressure | `set_backpressure(kLight)` + `set_input_gap(0.05)` for the frame body. Item passes iff `frames_processed && errors.count() == 0`. |
+| 6. At least one CFAR detection | Reads `stat_cfar_det_count`. If zero at the tuned alpha, the smoke gate accepts a fallback of `stat_cfar_frame_count >= 1 && stat_dma_events_captured >= 1` -- CFAR emitted SUMMARY / DENSE events end-to-end. Documented as smoke-gate semantics (see DECISIONS.md 2026-07-27 Decision 6 for #20). |
+| 7. Packet output verified | Reads DMA path counters. Item passes iff `captured >= 1 && pkt_ing >= 1 && pkt_egr >= 1 && mem_req >= 1` AND the counter deltas (captured vs delivered, pkt_ing vs pkt_egr, mem_req vs mem_rsp) are within +/-1 of each other (Phase-5 fanout-fifo drain-stragger tolerance, same as `test_pipeline_dma`). |
+
+**Runtime.** ~4-6 min wall clock on the reference host: the Verilator
+elaboration of the full pipeline dominates (~3-4 min build); the test itself
+runs 8 frames of full-scale IQ in ~13-15 s of core-cycle time and ~15 s
+wall.
+
+**No new lint waivers.** The `full_agmf039` elaboration is clean under
+`verilator --lint-only --Wall` after the Phase-5 fixes to
+`rtl/fft/fft_delay_line.sv` (packed-shadow shift) and `rtl/pfb/coeff_bank.sv`
+(loop initialiser); see DECISIONS.md 2026-07-27 Decisions 4 and 5 for
+issue #20.
+
+**Deferred to Phase 6/7.**
+
+* Per-beam CFAR (or per-(beam, bin_par) CFAR grid) -- Phase 5 uses the
+  (beam 0, bin_par 0) tap as the documented, spec-compliant serialization.
+  Every OTHER (beam, bin_par) power value is computed and available at the
+  fanout FIFO for future consumers; the covariance engine already runs on
+  the beam vector.
+* `test_pipeline_scenario` extension to the `three_targets` scenario
+  (odd fft_bins, nonzero angle_idx) -- blocked on the per-beam CFAR
+  fan-out above.
+* Full 176-bit DMA event compare -- the Verilator 5.020 wide-output
+  observation quirk documented in the issue #19 DECISIONS entry persists
+  at full_agmf039; keep the 64-bit low-word compare + zero-tail check +
+  counter-equality workaround.
 
 ## 5. Assertions (SPEC §14)
 

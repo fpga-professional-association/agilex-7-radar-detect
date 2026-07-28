@@ -359,6 +359,8 @@ def process(path: Path, args: argparse.Namespace) -> int:
         return 2
 
     problems = validate(rec, strict=args.strict)
+    if args.check_region and isinstance(rec, dict):
+        problems.extend(check_calibration_region(rec))
     errors = [p for p in problems if p.level == "ERROR"]
 
     if not args.quiet:
@@ -367,6 +369,100 @@ def process(path: Path, args: argparse.Namespace) -> int:
     verdict = "FAIL" if errors else "OK"
     print(f"{verdict}  {path}  ({len(errors)} error(s), {len(problems) - len(errors)} warning(s))")
     return 1 if errors else 0
+
+
+def check_calibration_region(rec: dict) -> list[Problem]:
+    """SPEC 25 acceptance region check (issue #20 Phase 5).
+
+    Compare the exported utilization against the calibration-predicted region:
+        DSP  75-90%
+        M20K 55-80%
+        ALMs 55-80%
+
+    of the AGMF039R47B1E1VC device totals. Any out-of-range value is a
+    hard ERROR (the design either does not fit, or has accidental logic
+    removal). Also flag any hierarchy block that reports zero/near-zero
+    resource usage where the calibration predicted nonzero cost -- an
+    "accidental logic removal" / Design Assistant "unused logic" finding.
+    """
+    problems: list[Problem] = []
+    util = rec.get("utilization") or {}
+
+    # Region bounds, from SPEC 2 device totals and SPEC 25 acceptance region.
+    bounds = {
+        "dsp_percent":     (75.0, 90.0, "DSP"),
+        "m20k_percent":    (55.0, 80.0, "M20K"),
+        "alm_percent":     (55.0, 80.0, "ALM"),
+    }
+    for key, (lo, hi, label) in bounds.items():
+        v = util.get(key)
+        if not isinstance(v, (int, float)):
+            problems.append(Problem("ERROR",
+                f"calibration-region: {key} missing/non-numeric (expected {label} "
+                f"in [{lo:.0f}%, {hi:.0f}%])"))
+            continue
+        if v < lo:
+            problems.append(Problem("ERROR",
+                f"calibration-region: {label} = {v:.1f}% is BELOW the "
+                f"expected {lo:.0f}% lower bound (accidental logic removal? "
+                "check hierarchy report)"))
+        elif v > hi:
+            problems.append(Problem("ERROR",
+                f"calibration-region: {label} = {v:.1f}% exceeds the "
+                f"expected {hi:.0f}% upper bound (design overflow / "
+                "insufficient sharing)"))
+
+    # Hierarchy check: every top-level block the calibration predicts non-zero
+    # for MUST report non-zero. This catches "the compiler optimised out my
+    # entire pipeline stage" -- a class of bug the fitter is otherwise silent
+    # about (the compile succeeds, timing is fantastic, and half the design
+    # is gone).
+    #
+    # Expected non-zero blocks (from SPEC 3 pipeline hierarchy):
+    #   u_pipe.g_pfb           -- PFB banks
+    #   u_pipe.g_fft           -- streaming FFT
+    #   u_pipe.g_hist_rep      -- history_core replicas
+    #   u_pipe.u_align         -- alignment network
+    #   u_pipe.u_bf            -- beamformer
+    #   u_pipe.g_power_fanout  -- Phase-5 power fan-out
+    #   u_pipe.u_covar         -- covariance engine
+    #   u_pipe.u_cfar          -- CFAR detector
+    #   u_pipe.u_dma_fabric    -- packet network
+    #   u_pipe.u_dma_arb       -- memory arbiter
+    #   u_pipe.u_dma_mem       -- behavioural memory
+    expected_blocks = [
+        "g_pfb", "g_fft", "g_hist_rep", "u_align", "u_bf",
+        "g_power_fanout", "u_covar", "u_cfar",
+        "u_dma_fabric", "u_dma_arb", "u_dma_mem",
+    ]
+    hier = rec.get("utilization_by_hierarchy") or {}
+    if isinstance(hier, dict):
+        for blk in expected_blocks:
+            found = any(blk in name for name in hier.keys())
+            if not found:
+                problems.append(Problem("WARN",
+                    f"calibration-region: expected hierarchy block "
+                    f"'{blk}' not found in utilization_by_hierarchy "
+                    "(possible accidental removal or missing report)"))
+                continue
+            # Collect ALM usage for this block.
+            alms_sum = 0
+            for name, entry in hier.items():
+                if blk in name and isinstance(entry, dict):
+                    e_alms = entry.get("alms") or entry.get("alm_used") or 0
+                    if isinstance(e_alms, (int, float)):
+                        alms_sum += e_alms
+            if alms_sum < 1:
+                problems.append(Problem("ERROR",
+                    f"calibration-region: block '{blk}' reports {alms_sum} "
+                    "ALMs -- looks like the compiler removed it. Check the "
+                    "Design Assistant for 'unused logic' findings."))
+    else:
+        problems.append(Problem("WARN",
+            "calibration-region: no utilization_by_hierarchy in record; "
+            "skipping accidental-removal check"))
+
+    return problems
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -380,6 +476,9 @@ def main(argv: list[str] | None = None) -> int:
                     help="fail when post-fit timing fields are null")
     ap.add_argument("--list", action="store_true",
                     help="process every results/timing/compile_*.json")
+    ap.add_argument("--check-region", action="store_true",
+                    help=("SPEC 25 calibration-region acceptance gate "
+                          "(DSP 75-90%%, M20K 55-80%%, ALM 55-80%%); issue #20"))
     args = ap.parse_args(argv)
 
     if args.list:
