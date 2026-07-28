@@ -17,6 +17,7 @@ quartus/project/qdb/
 quartus/project/dni/
 quartus/project/output_files/
 quartus/project/tmp-clearbox/
+quartus/project/serv_req_info.txt
 
 # Verilator / simulation outputs
 obj_dir/

@@ -1778,7 +1778,8 @@ calibrate-summary:
 # SEEDS is a space-separated list at the Make level (matching the sim-medium
 # convention); the driver expects it as a comma-separated string, so a
 # transform is done in the recipe.
-compare-baseline: $(PYTHON_CHECK)
+compare-baseline:
+	$(PYTHON_CHECK)
 	@if [ ! -f evidence/baseline/timing.json ]; then \
 	    printf '[compare-baseline] evidence/baseline/timing.json not found;\n' 1>&2; \
 	    printf '[compare-baseline] the immutable baseline has not landed yet.\n' 1>&2; \
@@ -1795,7 +1796,8 @@ compare-baseline: $(PYTHON_CHECK)
 # seed-sweep: single-seed smoke by default. Override SEEDS="1 2 3 ..." for a
 # multi-seed run. Passes through the caller's PIPE_CONFIG (default full_agmf039).
 SWEEP_CONFIG ?= full_agmf039
-seed-sweep: $(PYTHON_CHECK)
+seed-sweep:
+	$(PYTHON_CHECK)
 	@printf '[seed-sweep] seeds=%s config=%s\n' '$(SEEDS)' '$(SWEEP_CONFIG)'
 	$(PYTHON) scripts/seed_sweep.py \
 	    --seeds "$(shell echo $(SEEDS) | tr ' ' ',')" \
