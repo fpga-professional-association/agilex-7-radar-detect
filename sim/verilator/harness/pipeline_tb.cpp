@@ -280,7 +280,7 @@ void Session::core_drive() {
     top_->s_sof   = 0;
     top_->s_eof   = 0;
     top_->s_seq   = 0;
-    top_->m_ready = m_ready_next() ? 1 : 0;
+    top_->m_ready = (output_stalled_ ? 0 : (m_ready_next() ? 1 : 0));
     return;
   }
 
@@ -317,8 +317,11 @@ void Session::core_drive() {
   top_->s_seq   = seq_bits;
   (void)v; (void)sof; (void)eof;  // legacy locals, kept unused for continuity
 
-  // Detection output ready, subject to backpressure profile.
-  top_->m_ready = m_ready_next() ? 1 : 0;
+  // Detection output ready, subject to backpressure profile. When
+  // hold_output_stalled(true) is in effect we override the normal
+  // backpressure knob and drive m_ready = 0 to keep the DMA path quiescent
+  // (used by test_pipeline_dma during readback -- see hold_output_stalled()).
+  top_->m_ready = (output_stalled_ ? 0 : (m_ready_next() ? 1 : 0));
 }
 
 bool Session::m_ready_next() {

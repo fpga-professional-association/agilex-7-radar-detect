@@ -128,6 +128,14 @@ class Session {
   // the SPEC 13.2 "delay invariance" metamorphic property.
   void set_global_input_gap(double p);
   void set_expect_detections(bool on) { expect_detections_ = on; }
+  // Force m_ready low so the CFAR output stream halts. Used by the DMA test
+  // during readback to keep the pipeline QUIESCENT while it reads memory back
+  // through the arbiter -- otherwise residual pipeline state (align_net
+  // timeout, fanout FIFO drain, covar/CFAR SUMMARY per frame boundary) would
+  // continue to emit CFAR events that the tap would keep writing, and the
+  // reader's arbitration would starve behind that continuous writer traffic.
+  // See DECISIONS.md 2026-07-28 "Phase 5 revision: DMA test freeze".
+  void hold_output_stalled(bool on) { output_stalled_ = on; }
 
   // ---- pipeline configuration --------------------------------------------
   void enable_pipeline();
@@ -221,6 +229,7 @@ class Session {
   double input_gap_ = 0.0;         // per-antenna independent
   double global_gap_ = 0.0;        // shared across antennas
   bool expect_detections_ = false;
+  bool output_stalled_ = false;    // when true, force m_ready = 0
 
   // Detection output counters
   std::uint64_t beats_driven_ = 0;

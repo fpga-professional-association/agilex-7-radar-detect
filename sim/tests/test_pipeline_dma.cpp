@@ -39,6 +39,31 @@
 //   why the full 176-bit compare is not exercised at this level (Verilator
 //   5.020 wide-output observation anomaly on the pipeline_top boundary).
 //
+// -----------------------------------------------------------------------------
+// Readback quiescence (revision 2 for issue #20, DECISIONS 2026-07-28)
+// -----------------------------------------------------------------------------
+// The four measurement frames flow through PFB -> FFT -> history -> align ->
+// beamformer -> power_calc -> fanout FIFO -> CFAR. After all input beats have
+// been driven and every m_eof observed, RESIDUAL pipeline state -- the align
+// network's per-frame progress timeout (align_pkg::algn_default_timeout, ~52
+// core cycles per progress step at medium), the fanout FIFO's DEPTH=4 window,
+// covar_engine's window boundary, and CFAR's SUMMARY-on-EOF -- keeps emitting
+// one CFAR event every ~100 core cycles even with no new input. Those events
+// are legitimate outputs of a still-draining pipeline; they are just not the
+// events under test. Left free-running, they keep the DMA WRITER busy and
+// starve the DMA READER for arbiter grants (the reader accept-wait budget is
+// 2000 cycles per read, and after ~13 reads the read starts to lose the
+// arbitration race to the continuous writer traffic).
+//
+// The fix is to hold m_ready = 0 on the CFAR output during the readback loop
+// (Session::hold_output_stalled(true)). That stalls the fork -- both the
+// external observer and the DMA tap -- so no new events reach the writer,
+// leaves the writer idle, and the reader gets every arbiter slot. When the
+// readback completes we release the stall so the pipeline can drain. This is
+// a testbench-ordering fix; the RTL fork is correct, the reader is correct,
+// and the arbiter is correct. Verified by seed 3 medium going from FAIL to
+// PASS with no RTL changes required for the fork or the arbiter.
+//
 // Runtime budget: 4 frames + readback loop runs in a few seconds; the
 // sim-medium recipe adds this test to the per-seed loop.
 // -----------------------------------------------------------------------------
@@ -150,36 +175,6 @@ int sim_test_main(const SimArgs& args) {
               kTestName,
               static_cast<unsigned long long>(args.seed),
               args.config_name.c_str());
-  // KNOWN DEFERRED (issue #20 -> #24): seed 3 at medium config exposes a
-  // mem_arbiter response-serialisation deadlock at Phase-5 event rates
-  // (16 events after warm-up). The internal writer's port 0 asserts
-  // arb_s_rsp_ready_0 = 1 combinationally, but the arbiter's own
-  // s_rsp_valid_q[0] update lags by one cycle; under a specific alignment
-  // of writer completion and reader arbitration, port 1's read arbitration
-  // starves. All 15/16 previous reads succeed (the fabric contract holds:
-  // captured == delivered == 16); only the last 1-3 reads time out because
-  // the arbiter has wedged behind the last writer response. Documented in
-  // DECISIONS.md 2026-07-27 "Phase 5 DMA test seed 3 mem_arbiter race".
-  //
-  // The proper fix belongs to issue #24, which replaces mem_arbiter with
-  // hbm_axi_adapter (AXI has proper response fifos). Skip this seed here
-  // to keep the smoke gate green.
-  if (args.seed == 3 && args.config_name == "medium") {
-    std::printf("[%s] skipping known Phase-5 mem_arbiter race at seed=3 (defer to #24)\n",
-                kTestName);
-    RunSummary summary;
-    summary.test_name = kTestName;
-    summary.config_name = args.config_name;
-    summary.build_mode = args.build_mode;
-    summary.seed = args.seed;
-    summary.passed = true;
-    summary.stop_reason = "skipped: known mem_arbiter race #24";
-    summary.write(args.results_dir);
-    std::printf("RESULT: PASS seed=%llu test=%s config=%s (skipped)\n",
-                static_cast<unsigned long long>(args.seed),
-                kTestName, args.config_name.c_str());
-    return 0;
-  }
 
   Verilated::commandArgs(0, static_cast<char**>(nullptr));
   std::unique_ptr<Vpipeline_top> top(new Vpipeline_top);
@@ -315,28 +310,23 @@ int sim_test_main(const SimArgs& args) {
   }
 
   // The tap counts every event that entered the tap buffer; the delivered
-  // count is every event a write completed for. They match iff the packet
-  // path did not stall or drop. A ONE-BEAT tolerance is allowed because the
-  // Phase-5 fanout fifo adds a pipeline stage that can straggle a single
-  // beat between the drain snapshot and the counter read (issue #20).
-  const std::uint32_t drop_dup_diff = (captured_run > delivered_run)
-      ? (captured_run - delivered_run)
-      : (delivered_run - captured_run);
-  if (drop_dup_diff > 1) {
+  // count is every event a write completed for. With the readback-quiescence
+  // fix (hold_output_stalled during readback -- see DECISIONS 2026-07-28) the
+  // drain is genuinely settled at this point and we require EXACT equality;
+  // the Phase-5 fanout FIFO drains fully before we snapshot.
+  if (captured_run != delivered_run) {
     std::fprintf(stderr,
-                 "[%s] tap captured=%u vs delivered=%u differ by %u (>1) "
-                 "(packet path lost or duplicated beyond drain-stragger tolerance)\n",
-                 kTestName, captured_run, delivered_run, drop_dup_diff);
+                 "[%s] tap captured=%u vs delivered=%u differ (packet path "
+                 "lost or duplicated an event -- no drain-stragger tolerance "
+                 "with readback-quiescence in place)\n",
+                 kTestName, captured_run, delivered_run);
     pass = false;
   }
-  const std::uint32_t fork_diff = (captured_run > captured.size())
-      ? (captured_run - static_cast<std::uint32_t>(captured.size()))
-      : (static_cast<std::uint32_t>(captured.size()) - captured_run);
-  if (fork_diff > 1) {
+  if (captured_run != static_cast<std::uint32_t>(captured.size())) {
     std::fprintf(stderr,
-                 "[%s] tap captured=%u vs observed at m_valid=%zu differ by %u (>1) "
-                 "(fork mismatch beyond drain-stragger tolerance)\n",
-                 kTestName, captured_run, captured.size(), fork_diff);
+                 "[%s] tap captured=%u vs observed at m_valid=%zu differ "
+                 "(fork mismatch)\n",
+                 kTestName, captured_run, captured.size());
     pass = false;
   }
   // The number of events we read back is min(captured_run, captured.size()) --
@@ -345,6 +335,15 @@ int sim_test_main(const SimArgs& args) {
       captured.size(), static_cast<std::size_t>(captured_run));
 
   // ---- read back memory contents through dma_mem_* -------------------------
+  // Stall the CFAR output for the duration of the readback so the pipeline
+  // stays quiescent (no new events reach the DMA tap; the writer stays idle;
+  // the reader gets every arbiter grant). See the readback-quiescence note in
+  // this file's header for the full rationale (DECISIONS 2026-07-28).
+  sess.hold_output_stalled(true);
+  // Give the fork one cycle to observe m_ready = 0 before we start issuing
+  // read requests -- CFAR's m_ready is cfar_m_ready = m_ready && dma_tap_ready,
+  // and the fanout FIFO can then quiesce cleanly.
+  sess.advance_cycles(2);
   // The reader is a small state machine driven from the C++ side, one word
   // per iteration: issue READ, wait for response, verify against the k-th
   // captured event. Timing budget per word is generous (max 4 * LATENCY).
@@ -357,9 +356,9 @@ int sim_test_main(const SimArgs& args) {
     top->dma_mem_req_valid = 1;
     top->dma_mem_rsp_ready = 1;
     bool accepted = false;
-    // Generous accept timeout: the arbiter may hold reads behind in-flight
-    // writes from the internal DMA tap, especially when the fan-out fifo has
-    // just drained (Phase-5 issue #20).
+    // With readback-quiescence in place (hold_output_stalled), the writer is
+    // idle and the reader has exclusive arbiter access. A modest budget is
+    // sufficient; a longer wait would only mask a real regression.
     for (int i = 0; i < 2000; ++i) {
       sess.advance_cycles(1);
       if (top->dma_mem_req_valid && top->dma_mem_req_ready) {
@@ -406,17 +405,11 @@ int sim_test_main(const SimArgs& args) {
       std::fprintf(stderr, "[%s] read-back at addr=0x%X (event %zu) timed out\n",
                    kTestName, addr, k);
       ++timeouts;
-      // Tolerate up to 2 timeouts: at high event rates (Phase-5 fan-out,
-      // 16+ events per test run), the mem_arbiter's single-outstanding-
-      // response-per-port rule can starve reads. Issue #24 replaces the
-      // arbiter with hbm_axi_adapter; the fabric contract itself does not
-      // regress -- captured == delivered still holds. A third timeout is
-      // a real regression.
-      if (timeouts > 2) {
-        pass = false;
-        break;
-      }
-      continue;
+      // With hold_output_stalled true during readback the writer is idle and
+      // the reader owns every arbiter slot; a timeout here is a real
+      // regression. No tolerance.
+      pass = false;
+      break;
     }
     // Low 64 bits of the memory word.
     std::uint64_t read_low = 0;
@@ -454,18 +447,18 @@ int sim_test_main(const SimArgs& args) {
     }
   }
 
-  // Extra-event tolerance: allow up to 1 straggler between captured/delivered
-  // counters and observed events, as documented above (Phase-5 fanout fifo
-  // pipeline-stage race). Anything beyond that is a real duplication.
-  const std::uint32_t obs_diff = (delivered_run > captured.size())
-      ? (delivered_run - static_cast<std::uint32_t>(captured.size()))
-      : (static_cast<std::uint32_t>(captured.size()) - delivered_run);
-  if (obs_diff > 1) {
+  // With readback-quiescence in place, delivered_run and observed size must
+  // match exactly. Any drift is a duplication or a lost event.
+  if (delivered_run != static_cast<std::uint32_t>(captured.size())) {
     std::fprintf(stderr,
-                 "[%s] EXTRA events: delivered=%u vs observed=%zu differ by %u (>1)\n",
-                 kTestName, delivered_run, captured.size(), obs_diff);
+                 "[%s] EXTRA events: delivered=%u vs observed=%zu differ\n",
+                 kTestName, delivered_run, captured.size());
     pass = false;
   }
+
+  // Release the output stall so the pipeline can drain any remaining
+  // in-flight state before the summary is written.
+  sess.hold_output_stalled(false);
 
   std::printf("[%s] readback complete: %zu events verified, %u mismatches, %u timeouts\n",
               kTestName, n_verify, mismatches, timeouts);

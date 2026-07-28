@@ -4809,3 +4809,90 @@ These bounds are the SPEC 25 acceptance region for the resource gate.
     on 256-bit VlWide slices of cfar_m_payload). Keep the 64-bit
     low-word compare + zero-tail check + counter-equality workaround;
     documented at the top of `sim/tests/test_pipeline_dma.cpp`.
+
+---
+
+## 2026-07-28 -- Phase 5 revision 2: DMA test seed-3 race is TB ordering, fixed by readback quiescence (issue #20, supersedes Decision 7 of the 2026-07-27 issue #20 entry)
+
+**Context.** PR #49's review flagged the seed-3-medium skip in
+`sim/tests/test_pipeline_dma.cpp` as a gate-dodge: a test that reports
+`RESULT: PASS (skipped)` is not a passing test, and the previous entry's
+attribution of the failure to `mem_arbiter`'s response serialisation was
+premature. The mem_arbiter is the persistent abstract seam (issue #24
+replaces only its downstream attach), so leaving the "race" in place there
+was also risky. This entry reproduces the failure with the skip removed,
+locates the actual root cause, and lands a testbench fix. The mem_arbiter
+RTL is NOT changed.
+
+**Root cause.** With the skip removed, seed 3 medium fails at reads 13, 14,
+15 with response timeouts. The failure is not an arbiter deadlock; it is
+CONTINUOUS BACKGROUND TRAFFIC from a still-draining pipeline that starves
+the reader for arbiter grants. Instrumented evidence: after the drain
+snapshot (`captured==delivered==23, mem_req==mem_rsp==23`), five 200-cycle
+idle spans between reads show delivered/captured advancing by 1-3 events
+each, i.e. ~1 event every 100 core cycles with no new input. The events
+are legitimate pipeline outputs: align_net's per-frame progress timeout
+(algn_default_timeout ~= 52 cycles at medium), the fanout-FIFO drain
+window (DEPTH=4), covar_engine window boundaries, and CFAR's SUMMARY-on-EOF
+each continue to fire while the fanout chain is still emptying. Under
+`hold_output_stalled(false)` (the state at the start of readback), those
+events flow through the DMA tap, get written by the internal writer, and
+compete with the reader's read requests at the mem_arbiter. Round-robin is
+fair, but the reader waits for one accept-then-response cycle per read
+while the writer continuously refills; the accumulated arbiter grants
+eventually cross the 2000-cycle accept-wait budget for the reader.
+
+The mem_arbiter itself is correct. Writer port 0 has `arb_s_rsp_ready_0 = 1`,
+so its response drains every cycle it is valid; port 1's response drains
+whenever the reader asserts ready. `m_rsp_ready = ~|s_rsp_valid_q` is a
+throughput bound (one downstream response accepted per two cycles under
+peak traffic), not a deadlock — the tests that stress it directly
+(`test_dma_end_to_end`) pass every seed. The response-fifo replacement
+belongs to #24 for its own reasons (AXI shape, higher outstanding), NOT
+because the current arbiter deadlocks.
+
+**Decision 1 -- Testbench holds CFAR output stalled during memory readback.**
+`Session::hold_output_stalled(bool)` (new API in
+`sim/verilator/harness/pipeline_tb.{h,cpp}`) drives `top->m_ready = 0` on
+the CFAR output when set. The DMA test asserts it just before the readback
+loop, advances two cycles so the fork observes the stall, then reads;
+release on completion. That stalls the CFAR fork (both external observer
+and DMA tap), which stalls the writer, and leaves the reader with
+exclusive arbiter access. Result: seeds 1/2/3 all pass with 0 mismatches
+and 0 timeouts.
+
+**Decision 2 -- Tolerances tightened.** With quiescence in place, the
+`captured==delivered` and `captured==observed` checks now require EXACT
+equality (no +/-1 stragger tolerance), and the per-read timeout budget
+allows ZERO timeouts (a single timeout under quiescence is a real
+regression). The one-beat drain-stragger tolerance and up-to-2-timeouts
+allowance from the 2026-07-27 Decision 6 entry are removed here.
+
+**Decision 3 -- SUPERSEDES the 2026-07-27 Decision 7 skip.** The entry
+"test_pipeline_dma seed 3 medium deferred to #24" is superseded. The
+race attribution was wrong (the arbiter is not the seat of the bug), the
+skip masked a real test-ordering shortcoming, and the fix is here in the
+testbench. The mem_arbiter code is unchanged; #24's replacement of it
+proceeds unchanged, on its own merits.
+
+*Alternative rejected: fix the arbiter's response gating to per-owner
+(`m_rsp_ready = !s_rsp_valid_q[tag_owner_q[m_rsp.tag]]`).* This would
+improve throughput but does not resolve the seed-3 failure (the failure
+is not a deadlock, it is arbitration under continuous producer traffic).
+Making that change in the persistent seam #24 is scheduled to replace
+would introduce a second churn point at #24 without buying the current
+gate anything. Deferred to #24 with its own response-fifo design.
+
+**Decision 4 -- SPC=2 vs SPEC 11 SPC=8 sequencing risk noted.** Timing
+closure for issue #22 targets `config/full_agmf039.json`. That config
+currently sets `SAMPLES_PER_CYCLE = 2` (see the 2026-07-27 issue #20
+entry Decision 3), whereas SPEC 11 nominal is `SPC = 8`. The fft_core
+merge chain refactor that unlocks SPC=8 is a Phase 6+ engineering task
+(genuine N-way DIT merge tree). If issue #22 closes timing at SPC=2 and
+issue #21 subsequently switches to SPC=8, THE TIMING CLOSURE MUST BE
+RE-RUN — SPC=8 quadruples the FFT lane count and roughly doubles the
+DSP density (SPEC 25 fractions of AGMF039R47B1E1VC are calibrated at
+SPC=8, so SPC=2 is guaranteed to under-utilise); closure at SPC=2 says
+nothing about SPC=8 closure. To avoid that churn the SPC decision must
+be FINAL BEFORE #22 begins closure work. This constraint is echoed in
+the follow-up issue comments landed as part of this revision.
