@@ -295,10 +295,15 @@ module cfar_core
   // Flush counter: D_HALF phantom advances per frame.
   localparam int unsigned FLUSH_W = (D_HALF <= 1) ? 1 : $clog2(D_HALF + 1);
 
-  // Decision stages that may still push: adv_q, v1_q, v2_q, v3_q. Section 4's
-  // F_max. Written here rather than as a literal so that adding a pipeline stage
-  // for timing closure moves the flow-control bound with it.
-  localparam int unsigned PIPE_INFLIGHT = 4;
+  // Decision stages that may still push: adv_q, adv2_q, v1_q, v2_q, v3_q. Section
+  // 4's F_max. Written here rather than as a literal so that adding a pipeline
+  // stage for timing closure moves the flow-control bound with it.
+  //
+  // Issue #22 iteration 1 raises PIPE_INFLIGHT by one to cover the extra
+  // adv2_q stage that absorbs the mid-tree register cfar_window now carries
+  // (cfar_window PIPE_SUM_STAGES = 1). The count follows the pipeline; the
+  // credit rule below is unchanged.
+  localparam int unsigned PIPE_INFLIGHT = 5;
   localparam int unsigned CRED_MIN      = PIPE_INFLIGHT + 1;
 
   // Free slots in the output elastic buffer (section 4).
@@ -581,7 +586,17 @@ module cfar_core
   // ---------------------------------------------------------------------------
   // Stage 1 — capture the window one cycle after the advance that formed it
   // ---------------------------------------------------------------------------
-  logic                 adv_q;
+  //
+  // Issue #22 iteration 1: cfar_window now carries a mid-tree register bank
+  // (PIPE_SUM_STAGES = 1, cfar_window section 4) so every window output is
+  // one cycle later than the pre-issue-#22 shape. The core absorbs that by
+  // pipelining the "an advance happened" flag one extra cycle (`adv2_q`);
+  // Stage 1 captures the window on `adv2_q` rather than on the immediate
+  // `adv_q`. Everything downstream is unchanged: cell/bin/cut_valid/sums land
+  // together as before, only the timing of the whole set moves one cycle
+  // later. The valid pipeline (adv_q -> adv2_q -> v1_q -> v2_q -> v3_q) has
+  // one more stage; `PIPE_INFLIGHT` above tracks it.
+  logic                 adv_q, adv2_q;
   logic                 v1_q, cut_v1_q, ok1_q;
   logic [IN_DATA_W-1:0] cell1_q;
   logic [CFAR_BIN_W-1:0] bin1_q;
@@ -589,12 +604,14 @@ module cfar_core
 
   always_ff @(posedge clk) begin
     if (!rst_n) begin
-      adv_q <= 1'b0;
-      v1_q  <= 1'b0;
+      adv_q  <= 1'b0;
+      adv2_q <= 1'b0;
+      v1_q   <= 1'b0;
     end else begin
-      adv_q <= advance;
-      v1_q  <= adv_q;
-      if (adv_q) begin
+      adv_q  <= advance;
+      adv2_q <= adv_q;
+      v1_q   <= adv2_q;
+      if (adv2_q) begin
         cut_v1_q    <= cut_valid_c;
         cell1_q     <= cut_cell_c;
         bin1_q      <= cut_bin_c;
@@ -845,7 +862,7 @@ module cfar_core
   // ---------------------------------------------------------------------------
   // State
   // ---------------------------------------------------------------------------
-  wire pipe_busy = adv_q || v1_q || v2_q || v3_q;
+  wire pipe_busy = adv_q || adv2_q || v1_q || v2_q || v3_q;
 
   always_comb begin
     state_d = state_q;

@@ -99,6 +99,20 @@
 // until its valid bit says otherwise, which is exactly what a reset would have
 // been establishing.
 //
+// The reference-sum ADDER TREE is optionally split by one intermediate register
+// bank (`PIPE_SUM_STAGES = 1`, the default). At full_agmf039 MAX_REF = 32, the
+// sum is 32 40-bit adds into a 47-bit accumulator; unregistered, that is the
+// single-cycle path that dominated the Phase-6 baseline critical path
+// (Cell -> AND -> tree -> `sum_lag1_q`, 68 logic levels, WNS -22.987 ns). The
+// mid-tree register captures the masked slot values
+//     masked_lead_q[k] = mask_lead[k] ? SUM_W'(cell_q[k]) : '0
+// (and the lag side) one cycle before the reduction. HyperFlex retiming then
+// slides those slot-local registers back into the AND itself and forward into
+// the tree, breaking the reduction into two shorter paths. Every window
+// output is delayed by exactly one cycle to stay aligned with the sums; the
+// core absorbs that by moving its stage-1 capture one cycle later
+// (cfar_core section 6 pipeline).
+//
 // Lint contract: clean under `verilator --lint-only --Wall` with no waiver.
 // -----------------------------------------------------------------------------
 
@@ -123,7 +137,16 @@ module cfar_window
     // A parameter rather than a body localparam only because a port width cannot
     // reference one; it is never overridden, and the elaboration check below
     // fails the build if it is.
-    parameter int unsigned SUM_W = int'(cfar_sum_w(cfar_uint_t'(MAX_REF)))
+    parameter int unsigned SUM_W = int'(cfar_sum_w(cfar_uint_t'(MAX_REF))),
+
+    // Adder-tree pipeline depth. 0 = combinational sums (Phase-6 baseline shape);
+    // 1 = one mid-tree register bank between the slot cells and the summation
+    // (Phase-7 issue #22 iteration 1, addressing the -22.987 ns setup path in the
+    // masked reduction over 32 40-bit reference cells at full_agmf039). Every
+    // window output is delayed by PIPE_SUM_STAGES cycles so that sums and the
+    // cell-under-test view remain aligned on a single "window output valid"
+    // event; the core absorbs the delay by matching its stage-1 capture cycle.
+    parameter int unsigned PIPE_SUM_STAGES = 1
 ) (
     input  wire                          clk,
     input  wire                          rst_n,
@@ -282,43 +305,155 @@ module cfar_window
   end
 
   // ---------------------------------------------------------------------------
-  // Masked sums, masked validity, and the selected-cell counts
+  // Per-slot masked contribution (issue #22 iteration 1)
+  //
+  // The mid-tree register lives HERE. `mcell_lead_c[k]` is the value slot k
+  // contributes to the leading-side sum on this cycle: the cell value if the
+  // mask selects it, zero otherwise. Same for the lag side and for the
+  // "reference cell missing valid" reduction (`bad_*_c`). When
+  // PIPE_SUM_STAGES = 0 these feed the reduction directly and the outputs are
+  // the same one-cycle-after-shift wires the pre-issue-#22 window produced.
+  // When PIPE_SUM_STAGES = 1 these feed a register bank and the reduction
+  // starts from the registered contributions on the next cycle. Register width
+  // shrinks with each side's masked cell: mcell_lead/lag are POWER_W each, not
+  // SUM_W, because the sum is formed after they are registered.
   // ---------------------------------------------------------------------------
-  logic [SUM_W-1:0]        sum_lead_c, sum_lag_c;
-  logic                    bad_lead_c, bad_lag_c;
-  logic [CFAR_REF_CNT_W:0] n_lead_c, n_lag_c;
+  logic [N_SLOT-1:0][POWER_W-1:0] mcell_lead_c, mcell_lag_c;
+  logic [N_SLOT-1:0]              vbad_lead_c,  vbad_lag_c;
 
   always_comb begin
-    sum_lead_c = '0;
-    sum_lag_c  = '0;
-    bad_lead_c = 1'b0;
-    bad_lag_c  = 1'b0;
-    n_lead_c   = '0;
-    n_lag_c    = '0;
     for (int unsigned k = 0; k < N_SLOT; k++) begin
-      if (mask_lead[k]) begin
-        sum_lead_c = sum_lead_c + SUM_W'(cell_q[k]);
-        n_lead_c   = n_lead_c + (CFAR_REF_CNT_W+1)'(1);
-        if (!valid_q[k]) bad_lead_c = 1'b1;
-      end
-      if (mask_lag[k]) begin
-        sum_lag_c = sum_lag_c + SUM_W'(cell_q[k]);
-        n_lag_c   = n_lag_c + (CFAR_REF_CNT_W+1)'(1);
-        if (!valid_q[k]) bad_lag_c = 1'b1;
-      end
+      mcell_lead_c[k] = mask_lead[k] ? cell_q[k]      : POWER_W'(0);
+      mcell_lag_c[k]  = mask_lag[k]  ? cell_q[k]      : POWER_W'(0);
+      // vbad_*_c[k] is 1 iff the mask selects slot k AND slot k is invalid.
+      // This is what bad_*_c reduces to per side; keeping it per-slot makes the
+      // reduction a wide OR of N_SLOT bits (much shorter than the 47-bit sum
+      // tree) and lets it live combinationally on either side of the pipeline
+      // register.
+      vbad_lead_c[k]  = mask_lead[k] && !valid_q[k];
+      vbad_lag_c[k]   = mask_lag[k]  && !valid_q[k];
     end
   end
 
-  assign sum_lead     = sum_lead_c;
-  assign sum_lag      = sum_lag_c;
-  assign refs_ok_lead = !bad_lead_c;
-  assign refs_ok_lag  = !bad_lag_c;
-  assign obs_n_lead   = n_lead_c;
-  assign obs_n_lag    = n_lag_c;
+  // Per-side selected-cell counts. These are 7-bit adders over a 65-slot mask
+  // and are NOT on the critical path (the reduction is over one-bit mask
+  // values, not over 40-bit cells). They stay combinational at every value of
+  // PIPE_SUM_STAGES; the pipeline register that delays them so they align with
+  // the sum outputs lives in the "aligned outputs" block below.
+  logic [CFAR_REF_CNT_W:0] n_lead_c, n_lag_c;
+  always_comb begin
+    n_lead_c = '0;
+    n_lag_c  = '0;
+    for (int unsigned k = 0; k < N_SLOT; k++) begin
+      if (mask_lead[k]) n_lead_c = n_lead_c + (CFAR_REF_CNT_W+1)'(1);
+      if (mask_lag[k])  n_lag_c  = n_lag_c  + (CFAR_REF_CNT_W+1)'(1);
+    end
+  end
 
-  assign cut_valid = valid_q[D_HALF];
-  assign cut_cell  = cell_q[D_HALF];
-  assign cut_bin   = bin_q[D_HALF];
+  // ---------------------------------------------------------------------------
+  // Optional mid-tree pipeline register
+  // ---------------------------------------------------------------------------
+  // At PIPE_SUM_STAGES = 0 these are just the combinational wires above,
+  // renamed. At PIPE_SUM_STAGES = 1 they are the per-slot register banks the
+  // whole change is about.
+  //
+  // The registers are UNCONDITIONAL: the mask is a combinational function of
+  // configuration (constant within a frame) and mcell_*_c[k] is a combinational
+  // function of the (already registered) slot cell array, so registering both
+  // every cycle is exact — the value the tree operates on next cycle is the
+  // value produced this cycle. No enable gate, no reset (the sum is only READ
+  // when the pipelined `cut_valid` and `refs_ok_*` say the geometry lines up,
+  // and those carry the same delay).
+  // ---------------------------------------------------------------------------
+  logic [N_SLOT-1:0][POWER_W-1:0] mcell_lead_p1, mcell_lag_p1;
+  logic [N_SLOT-1:0]              vbad_lead_p1,  vbad_lag_p1;
+
+  if (PIPE_SUM_STAGES == 0) begin : g_pipe_off
+    assign mcell_lead_p1 = mcell_lead_c;
+    assign mcell_lag_p1  = mcell_lag_c;
+    assign vbad_lead_p1  = vbad_lead_c;
+    assign vbad_lag_p1   = vbad_lag_c;
+  end else begin : g_pipe_on
+    // Grouping the two masked-cell banks and the two per-slot invalid banks in
+    // one always_ff block is fine here: none is reset and all four update every
+    // cycle unconditionally.
+    always_ff @(posedge clk) begin
+      mcell_lead_p1 <= mcell_lead_c;
+      mcell_lag_p1  <= mcell_lag_c;
+      vbad_lead_p1  <= vbad_lead_c;
+      vbad_lag_p1   <= vbad_lag_c;
+    end
+  end
+
+  // ---------------------------------------------------------------------------
+  // Sum reductions (from the possibly-pipelined masked contributions)
+  // ---------------------------------------------------------------------------
+  logic [SUM_W-1:0] sum_lead_r, sum_lag_r;
+  logic             bad_lead_r, bad_lag_r;
+
+  always_comb begin
+    sum_lead_r = '0;
+    sum_lag_r  = '0;
+    for (int unsigned k = 0; k < N_SLOT; k++) begin
+      sum_lead_r = sum_lead_r + SUM_W'(mcell_lead_p1[k]);
+      sum_lag_r  = sum_lag_r  + SUM_W'(mcell_lag_p1[k]);
+    end
+    bad_lead_r = |vbad_lead_p1;
+    bad_lag_r  = |vbad_lag_p1;
+  end
+
+  // ---------------------------------------------------------------------------
+  // Aligned outputs
+  //
+  // Every output is delayed by PIPE_SUM_STAGES cycles so that sums,
+  // refs_ok_*, obs_n_* AND cut_cell / cut_bin / cut_valid describe THE SAME
+  // window state on the same cycle. Without this alignment cfar_core would
+  // read a sum that reflects last cycle's slot geometry alongside a
+  // cut_cell that reflects this cycle's — and a bin whose sum was computed
+  // one advance earlier is a wrong answer. The delay bank is one cycle wide
+  // per stage; at the default PIPE_SUM_STAGES = 1 there is one register
+  // between the window's slot state and its output signals, exactly the
+  // depth of the mid-tree register.
+  // ---------------------------------------------------------------------------
+  logic                    cut_valid_r;
+  logic [POWER_W-1:0]      cut_cell_r;
+  logic [BIN_W-1:0]        cut_bin_r;
+  logic [CFAR_REF_CNT_W:0] n_lead_r, n_lag_r;
+
+  if (PIPE_SUM_STAGES == 0) begin : g_out_pass
+    assign cut_valid_r = valid_q[D_HALF];
+    assign cut_cell_r  = cell_q[D_HALF];
+    assign cut_bin_r   = bin_q[D_HALF];
+    assign n_lead_r    = n_lead_c;
+    assign n_lag_r     = n_lag_c;
+  end else begin : g_out_reg
+    always_ff @(posedge clk) begin
+      cut_cell_r <= cell_q[D_HALF];
+      cut_bin_r  <= bin_q[D_HALF];
+      n_lead_r   <= n_lead_c;
+      n_lag_r    <= n_lag_c;
+    end
+    // `cut_valid_r` alone carries a reset, mirroring the "reset validity, not
+    // every datapath bit" rule the section-4 comment cites: the cell and bin
+    // values are meaningless while cut_valid_r is low, so clearing them at
+    // reset would buy no property and cost N_SLOT * (POWER_W + BIN_W) reset
+    // arcs into the delay bank.
+    always_ff @(posedge clk) begin
+      if (!rst_n) cut_valid_r <= 1'b0;
+      else        cut_valid_r <= valid_q[D_HALF];
+    end
+  end
+
+  assign sum_lead     = sum_lead_r;
+  assign sum_lag      = sum_lag_r;
+  assign refs_ok_lead = !bad_lead_r;
+  assign refs_ok_lag  = !bad_lag_r;
+  assign obs_n_lead   = n_lead_r;
+  assign obs_n_lag    = n_lag_r;
+
+  assign cut_valid = cut_valid_r;
+  assign cut_cell  = cut_cell_r;
+  assign cut_bin   = cut_bin_r;
 
   // ---------------------------------------------------------------------------
   // Simulation-only proofs (SPEC 14)
@@ -361,6 +496,27 @@ module cfar_window
     end
   end
 
+  // The mask-count check is a claim about the combinational mask that feeds
+  // the current cycle's contributions, so it compares n_*_c to the cfg-driven
+  // expected count directly. `a_cfar_bands_disjoint` is likewise a claim about
+  // the mask, not the delayed output. `a_cfar_guards_valid` reasons about the
+  // output view; when PIPE_SUM_STAGES > 0 it must compare cut_valid/refs_ok
+  // (pipelined) against span_ok (combinational, from the SLOT view of the
+  // same pipeline stage). Because span_ok is derived from valid_q and mask,
+  // both of which are the pipeline inputs, and cut_valid_r / refs_ok_* are
+  // the pipeline output one cycle later, the comparison is done against the
+  // registered span_ok_p1 — otherwise a mid-cycle geometry change would
+  // trigger a spurious assertion on the exact cycle the pipeline advanced.
+  logic span_ok_p1;
+  if (PIPE_SUM_STAGES == 0) begin : g_asrt_pass
+    assign span_ok_p1 = span_ok;
+  end else begin : g_asrt_reg
+    always_ff @(posedge clk) begin
+      if (!rst_n) span_ok_p1 <= 1'b1;
+      else        span_ok_p1 <= span_ok;
+    end
+  end
+
   always_ff @(posedge clk) begin
     if (rst_n) begin
       a_cfar_mask_count : assert ((n_lead_c == exp_n_lead) && (n_lag_c == exp_n_lag))
@@ -371,7 +527,7 @@ module cfar_window
                                       !mask_lead[D_HALF] && !mask_lag[D_HALF])
         else $error("cfar_window: the reference bands overlap each other or the cell under test");
 
-      a_cfar_guards_valid : assert (!(refs_ok_lead && refs_ok_lag && cut_valid) || span_ok)
+      a_cfar_guards_valid : assert (!(refs_ok_lead && refs_ok_lag && cut_valid) || span_ok_p1)
         else $error("cfar_window: both reference bands are complete but a cell between them is not");
     end
   end
