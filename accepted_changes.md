@@ -74,4 +74,51 @@ credit rule intact.
 of this iteration; result recorded in a follow-up commit under the
 iteration table.
 
+**Note (2026-07-28).** The first launch of the iteration-1 fit
+inadvertently ran against the medium config because
+`sim/verilator/generated/config_pkg.sv` was left over from a preceding
+sim-medium run (Quartus's `QUARTUS_CONFIG_REGEN` step is only run when
+the fit is launched via the Makefile; the direct `quartus_sh` invocation
+bypassed it). The medium-config fit was terminated ~22 minutes in;
+config_pkg.sv was regenerated for `full_agmf039`, and the fit was
+re-launched with both iteration 1 AND iteration 2 in place. The
+combined fit is what the iteration table's numbers reflect below.
+
+**Commit.** (this section's commit sha lands with the fit result.)
+
+### Iteration 2 -- boundary registration on `benchmark_fabric_top`  (2026-07-28)
+
+**Hypothesis.** The baseline hold WNS = -7.031 ns on
+  `s_sof[*] -> u_pipe|g_pfb[*]|g_meta_cyc[0]|m_q[*]`
+is a real hold violation caused by the virtual-pin `set_input_delay -min
+0.100 ns` (io.sdc) being shorter than the routing to the receiver flops.
+Adding one register stage between the virtual-pin boundary and u_pipe
+provides the tCO the constraint models, closing hold STRUCTURALLY rather
+than by relaxing the constraint (SPEC 24 respect). Under HyperFlex the
+extra register at the fabric edge also gives the retimer raw material at
+what was previously a hard endpoint.
+
+**Bottleneck class.** `HOLD_LIMITED` (SPEC 21), `HIERARCHY_BOUNDARY`.
+
+**Change.** `rtl/top/benchmark_fabric_top.sv`: one register stage on
+every core_clk stream / DMA / telemetry port. SPEC 5 correctness: valid
+is registered alongside its payload; ready stays combinational
+backward. Under SPEC 5 'valid holds until ready fires', the register at
+the boundary never captures inconsistent (valid, payload) pairs.
+cfg_clk-domain interfaces are not boundary-registered (different clock,
+Phase-5 tie-offs).
+
+**Verification.**
+  * `make lint` (18 tops): PASS
+  * `verilator --lint-only --Wall benchmark_fabric_top`: clean (no new
+    warnings; pre-existing UNUSEDSIGNAL in u_pipe unchanged).
+  * `make sim-medium` (5 tests x 3 seeds): PASS. (sim-medium exercises
+    pipeline_top, not fabric_top; the fabric_top's boundary registers
+    are Quartus-only. The SPEC 5 stream latency-insensitivity means the
+    extra cycle does not need scoreboard updates.)
+
+**Fmax measurement.** Combined with iteration 1 in the relaunched fit
+(2026-07-28 15:53 launch); result recorded in the iteration table when
+the fit completes.
+
 **Commit.** (this section's commit sha lands with the fit result.)
