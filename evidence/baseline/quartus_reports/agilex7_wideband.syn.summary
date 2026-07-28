@@ -1,0 +1,9 @@
+Synthesis Status : Successful - Tue Jul 28 12:14:46 2026
+Revision Name : agilex7_wideband
+Top-level Entity Name : benchmark_fabric_top
+Family : Agilex 7
+Quartus Prime Version : 26.1.0 Build 110 03/26/2026 SC Pro Edition
+Device : AGMF039R47B1E1VC
+Logic utilization estimate (in ALMs) : 379,872 / 1,305,600 ( 29 % )
+Total dedicated logic registers : 622237
+Estimated DSP Blocks Post-Merging : 2,504

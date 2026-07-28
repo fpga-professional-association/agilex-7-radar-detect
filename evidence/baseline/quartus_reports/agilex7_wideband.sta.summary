@@ -1,0 +1,20 @@
+------------------------------------------------------------
+Timing Analyzer Summary
+------------------------------------------------------------
+
+Type  : Setup 'core_clk'
+Slack : -22.987
+TNS   : -1146299.488
+Corner: Slow vid1 100C Model
+
+Type  : Hold 'core_clk'
+Slack : -7.031
+TNS   : -627908.625
+Corner: 1 Slow vidl 100C Model
+
+Type  : Minimum Pulse Width 'core_clk'
+Slack : 0.230
+TNS   : 0.000
+Corner: Slow vid1b 100C Model
+
+------------------------------------------------------------

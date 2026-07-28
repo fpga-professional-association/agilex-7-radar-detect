@@ -1,0 +1,47 @@
+{
+  "clocks": {
+    "core_clk": {
+      "cell_delay_ns": 10.329,
+      "clock_skew_ns": -0.078,
+      "constraint_mhz": 450.045,
+      "destination_hierarchy": "u_pipe|g_cfar_per_beam[15].u_cfar",
+      "failing_paths_hold": 10000,
+      "failing_paths_recovery": 0,
+      "failing_paths_removal": 0,
+      "failing_paths_setup": 10000,
+      "fmax_mhz": 39.67,
+      "hold_tns_ns": -627908.625,
+      "hold_wns_ns": -7.031,
+      "logic_depth": 68,
+      "period_ns": 2.222,
+      "recovery_tns_ns": null,
+      "recovery_wns_ns": null,
+      "removal_tns_ns": null,
+      "removal_wns_ns": null,
+      "restricted_fmax_mhz": 39.67,
+      "routing_delay_ns": 14.578,
+      "source_hierarchy": "u_pipe|g_cfar_per_beam[15].u_cfar|u_window",
+      "tns_ns": -1146299.488,
+      "wns_ns": -22.987
+    }
+  },
+  "commit": "739313cb68",
+  "configuration": "full_agmf039",
+  "constraints_integrity": {
+    "clock_groups": 0,
+    "clocks": [],
+    "disabled_arcs": 0,
+    "false_paths": null,
+    "ignored_sdc_constraints": 0,
+    "max_delays": null,
+    "min_delays": null,
+    "multicycle_paths": null,
+    "unconstrained_paths": null
+  },
+  "critical_path": null,
+  "device": "AGMF039R47B1E1VC",
+  "quartus_version": "26.1.0 Build 110 Pro",
+  "seed": 1,
+  "timestamp": "2026-07-28T19:03:12Z",
+  "unconstrained_paths": 4
+}

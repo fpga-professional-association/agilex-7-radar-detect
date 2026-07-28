@@ -1,0 +1,121 @@
+Flow report for agilex7_wideband
+Tue Jul 28 13:51:29 2026
+Quartus Prime Version 26.1.0 Build 110 03/26/2026 SC Pro Edition
+
+
+---------------------
+; Table of Contents ;
+---------------------
+  1. Flow Summary
+  2. Flow Settings
+  3. Flow Non-Default Global Settings
+  4. Flow Elapsed Time
+  5. Flow OS Summary
+  6. Flow Log
+  7. Legal Notice
+
+
+
++------------------------------------------------------------------------------+
+; Flow Summary                                                                 ;
++---------------------------------+--------------------------------------------+
+; Flow Status                     ; Successful - Tue Jul 28 13:49:18 2026      ;
+; Quartus Prime Version           ; 26.1.0 Build 110 03/26/2026 SC Pro Edition ;
+; Revision Name                   ; agilex7_wideband                           ;
+; Top-level Entity Name           ; benchmark_fabric_top                       ;
+; Family                          ; Agilex 7                                   ;
+; Device                          ; AGMF039R47B1E1VC                           ;
+; Timing Models                   ; Final                                      ;
+; Power Models                    ; Final                                      ;
+; Device Status                   ; Final                                      ;
+; Logic utilization (in ALMs)     ; 301,838 / 1,305,600 ( 23 % )               ;
+; Total dedicated logic registers ; 384052                                     ;
+; Total pins                      ; 6 / 1,156 ( < 1 % )                        ;
+; Total block memory bits         ; 279,132,924 / 388,300,800 ( 72 % )         ;
+; Total RAM Blocks                ; 17,196 / 18,960 ( 91 % )                   ;
+; Total DSP Blocks                ; 2,504 / 12,300 ( 20 % )                    ;
+; Total UIBs                      ; 0 / 2 ( 0 % )                              ;
+; Total PLLs                      ; 0 / 30 ( 0 % )                             ;
++---------------------------------+--------------------------------------------+
+
+
++-----------------------------------------+
+; Flow Settings                           ;
++-------------------+---------------------+
+; Option            ; Setting             ;
++-------------------+---------------------+
+; Start date & time ; 07/28/2026 12:07:08 ;
+; Main task         ; Compilation         ;
+; Revision Name     ; agilex7_wideband    ;
++-------------------+---------------------+
+
+
++------------------------------------------------------------------------------------------------------------------------------+
+; Flow Non-Default Global Settings                                                                                             ;
++--------------------------+-----------------------------------------------------+------------------+-------------+------------+
+; Assignment Name          ; Value                                               ; Default Value    ; Entity Name ; Section Id ;
++--------------------------+-----------------------------------------------------+------------------+-------------+------------+
+; AUTO_OPEN_DRAIN_PINS     ; Off                                                 ; On               ; --          ; --         ;
+; COMPILER_SIGNATURE_ID    ; 193621989228127.178525842809644                     ; --               ; --          ; --         ;
+; MAX_CORE_JUNCTION_TEMP   ; 100                                                 ; --               ; --          ; --         ;
+; MIN_CORE_JUNCTION_TEMP   ; 0                                                   ; --               ; --          ; --         ;
+; NUM_PARALLEL_PROCESSORS  ; All                                                 ; --               ; --          ; --         ;
+; PROJECT_OUTPUT_DIRECTORY ; D:/agilex-7-radar-test/quartus/project/output_files ; --               ; --          ; --         ;
+; SEARCH_PATH              ; ../../sim/assertions                                ; --               ; --          ; --         ;
+; TOP_LEVEL_ENTITY         ; benchmark_fabric_top                                ; agilex7_wideband ; --          ; --         ;
+; VERILOG_MACRO            ; SYNTHESIS=1                                         ; --               ; --          ; --         ;
++--------------------------+-----------------------------------------------------+------------------+-------------+------------+
+
+
++------------------------------------------------------+
+; Flow Elapsed Time                                    ;
++-----------------+--------------+---------------------+
+; Module Name     ; Elapsed Time ; Peak Virtual Memory ;
++-----------------+--------------+---------------------+
+; Synthesis       ; 00:07:57     ; 9279 MB             ;
+; Fitter          ; 01:34:08     ; 35118 MB            ;
+; Timing Analyzer ; 00:01:49     ; 14962 MB            ;
+; Total           ; 01:43:54     ; --                  ;
++-----------------+--------------+---------------------+
+
+
++-------------------------------------------------------------------------------+
+; Flow OS Summary                                                               ;
++-----------------+------------------+------------+------------+----------------+
+; Module Name     ; Machine Hostname ; OS Name    ; OS Version ; Processor type ;
++-----------------+------------------+------------+------------+----------------+
+; Synthesis       ; tcovert          ; Windows 11 ; 10.0.26200 ; x86_64         ;
+; Fitter          ; tcovert          ; Windows 11 ; 10.0.26200 ; x86_64         ;
+; Timing Analyzer ; tcovert          ; Windows 11 ; 10.0.26200 ; x86_64         ;
++-----------------+------------------+------------+------------+----------------+
+
+
+------------
+; Flow Log ;
+------------
+quartus_syn --read_settings_files=on --write_settings_files=off agilex7_wideband -c agilex7_wideband --dni
+quartus_fit --read_settings_files=on --write_settings_files=off agilex7_wideband -c agilex7_wideband --dni --seed=1 --write_settings_files=off
+quartus_sta agilex7_wideband -c agilex7_wideband --dni
+
+
+
+----------------
+; Legal Notice ;
+----------------
+Copyright (C) 2026  Altera Corporation. All rights reserved.
+Your use of Altera Corporation's design tools, logic functions 
+and other software and tools, and any partner logic 
+functions, and any output files from any of the foregoing 
+(including device programming or simulation files), and any 
+associated documentation or information are expressly subject 
+to the terms and conditions of the Altera Program License 
+Subscription Agreement, the Altera Quartus Prime License Agreement,
+the Altera IP License Agreement, or other applicable license
+agreement, including, without limitation, that your use is for
+the sole purpose of programming logic devices manufactured by
+Altera and sold by Altera or its authorized distributors.  Please
+refer to the Altera Software License Subscription Agreements 
+on the Quartus Prime software download page.
+
+
+

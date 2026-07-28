@@ -1,0 +1,19 @@
+Fitter Status : Successful - Tue Jul 28 13:49:17 2026
+Quartus Prime Version : 26.1.0 Build 110 03/26/2026 SC Pro Edition
+Revision Name : agilex7_wideband
+Top-level Entity Name : benchmark_fabric_top
+Family : Agilex 7
+Device : AGMF039R47B1E1VC
+Timing Models : Final
+Power Models : Final
+Device Status : Final
+Logic utilization (in ALMs) : 301,838 / 1,305,600 ( 23 % )
+  * Logic utilization warning : A large number of ALMs contain virtual pins and count towards logic utilization
+  * ALMs containing virtual pins : 1,490 / 1,305,600 ( < 1 % )
+Total dedicated logic registers : 384052
+Total pins : 6 / 1,156 ( < 1 % )
+Total block memory bits : 279,132,924 / 388,300,800 ( 72 % )
+Total RAM Blocks : 17,196 / 18,960 ( 91 % )
+Total DSP Blocks : 2,504 / 12,300 ( 20 % )
+Total UIBs : 0 / 2 ( 0 % )
+Total PLLs : 0 / 30 ( 0 % )
