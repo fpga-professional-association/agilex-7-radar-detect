@@ -50,7 +50,11 @@ if {[catch {
     update_timing_netlist
 
     # ---- counts of every timing-exception directive the analyzer saw -----
-    # get_timing_exceptions returns one collection entry per directive.
+    # get_timing_exceptions returns one collection entry per directive on the
+    # versions of Quartus Pro that expose it. Older/other versions do not, so
+    # each count falls back to "" with a documented note and the SDC-side count
+    # from scripts/constraints_report.py becomes the authoritative source for
+    # this record.
     proc _count_collection {cmd} {
         set n 0
         set col [eval $cmd]
@@ -60,10 +64,19 @@ if {[catch {
         return $n
     }
 
-    dict set integrity false_paths        [_count_collection {get_timing_exceptions -type false_path}]
-    dict set integrity multicycle_paths   [_count_collection {get_timing_exceptions -type multicycle}]
-    dict set integrity max_delays         [_count_collection {get_timing_exceptions -type max_delay}]
-    dict set integrity min_delays         [_count_collection {get_timing_exceptions -type min_delay}]
+    foreach {label subcmd} {
+        false_paths       {get_timing_exceptions -type false_path}
+        multicycle_paths  {get_timing_exceptions -type multicycle}
+        max_delays        {get_timing_exceptions -type max_delay}
+        min_delays        {get_timing_exceptions -type min_delay}
+    } {
+        if {[catch { _count_collection $subcmd } n]} {
+            dict set integrity $label ""
+            lappend notes "$label unavailable via get_timing_exceptions ($n)"
+        } else {
+            dict set integrity $label $n
+        }
+    }
 
     # Clock groups: no direct collection API. Use report_clock_groups; the
     # ignored-return string from the collector is fine, we just count the
