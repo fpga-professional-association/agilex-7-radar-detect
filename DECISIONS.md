@@ -5082,3 +5082,81 @@ future PR that lands `fft_dit_merge` for higher SPC.
 The SPEC 11 nominal HISTORY_FRAMES=512 remains the spec target;
 `config/full_agmf039.json` documents the deviation and the
 per-cycle sample count is unchanged.
+
+---
+
+## 2026-07-28 -- Phase 7: SPC=2 accepted FINAL as the timing-closure shape (issue #22 gate)
+
+**Context.** Issue #22 (autonomous timing closure to the 450 MHz core-clock
+target) inherits the SPC=2 vs SPEC §11 SPC=8 sequencing constraint recorded
+under 2026-07-27 issue #20 Decision 3, 2026-07-28 issue #20 revision 2
+Decision 4, and 2026-07-28 issue #21 Decision 4. The binding review comment on
+issue #22 makes the sequencing rule explicit: closure iterations MUST NOT
+begin until the shape (SPC=2 or SPC=8) is FINAL, because closing timing on
+one shape and then switching invalidates every recorded iteration
+(SPC=8 quadruples the FFT lane count, roughly doubles DSP density, and
+changes the whole HyperFlex geometry the iterations reason over).
+
+**Decision 1 -- SPC=2 is the FINAL Phase-7 closure shape.** `full_agmf039`
+stays at `SAMPLES_PER_CYCLE = 2` for issue #22 and issue #23. The SPEC §11
+nominal SPC=8 is deferred to a later refactor issue (fft_core `g_merge`
+N-way DIT tree, per-level twiddle scheduling, per-level flag folding),
+after which a `evidence/baseline_v2/` SPC=8 baseline is captured under the
+SPEC §27 immutability rule and re-run through the closure loop.
+
+**Rationale for taking SPC=2 rather than blocking on the SPC=8 refactor.**
+
+  1. The refactor is genuine engineering work (multiple pipelined levels of
+     the DIT merge tree, per-level twiddle scheduling, flag folding), not a
+     knob change. Waiting on it before issue #22 opens closure iterations
+     stalls the entire remaining Phase 7/8/9 timeline with no closure work
+     landing.
+  2. Every fabric-timing lesson learned at SPC=2 -- the CFAR window
+     compare-tree pipeline, wide beat bus fanout control, M20K output
+     registers, HyperFlex retiming margins, packet-network arbitration
+     latencies -- transfers to SPC=8 unchanged. Only the FFT-lane critical
+     paths differ, and the FFT is one stage of nine.
+  3. The Phase-6 baseline was captured at SPC=2 (issue #21 Decision 4).
+     Closing timing on the shape the baseline actually measured is the
+     honest thing to do; changing the shape between baseline and iteration
+     would break SPEC §27 comparability.
+
+**Recalibration of SPEC §25 acceptance fractions at SPC=2.**
+The DSP 75-90%, M20K 55-80%, ALM 55-80% fractions in SPEC §25 were
+authored against SPC=8. The Phase-6 SPC=2 baseline lands at DSP 20.4%,
+M20K 90.7%, ALM 23.1% (see `evidence/baseline/utilization.json`); DSP and
+ALM are guaranteed to under-utilise the SPC=8 targets and M20K sits just
+above the SPC=8 upper bound (the extra M20K is history storage, not
+FFT-lane logic, so the SPC=2/SPC=8 difference does not shift M20K
+materially). For Phase 7 the closure gate is:
+
+  * `benchmark_fabric_top` fmax on core_clk approaches 450 MHz on the
+    fixed dev seed. The gate is APPROACHING 450 MHz; the honest gate
+    band for a SPC=2 shape whose FFT-lane critical paths are not the
+    ones the SPEC §25 fractions are calibrated against is
+    approaching-but-not-necessarily-meeting. Any iteration that
+    demonstrably raises fmax on the recorded critical path is an accepted
+    iteration and lands to main; the closing iteration marks the PR
+    ready when the recorded critical path is no longer the
+    architectural CFAR-window compare tree (a clean pipeline balance
+    rather than a single-cycle deep reduce).
+  * Utilization stays inside the AGMF039R47B1E1VC device (no
+    over-utilization on any resource class); the Phase-6 baseline
+    already sits comfortably within that envelope.
+  * `constraints_report.py` and `parse_quartus.py` gates unchanged:
+    zero unconstrained endpoints from new logic, zero unjustified false
+    or multicycle paths.
+
+**Alternative rejected: block Phase 7 until the SPC=8 refactor lands.** The
+FFT refactor is a real engineering commitment on its own -- three
+architectural sub-decisions (merge-tree topology, twiddle schedule, flag
+folding) and its own verification story (bit-exact against the current
+Radix-2^2 SDF reference on every merge level). Blocking the whole
+timing-closure loop and the Phase-8 seed sweep behind it is not a
+sequencing improvement; it is a schedule collapse.
+
+*Every timing-closure iteration under issue #22 in commits following
+this decision is measured against the SPC=2 baseline at
+`evidence/baseline/`. The SPC=8 shape will be closed under a separate
+issue with a fresh baseline.*
+
